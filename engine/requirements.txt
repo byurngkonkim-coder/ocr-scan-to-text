@@ -1,0 +1,36 @@
+# OCR 스캔파일 텍스트추출 도구 — Python 의존성
+# Python 3.10+ 필요
+
+# OCR 핵심
+rapidocr>=3.9.0
+onnxruntime>=1.20.0
+pytesseract>=0.3.10
+pdf2image>=1.16.0
+
+# 디지털 PDF 텍스트 레이어 직접 추출 (born-digital PDF → OCR·API 없이 즉시 추출)
+# 없으면 poppler pdftotext 로 자동 폴백(선택). 있으면 읽기순서·띄어쓰기 품질 최상.
+pymupdf>=1.24.0
+
+# 이미지 처리
+Pillow>=10.0.0
+opencv-python>=4.8.0
+numpy>=1.24.0
+
+# CLI
+click>=8.0.0
+rich>=13.0.0
+
+# Google Gemini API (기본 Vision 폴백 엔진 — config.json vision_provider=gemini)
+google-genai>=1.0.0
+
+# Claude API (선택 — vision_provider=claude 또는 L3 LLM 보정 사용 시)
+anthropic>=0.25.0
+
+# 한국어 맞춤법 검사 (L2) — 2026-09-27 취하. PyPI 1.1 빌드 실패로 pip install -r 전체가 중단되므로 제외
+# py-hanspell>=1.1
+
+# 선택 — 폴더 자동 감시
+# watchdog>=3.0.0
+
+# Gradio 웹 UI (OCR도구_실행.bat 의 웹 화면 — 필수)
+gradio>=4.0.0

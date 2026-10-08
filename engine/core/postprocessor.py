@@ -1,0 +1,285 @@
+"""
+후처리 — OCR 엔진별 전체 처리 체인
+
+처리 순서 (엔진별 분기):
+  ┌─ Tesseract ─────────────────────────────────────────────────┐
+  │  L1(char_normalizer) → 마진노이즈제거 → 단락복원 → 공백정규화 │
+  └─────────────────────────────────────────────────────────────┘
+  ┌─ Claude Vision ──────────────────────────────────────────────┐
+  │  L1(char_normalizer) → 단락복원 → 공백정규화                 │
+  │  (Vision은 이미 깨끗한 텍스트 → 마진제거 생략)               │
+  └─────────────────────────────────────────────────────────────┘
+  공통: L2(spellcheck) · L3(llm_corrector) 는 _finalize()에서 적용
+"""
+from __future__ import annotations
+import re
+
+from core.figure_detector import Region, build_placeholder
+
+# 단락 끝 판단 (이 문자로 끝나면 새 단락 시작 가능)
+_SENT_END = re.compile(r'[.!?。！？…\"\'\)\]》」』]\s*$')
+# 단락 시작 판단 (들여쓰기 없이 시작하는 한글·영문)
+_PARA_START = re.compile(r'^[가-힣A-Za-z0-9\"\'\(「『《]')
+# 노이즈 줄 (2자 미만 의미 있는 문자)
+_NOISE_LINE = re.compile(r'^[\s\W]{0,2}$')
+# 구조 마커 패턴 (미리보기에서 제거할 것들)
+_STRUCTURAL = [
+    re.compile(r'^\[페이지\s*\d+\]'),           # [페이지 N]
+    re.compile(r'^[─\-=]{3,}'),                  # 구분선
+    re.compile(r'^\[그림\s*\d+[^\]]*\]'),         # [그림 N: ...]
+    re.compile(r'^\[표\s*\d+[^\]]*\]'),           # [표 N...]
+    re.compile(r'^\[수식\s*\d+[^\]]*\]'),         # [수식 N...]
+    re.compile(r'^[─]+\s*비텍스트\s*영역'),        # ── 비텍스트 영역 ──
+    re.compile(r'^\s*\|'),                        # Markdown 표 행
+    re.compile(r'^\s*\|?\s*:?-{3,}:?\s*\|?'),    # Markdown 구분자
+    re.compile(r'^[★⚠]'),                         # 검토 경고 헤더
+    re.compile(r'python ocr_tool\.py'),           # 설정 안내
+    re.compile(r'^>\s*\*\*'),                     # MD 인용 헤더
+    re.compile(r'^>\s*사유:'),                     # MD 인용 사유
+    re.compile(r'^>\s*이\s*페이지'),               # MD 인용 안내
+]
+
+
+# ── 공개 API ──────────────────────────────────────────────────────────────────
+
+def apply(text: str, regions: list[Region] | None = None) -> str:
+    """OCR 텍스트 후처리 전체 파이프라인 (파일 출력용)."""
+    if regions:
+        text = _insert_placeholders(text, regions)
+    text = _normalize_whitespace(text)
+    text = _strip_line_ends(text)
+    text = remove_noise_lines(text)
+    text = _normalize_whitespace(text)
+    return text.strip()
+
+
+def process_full(text: str, engine: str = "tesseract") -> str:
+    """
+    OCR 결과 전체 처리 체인 — 저장 파일·미리보기 공통 사용.
+
+    engine='tesseract':
+      마진노이즈제거(extract_korean_text) → 단락복원 → 공백정규화
+    engine='claude_vision':
+      단락복원 → 공백정규화  (Vision 결과는 이미 깨끗)
+
+    L1(char_normalizer)·L2(spellcheck)·L3(llm_corrector)는
+    _finalize()에서 이미 적용되므로 여기서는 호출하지 않음.
+    """
+    if not text.strip():
+        return text
+
+    if engine in ("tesseract", "rapidocr"):
+        # 로컬 OCR: 마진 숫자·스캔 잡음·노이즈 줄 제거
+        text = extract_korean_text(text)
+
+    # 공통: 단락 복원 + 공백 정규화
+    text = join_broken_lines(text)
+    text = _fix_spacing(text)
+    text = remove_noise_lines(text)
+    text = _normalize_whitespace(text)
+    return text.strip()
+
+
+def for_preview(text: str) -> str:
+    """
+    미리보기 표시용 최종 정제.
+    process_full() 이후 결과에서 구조 마커만 추가로 제거.
+    """
+    return strip_structural(text).strip()
+
+
+def extract_korean_text(text: str) -> str:
+    """
+    스캔 도서 특화 '마진 노이즈' 제거 (보수적 버전).
+
+    [변경 이유] 이전 버전은 한글 8자 미만 줄을 통째로 삭제하고 첫 한글
+    이전 내용을 모두 버려서, 영어·표·숫자·제목·짧은 문장을 잃어버렸다.
+    현재 버전은 줄을 함부로 삭제하지 않고, 줄 앞쪽의 명백한 스캔 마진
+    (페이지번호·기호로만 이뤄진 토큰이 2개 이상 연속)만 제거하며 본문은
+    최대한 보존한다. 한글·영문·숫자가 하나도 없는 순수 기호 줄만 버린다.
+    """
+    lines = text.splitlines()
+    cleaned: list[str] = []
+
+    for line in lines:
+        if not line.strip():
+            cleaned.append('')
+            continue
+
+        proc = _strip_margin_noise(line)
+
+        # 한글·영문·숫자가 하나도 없는 순수 기호 줄만 제거 (본문·데이터는 보존)
+        if re.sub(r'[^\w가-힣]', '', proc) == '':
+            continue
+
+        cleaned.append(proc)
+
+    return _normalize_whitespace('\n'.join(cleaned))
+
+
+def _strip_margin_noise(line: str) -> str:
+    """
+    줄 앞쪽의 스캔 마진 노이즈(페이지번호·기호 토큰)만 제거하고 본문은 보존.
+
+    - 선두에 '의미문자(한글/영문)가 없는' 토큰이 2개 이상 연속될 때만 제거.
+      예: "00 10: *인간은..." → "인간은...",  "| 0 00000 진정으로..." → "진정으로..."
+    - '2026년', '1,250만원'처럼 숫자가 한글에 붙은 토큰은 보존(노이즈 아님).
+    - 'Google test ...'처럼 영문 단어로 시작하는 줄, 선두 숫자 1개로 시작하는
+      줄(목록·데이터)도 보존.
+    """
+    tokens = line.split(' ')
+
+    def _is_noise(tok: str) -> bool:
+        t = tok.strip()
+        if not t:
+            return True
+        # 한글도 영문자도 없는 토큰(숫자·기호만) = 마진 노이즈 후보
+        return re.search(r'[가-힣A-Za-z]', t) is None
+
+    n = 0
+    for tok in tokens:
+        if _is_noise(tok):
+            n += 1
+        else:
+            break
+
+    if n >= 2:                       # 선두 노이즈 토큰 2개 이상일 때만 제거
+        tokens = tokens[n:]
+    proc = ' '.join(tokens).strip()
+
+    # 본문 첫 글자에 붙은 선두 잡음 기호 제거 (따옴표·괄호는 보존)
+    proc = re.sub(r'^[\s*|~^#@、。]+', '', proc)
+    # 줄 뒤 스캔 잡음 제거 (정상 구두점 . , ! ? : 는 보존)
+    proc = re.sub(r'[\sᆞ~_|@#^*、。]+$', '', proc)
+    # 줄 내부 가운뎃점(ᆞ) 클러스터 → 공백
+    proc = re.sub(r'\s*ᆞ+\s*', ' ', proc)
+    # 반복 공백 정리
+    proc = re.sub(r'  +', ' ', proc).strip()
+
+    return proc
+
+
+def strip_structural(text: str) -> str:
+    """구조 마커·표·구분선 제거 → 순수 텍스트만 반환."""
+    lines  = text.splitlines()
+    result = []
+    for line in lines:
+        if any(pat.search(line) for pat in _STRUCTURAL):
+            continue
+        result.append(line)
+
+    # 연속 빈 줄 정리
+    cleaned = re.sub(r'\n{3,}', '\n\n', '\n'.join(result))
+    return cleaned.strip()
+
+
+def remove_noise_lines(text: str) -> str:
+    """의미 없는 짧은 줄(노이즈) 제거."""
+    lines = text.splitlines()
+    result = []
+    for line in lines:
+        # 빈 줄은 유지
+        if not line.strip():
+            result.append(line)
+            continue
+        # 의미 있는 문자(한글·영문·숫자)가 2자 이상이면 유지
+        meaningful = re.sub(r'[^\w가-힣]', '', line)
+        if len(meaningful) >= 2:
+            result.append(line)
+    return '\n'.join(result)
+
+
+def join_broken_lines(text: str) -> str:
+    """
+    단락 내 줄바꿈 복원.
+    OCR은 페이지의 물리적 줄을 그대로 추출하므로
+    같은 단락에 속하는 줄들을 공백으로 이어 붙임.
+
+    연결 조건:
+      - 현재 줄이 문장 끝 구두점으로 종료되지 않음
+      - 현재 줄 길이가 10자 이상 (짧은 제목/레이블 제외)
+      - 다음 줄이 들여쓰기 없이 한글·영문으로 시작
+      - 다음 줄이 새 단락 표시(빈 줄, 숫자. 로 시작)가 아님
+    """
+    lines = text.splitlines()
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        cur = lines[i]
+        # 빈 줄 → 단락 구분, 그대로 추가
+        if not cur.strip():
+            out.append(cur)
+            i += 1
+            continue
+
+        # 다음 줄과 연결 가능 여부 반복 판단
+        while i + 1 < len(lines):
+            nxt = lines[i + 1]
+            if not nxt.strip():
+                break  # 빈 줄 → 연결 중단
+            if _should_join(cur, nxt):
+                cur = cur.rstrip() + ' ' + nxt.lstrip()
+                i += 1
+            else:
+                break
+
+        out.append(cur)
+        i += 1
+
+    return '\n'.join(out)
+
+
+# ── 내부 함수 ──────────────────────────────────────────────────────────────────
+
+def _should_join(cur: str, nxt: str) -> bool:
+    """두 줄을 이어 붙여야 하면 True."""
+    cur_strip = cur.strip()
+    nxt_strip = nxt.strip()
+
+    if not cur_strip or not nxt_strip:
+        return False
+    # 현재 줄이 너무 짧으면 제목/레이블일 가능성 → 연결 안 함
+    if len(cur_strip) < 10:
+        return False
+    # 현재 줄이 문장 끝 구두점으로 종료 → 연결 안 함
+    if _SENT_END.search(cur_strip):
+        return False
+    # 다음 줄이 숫자+점으로 시작 (목록 항목) → 연결 안 함
+    if re.match(r'^\d+[.．]\s', nxt_strip):
+        return False
+    # 다음 줄이 들여쓰기 있음 → 새 단락
+    if nxt.startswith(('  ', '\t', '　')):
+        return False
+    # 다음 줄이 연속 텍스트로 시작
+    return bool(_PARA_START.match(nxt_strip))
+
+
+def _fix_spacing(text: str) -> str:
+    """구두점 앞뒤 공백 정규화."""
+    # 구두점 앞 공백 제거
+    text = re.sub(r'\s+([.,!?。！？、,])', r'\1', text)
+    # 구두점 뒤 공백 확보 (이미 있으면 유지)
+    text = re.sub(r'([.,!?。！？])([^\s\n\"\'\)\]0-9])', r'\1 \2', text)
+    # 괄호 앞뒤 공백
+    text = re.sub(r'\(\s+', '(', text)
+    text = re.sub(r'\s+\)', ')', text)
+    return text
+
+
+def _insert_placeholders(text: str, regions: list[Region]) -> str:
+    placeholders = [build_placeholder(r) for r in regions]
+    if not placeholders:
+        return text
+    sep = '\n\n' + '─' * 40 + '\n'
+    return text.rstrip() + sep + '\n\n'.join(placeholders) + '\n'
+
+
+def _normalize_whitespace(text: str) -> str:
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    text = text.replace('\t', '    ')
+    text = re.sub(r'(?<=\S) {2,}', ' ', text)
+    return text
+
+
+def _strip_line_ends(text: str) -> str:
+    return '\n'.join(line.rstrip() for line in text.splitlines())

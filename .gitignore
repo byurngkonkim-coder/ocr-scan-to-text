@@ -1,0 +1,45 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+.venv/
+engine/venv/
+
+# Testing & Logs
+.pytest_cache/
+engine/.pytest_cache/
+*.log
+engine/ocr_server.log
+
+# Claude & OMC local cache
+.claude/
+.omc/
+.gstack/
+.playwright-mcp/
+
+# User data & results (User Layer)
+01_입력/*
+!01_입력/.gitkeep
+02_결과/*
+!02_결과/.gitkeep
+
+# Runtime storage & stats
+engine/storage/results/*
+!engine/storage/results/.gitkeep
+engine/storage/uploads/*
+!engine/storage/uploads/.gitkeep
+engine/storage/history.json
+engine/usage_stats.json
+
+# Backup
+_백업/move_log_*.tsv
+
+# OS / Editor
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
+.DS_Store
