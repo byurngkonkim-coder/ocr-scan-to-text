@@ -62,7 +62,7 @@ def get_engine(lang: str = "kor+eng"):
     return _ENGINE_INSTANCE
 
 
-def run(image: Image.Image, lang: str = "kor+eng", fast: bool = False) -> OCRResult:
+def run(image: Image.Image, lang: str = "kor+eng", fast: bool = False, refine: bool = True) -> OCRResult:
     """
     이미지에 RapidOCR(ONNX)을 실행하고 OCRResult 반환.
 
@@ -70,6 +70,7 @@ def run(image: Image.Image, lang: str = "kor+eng", fast: bool = False) -> OCRRes
         image: PIL 이미지
         lang: 언어 코드 (kor+eng, kor, eng 등)
         fast: 호환성 유지용 플래그 (RapidOCR은 기본적으로 고속 실행됨)
+        refine: 한국어 띄어쓰기, 맞춤법 및 OCR 노이즈 정제 규칙 자동 적용 여부
 
     Returns:
         OCRResult (text, confidence, engine, has_jamo_split)
@@ -113,6 +114,14 @@ def run(image: Image.Image, lang: str = "kor+eng", fast: bool = False) -> OCRRes
     full_text = "\n".join(lines)
     avg_conf = sum(confs) / len(confs) if confs else 0.0
 
+    # MyOCR의 고도화된 한국어 정제기 적용
+    if refine and full_text.strip():
+        try:
+            from core.korean_corrector import refine_korean_text
+            full_text = refine_korean_text(full_text)
+        except Exception as e:
+            logger.debug(f"korean_corrector 적용 생략: {e}")
+
     # 자모 분리 감지
     jamo_split = has_jamo_decomposition(full_text)
     if jamo_split:
@@ -126,9 +135,10 @@ def run(image: Image.Image, lang: str = "kor+eng", fast: bool = False) -> OCRRes
     )
 
 
-def smart_run(image: Image.Image, default_lang: str = "kor+eng", fast: bool = False) -> OCRResult:
+def smart_run(image: Image.Image, default_lang: str = "kor+eng", fast: bool = False, refine: bool = True) -> OCRResult:
     """
     스마트 실행: RapidOCR을 사용하여 최적 인식 수행.
     (tesseract_engine.smart_run과 동일한 시그니처 제공)
     """
-    return run(image, lang=default_lang, fast=fast)
+    return run(image, lang=default_lang, fast=fast, refine=refine)
+

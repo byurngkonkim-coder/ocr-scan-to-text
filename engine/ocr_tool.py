@@ -80,7 +80,7 @@ def cli(ctx):
               type=click.Choice(["txt", "md"], case_sensitive=False),
               default=None, help="출력 포맷 (기본값: 설정 파일 또는 txt)")
 @click.option("--lang",   "-l", default=None,
-              help="Tesseract 언어 코드 (기본값: 설정 파일 또는 kor+eng)")
+              help="OCR 언어 코드 (기본값: 설정 파일 또는 kor+eng)")
 @click.option("--dpi",    "-d", default=None, type=int,
               help="PDF 변환 DPI (기본값: 설정 파일 또는 300)")
 @click.option("--no-preprocess",  "no_preprocess",  is_flag=True)
@@ -229,7 +229,7 @@ def setup_cmd():
         console.print(f"\n현재 {eng} API 키: [green]{masked}[/green]")
     else:
         console.print(f"\n현재 {eng} API 키: [yellow]미설정[/yellow]")
-        console.print("\n[dim]키 없이도 Tesseract OCR로 기본 동작합니다.[/dim]")
+        console.print("\n[dim]키 없이도 RapidOCR 한글 v5 엔진으로 기본 동작합니다.[/dim]")
         console.print("[dim]키가 있으면 저품질 스캔의 정확도를 크게 높일 수 있습니다.[/dim]\n")
 
     # API 키 입력 (활성 provider 위치에 저장)
@@ -412,14 +412,21 @@ def _process_page(
                                    no_spellcheck, llm_correct, llm_budget)
 
     # 전처리
-    processed = ocr_image if no_preprocess else preprocessor.preprocess(ocr_image, report)
+    if no_preprocess:
+        processed = ocr_image
+    else:
+        if rapidocr_engine.is_available():
+            processed = preprocessor.preprocess_for_rapidocr(ocr_image, report)
+        else:
+            processed = preprocessor.preprocess(ocr_image, report)
 
     # 로컬 OCR (tesseract_engine 내부에서 RapidOCR ONNX 우선 위임)
     ocr_result = tesseract_engine.smart_run(processed, default_lang=lang)
 
     if verbose:
+        engine_display = "rapidocr(v5)" if rapidocr_engine.is_available() else ocr_result.engine.value
         console.print(
-            f"  [dim]엔진: {ocr_result.engine.value} / 신뢰도: {ocr_result.confidence:.1f}% "
+            f"  [dim]엔진: {engine_display} / 신뢰도: {ocr_result.confidence:.1f}% "
             f"/ 자모분리: {'감지' if ocr_result.has_jamo_split else '없음'}[/dim]"
         )
 
@@ -435,7 +442,7 @@ def _process_page(
                 vision_result = claude_vision.run(image, lang_hint=lang)
             except Exception as e:
                 vision_err = str(e)
-                console.print(f"  [yellow]⚠ p.{page_num} 폴백 실패 → Tesseract 결과 유지 ({e})[/yellow]")
+                console.print(f"  [yellow]⚠ p.{page_num} 폴백 실패 → 로컬 OCR 결과 유지 ({e})[/yellow]")
             else:
                 return _finalize_page(vision_result, page_num, placeholders,
                                        no_spellcheck, llm_correct, llm_budget)
@@ -477,6 +484,13 @@ def _finalize_page(
 
     # L1 — 규칙 기반 보정
     text = char_normalizer.normalize_all(ocr_result.text)
+
+    # MyOCR 기반 한국어 정제
+    try:
+        from core.korean_corrector import refine_korean_text
+        text = refine_korean_text(text)
+    except Exception:
+        pass
 
     # L2 — 맞춤법 검사
     if not no_spellcheck and spellcheck.is_available():

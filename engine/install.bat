@@ -18,17 +18,8 @@ if errorlevel 1 (
 for /f "tokens=2 delims= " %%v in ('python --version 2^>^&1') do set PYVER=%%v
 echo Python 버전: %PYVER%
 
-:: OCR 엔진 확인
-where tesseract >nul 2>&1
-if errorlevel 1 (
-    echo.
-    echo [안내] Tesseract OCR가 감지되지 않았습니다.
-    echo        기본 로컬 엔진으로 초경량·고속 RapidOCR(ONNX)이 내장 설치되어 작동합니다.
-    echo.
-) else (
-    echo [OK] Tesseract 감지됨 (보조 폴백 엔진으로 사용 가능):
-    tesseract --version 2>&1 | findstr "tesseract"
-)
+:: OCR 엔진 안내
+echo [안내] 로컬 엔진으로 고성능 RapidOCR(PP-OCRv5 Korean ONNX)이 내장 가상환경에 자동 설치됩니다.
 
 :: Poppler 설치 확인
 where pdftoppm >nul 2>&1

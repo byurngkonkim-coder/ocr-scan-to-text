@@ -26,6 +26,26 @@ def mask_margins(image: Image.Image, top_ratio: float, bottom_ratio: float) -> I
     return image
 
 
+def preprocess_for_rapidocr(image: Image.Image, report: QualityReport | None = None) -> Image.Image:
+    """
+    RapidOCR (딥러닝 PP-OCRv5) 전용 경량 전처리 파이프라인.
+
+    딥러닝 모델은 이진화(Binarization)나 그레이스케일 변환 시 텍스트 특징 맵이 훼손되므로,
+    RGB 원본 컬러를 보존한 채 여백 마스킹 및 필요시 최소 해상도 업스케일만 수행합니다.
+    """
+    img = image.convert("RGB")
+
+    # 여백 마진 제거 필터 적용
+    if config.get_enable_margin_filter():
+        top_ratio = config.get_margin_top_ratio()
+        bottom_ratio = config.get_margin_bottom_ratio()
+        img = mask_margins(img, top_ratio, bottom_ratio)
+
+    # 해상도 업스케일 (단변 < 500px만 2x 보정)
+    img = _upscale_if_needed(img, report)
+    return img
+
+
 def preprocess(image: Image.Image, report: QualityReport | None = None) -> Image.Image:
     """
     6단계 전처리 파이프라인.

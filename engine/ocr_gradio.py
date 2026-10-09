@@ -443,12 +443,16 @@ def _process_page(image, page_num: int, lang: str,
     elif quick:
         processed = preprocessor.quick_preprocess(ocr_image)
     else:
-        processed = preprocessor.preprocess(ocr_image, report)
+        # RapidOCR 사용 가능 시 딥러닝 피처(RGB 컬러/그라데이션) 보존 경량 전처리 적용
+        if rapidocr_engine.is_available():
+            processed = preprocessor.preprocess_for_rapidocr(ocr_image, report)
+        else:
+            processed = preprocessor.preprocess(ocr_image, report)
 
     ocr_result  = tesseract_engine.smart_run(processed, default_lang=lang, fast=quick)
     low_quality = ocr_result.confidence < config.get_confidence_threshold() or ocr_result.has_jamo_split
 
-    # Tesseract 저신뢰도 → Vision 폴백 (Tesseract 우선 모드일 때만)
+    # Tesseract/RapidOCR 저신뢰도 → Vision 폴백 (비용 우선 모드일 때만)
     if not vision_first and not no_fallback and low_quality:
         if claude_vision.is_available() and not vision_err:  # 이미 실패했으면 재시도 안 함 (Ollama 쪽당 최대 9분)
             reason = "자모분리" if ocr_result.has_jamo_split else f"신뢰도 {ocr_result.confidence:.1f}%"
@@ -457,7 +461,7 @@ def _process_page(image, page_num: int, lang: str,
                 vision_result = claude_vision.run(image, lang_hint=lang)
             except Exception as e:
                 vision_err = str(e)
-                logs.append(f"  p.{page_num}: 폴백 실패 → Tesseract 결과 유지 ({e})")
+                logs.append(f"  p.{page_num}: 폴백 실패 → 로컬 OCR 결과 유지 ({e})")
             else:
                 return _finalize(vision_result, page_num, placeholders, llm_correct, llm_budget), logs
         reason = ("자모 분리 감지" if ocr_result.has_jamo_split
@@ -468,7 +472,8 @@ def _process_page(image, page_num: int, lang: str,
         return _finalize(ocr_result, page_num, placeholders, llm_correct, llm_budget,
                          needs_review=True, review_reason=reason), logs
 
-    logs.append(f"  p.{page_num}: Tesseract 신뢰도 {ocr_result.confidence:.1f}%")
+    engine_name = "RapidOCR 한글 v5" if rapidocr_engine.is_available() else "Tesseract"
+    logs.append(f"  p.{page_num}: {engine_name} 신뢰도 {ocr_result.confidence:.1f}%")
     # 품질 불량 진단 쪽은 Tesseract 신뢰도가 높아도 폴백 실패를 결과에 남긴다
     return _finalize(ocr_result, page_num, placeholders, llm_correct, llm_budget,
                      needs_review=bool(vision_err),
@@ -493,6 +498,13 @@ def _finalize(ocr_result, page_num: int, placeholders: list[str],
 
     # L1 — 규칙 기반 보정 (합자·특수기호·한글분절·영문혼동)
     text = char_normalizer.normalize_all(ocr_result.text)
+
+    # MyOCR 기반 한국어 정제 (띄어쓰기, 맞춤법, 어절 쪼개짐/결합 보정)
+    try:
+        from core.korean_corrector import refine_korean_text
+        text = refine_korean_text(text)
+    except Exception:
+        pass
 
     # L2 — 한국어 맞춤법 검사 (설치된 경우)
     if spellcheck.is_available():
@@ -1548,17 +1560,37 @@ def build_ui() -> gr.Blocks:
             # ══════════════════════════════════════════════════════════════════
             with gr.Tab("④ 일괄 처리") as batch_tab:
                 with gr.Column(elem_classes="step-card"):
+                    gr.HTML(_step_head(None, "일괄 처리 방식 설정",
+                            "④ 탭 일괄 처리에서 독립적으로 적용할 읽는 방식과 정제 옵션을 지정합니다. 기본값은 비용 우선입니다."))
+                    with gr.Row():
+                        batch_vision_first = gr.Radio(
+                            label="읽는 방식",
+                            choices=_vision_choices(),
+                            value="Tesseract 우선",  # 기본값: 비용 우선 (RapidOCR 한글 v5)
+                        )
+                    batch_vision_note = gr.HTML(_vision_mode_note("Tesseract 우선"))
+                    with gr.Row():
+                        batch_cleanup_chk = gr.Checkbox(
+                            label="문장 정제 — 쪽번호·머리글 제거, 띄어쓰기·맞춤법 교정, 문단 복원",
+                            value=bool(cfg.get("enable_cleanup", True)) and text_cleaner.is_available(),
+                            info=_cleanup_info(),
+                        )
+                        batch_front_matter_chk = gr.Checkbox(
+                            label="표지·판권·차례 같은 앞뒤 부속물도 삭제",
+                            value=bool(config.get("remove_front_matter", False)),
+                            info="문장 정제가 켜져 있을 때만 동작합니다.",
+                        )
+
+                with gr.Column(elem_classes="step-card"):
                     gr.HTML(_step_head(None, "01_입력 폴더",
-                            "폴더에 넣은 파일을 골라 차례로 처리합니다. 처리 방식(읽는 방식·문장 정제·"
-                            "부속물 삭제)은 ① 탭 설정을 따릅니다. 목록을 처음 읽을 때 파일당 1초쯤 걸립니다."))
-                    batch_opts = gr.HTML("")
+                            "폴더에 넣은 파일을 골라 차례로 처리합니다. 위에서 지정한 처리 방식으로 대기열에서 자동 실행됩니다."))
                     batch_note = gr.HTML("")
                     batch_list = gr.CheckboxGroup(show_label=False, choices=[], value=[],
                                                   elem_classes="batch-list")
                     with gr.Row():
                         batch_refresh_btn = gr.Button("새로고침", size="sm")
                         batch_pick_btn = gr.Button("미처리 전체 선택", size="sm")
-                        batch_run_btn = gr.Button("선택 처리 ▶", variant="primary")
+                        batch_run_btn = gr.Button("선택 파일 일괄 처리 ▶", variant="primary")
                         batch_stop_btn = gr.Button("대기열 중단 ■", variant="stop", size="sm")
                         batch_clear_btn = gr.Button("끝난 항목 지우기", size="sm")
                 with gr.Column(elem_classes="step-card"):
@@ -1648,15 +1680,8 @@ def build_ui() -> gr.Blocks:
             return note, gr.update(choices=[(batch_runner.choice_label(r), r["name"]) for r in rows],
                                    value=value)
 
-        def _batch_opts(cleanup, fm):
-            """① 탭의 정제·부속물 설정을 ④ 탭에서 보여 준다(표시만 — 설정 출처는 ① 탭)."""
-            mark = lambda on: "<b>켬</b>" if on else "끔"
-            drop = mark(cleanup and fm) if cleanup else "끔(정제 꺼짐)"
-            return (f'<div class="note info">이대로 처리합니다 — 문장 정제 {mark(cleanup)}'
-                    f' · 표지·판권·차례 삭제 {drop}. 바꾸려면 ① 탭 「처리 방식」에서 고치세요.</div>')
-
-        def _batch_view(cleanup, fm, select_new: bool = False):
-            return (*_batch_list(select_new), _batch_opts(cleanup, fm))
+        def _batch_view(select_new: bool = False):
+            return _batch_list(select_new)
 
         def _batch_submit(names, lang, fmt, no_pre, no_fb, no_fig, llm_c, llm_b, key, vf, cleanup, fm):
             if not names:
@@ -1668,12 +1693,23 @@ def build_ui() -> gr.Blocks:
                                 {"cleanup": cleanup, "front_matter": fm})
             return batch_runner.status_html(), *_batch_list()[1:]
 
-        batch_view_io = {"inputs": [cleanup_chk, front_matter_chk],
-                         "outputs": [batch_note, batch_list, batch_opts]}
+        batch_view_io = {"inputs": [], "outputs": [batch_note, batch_list]}
         batch_tab.select(fn=_batch_view, **batch_view_io)
         batch_refresh_btn.click(fn=_batch_view, **batch_view_io)
-        batch_pick_btn.click(fn=lambda c, f: _batch_view(c, f, select_new=True), **batch_view_io)
-        batch_run_btn.click(fn=_batch_submit, inputs=[batch_list] + common_inputs[1:],
+        batch_pick_btn.click(fn=lambda: _batch_view(select_new=True), **batch_view_io)
+
+        batch_vision_first.change(fn=_vision_mode_note, inputs=[batch_vision_first],
+                                  outputs=[batch_vision_note])
+
+        batch_inputs = [
+            batch_list,
+            lang_input, fmt_input, no_preprocess, no_fallback, no_figure,
+            llm_correct, llm_budget, api_key_input,
+            batch_vision_first,
+            batch_cleanup_chk,
+            batch_front_matter_chk
+        ]
+        batch_run_btn.click(fn=_batch_submit, inputs=batch_inputs,
                             outputs=[batch_status, batch_list])
         batch_stop_btn.click(fn=lambda: (batch_runner.stop(), batch_runner.status_html())[1],
                              outputs=[batch_status])
@@ -1923,8 +1959,8 @@ def _vision_choices() -> list[tuple[str, str]]:
     """값("Vision 우선"/"Tesseract 우선")은 처리 함수가 판별에 쓰므로 고정, 표시 문구만 엔진명 반영."""
     label = claude_vision.provider_label()
     return [
-        (f"정확도 우선 — {label}가 먼저 읽고, 실패하면 Tesseract", "Vision 우선"),
-        (f"비용 우선 — Tesseract(무료)가 먼저 읽고, 흐린 쪽만 {label}", "Tesseract 우선"),
+        (f"정확도 우선 — {label}가 먼저 읽고, 실패하면 로컬 엔진(RapidOCR)", "Vision 우선"),
+        (f"비용 우선 — 로컬 고성능 엔진(RapidOCR 한글 v5)이 무료로 읽고, 흐린 쪽만 {label}", "Tesseract 우선"),
     ]
 
 
@@ -1932,16 +1968,17 @@ def _vision_mode_note(mode) -> str:
     label = claude_vision.provider_label()
     ok = _engine_ok()
     local = claude_vision.provider_name() == "ollama"
+    local_name = "로컬 엔진(RapidOCR 한글 v5)"
     if "Vision 우선" in str(mode):
         if not ok:
-            return (f'<div class="note warn">{label} 연결이 없어 지금은 Tesseract로만 읽습니다. '
+            return (f'<div class="note warn">{label} 연결이 없어 지금은 {local_name}으로만 읽습니다. '
                     '② 엔진 · API 키 탭에서 연결 상태를 확인하세요.</div>')
         cost = "요금은 없지만 쪽당 수 분 걸립니다." if local else "쪽마다 API 요금이 듭니다."
         return (f'<div class="note info">{label}가 쪽마다 레이아웃을 이해하며 읽습니다. '
                 f'한국어 정확도가 가장 높습니다. {cost}</div>')
     tail = (f"신뢰도가 낮은 쪽만 {label}에 다시 맡깁니다." if ok
-            else f"지금은 {label} 연결이 없어 재인식 없이 Tesseract만 씁니다.")
-    return f'<div class="note info">Tesseract가 이 PC에서 무료로 읽고, {tail}</div>'
+            else f"지금은 {label} 연결이 없어 재인식 없이 {local_name}만 씁니다.")
+    return f'<div class="note info">{local_name}이 이 PC에서 무료로 읽고, {tail}</div>'
 
 
 def _cleanup_info() -> str:
@@ -2114,20 +2151,8 @@ def _history_choices() -> list[tuple[str, str]]:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def main():
-    import platform, os
-    if platform.system() == "Windows":
-        tess = r"C:\Program Files\Tesseract-OCR"
-        if os.path.exists(tess + r"\tesseract.exe"):
-            if tess not in os.environ.get("PATH", ""):
-                os.environ["PATH"] = os.environ.get("PATH", "") + ";" + tess
-            try:
-                import pytesseract
-                pytesseract.pytesseract.tesseract_cmd = tess + r"\tesseract.exe"
-            except Exception:
-                pass
-
     demo = build_ui()
-    print("\n✅ OCR 웹 UI 시작")
+    print("\n✅ OCR 웹 UI 시작 (로컬 엔진: RapidOCR PP-OCRv5 한글)")
     print("   브라우저: http://localhost:7860\n")
     # allowed_paths: 다운로드 버튼이 02_결과/ 의 결과 파일을 그대로 내려줄 수 있게
     # 허용한다. Gradio는 기본적으로 작업 폴더·임시 폴더 밖의 파일 전송을 막아

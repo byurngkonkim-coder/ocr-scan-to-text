@@ -26,46 +26,21 @@ def main():
         f"현재 {ver.major}.{ver.minor}.{ver.micro}"
     )
 
-    # RapidOCR (ONNX) 기본 로컬 엔진 확인
-    rapid_ok = False
+    # RapidOCR & ONNX Runtime (기본 로컬 고성능 엔진)
     try:
         import rapidocr
         import onnxruntime
         rapid_ok = True
         rapid_ver = getattr(rapidocr, "__version__", "설치됨")
+        ort_ver = getattr(onnxruntime, "__version__", "설치됨")
+        detail = f"RapidOCR v{rapid_ver} / ONNX Runtime v{ort_ver}"
     except ImportError:
-        rapid_ver = "미설치"
-    check("RapidOCR ONNX (기본 로컬 고속 엔진)", rapid_ok, f"v{rapid_ver}" if rapid_ok else rapid_ver)
+        rapid_ok = False
+        detail = "미설치"
+    check("로컬 OCR 엔진 (RapidOCR PP-OCRv5 한글)", rapid_ok, detail)
 
-    # Tesseract (선택/레거시 폴백)
-    try:
-        result = subprocess.run(
-            ["tesseract", "--version"],
-            capture_output=True, text=True
-        )
-        ver_line = result.stdout.splitlines()[0] if result.stdout else result.stderr.splitlines()[0]
-        tess_ok = result.returncode == 0
-    except FileNotFoundError:
-        tess_ok = False
-        ver_line = "설치되지 않음 (RapidOCR이 기본 작동하므로 무방)"
-    check("Tesseract OCR (보조 폴백 엔진)", tess_ok, ver_line.strip())
-
-    if not rapid_ok and not tess_ok:
+    if not rapid_ok:
         all_ok = False
-
-    # Tesseract 한국어팩 (Tesseract가 설치된 경우에만 검사)
-    if tess_ok:
-        try:
-            langs = subprocess.run(
-                ["tesseract", "--list-langs"],
-                capture_output=True, text=True
-            )
-            lang_text = langs.stdout + langs.stderr
-            kor_ok = "kor" in lang_text
-        except Exception:
-            kor_ok = False
-        check("Tesseract 한국어팩(kor)", kor_ok)
-        check("Tesseract 영어팩(eng)", "eng" in lang_text)
 
     # Poppler
     try:

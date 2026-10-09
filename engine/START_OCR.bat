@@ -2,7 +2,7 @@
 title OCR Text Extraction Tool
 cd /d "%~dp0"
 
-set "PATH=%PATH%;C:\Program Files\Tesseract-OCR;C:\poppler\Library\bin"
+set "PATH=%PATH%;C:\poppler\Library\bin"
 set "PYDIR=%~dp0venv\Scripts"
 set "PATH=%PYDIR%;%PATH%"
 
@@ -17,7 +17,7 @@ if %errorlevel% == 0 (
 
 echo.
 echo  ==================================================
-echo    OCR Scan-to-Text Tool
+echo    OCR Scan-to-Text Tool (RapidOCR v5)
 echo    PDF / PNG / JPG / TIFF  to  Text
 echo  ==================================================
 echo.
@@ -31,10 +31,7 @@ if not exist "%PYDIR%\python.exe" (
     exit /b 1
 )
 
-where tesseract > nul 2>&1
-if %errorlevel% equ 0 (
-    echo  [OK] Optional Tesseract fallback detected.
-)
+echo  [OK] Local Engine: RapidOCR (PP-OCRv5 Korean ONNX) Ready.
 
 start "OCR_SERVER" /min cmd /c ""%PYDIR%\python.exe" -u ocr_gradio.py > ocr_server.log 2>&1"
 
