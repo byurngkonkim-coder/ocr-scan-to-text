@@ -33,7 +33,9 @@ if not exist "%PYDIR%\python.exe" (
 
 echo  [OK] Local Engine: RapidOCR (PP-OCRv5 Korean ONNX) Ready.
 
-start "OCR_SERVER" /min cmd /c ""%PYDIR%\python.exe" -u ocr_gradio.py > ocr_server.log 2>&1"
+rem Server runs with no console window. Output goes to ocr_server.log / ocr_server_err.log.
+rem Relative paths only: the current folder is inherited, so no non-ASCII path is passed to PowerShell.
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath 'venv\Scripts\python.exe' -ArgumentList '-u','ocr_gradio.py' -WorkingDirectory (Get-Location).Path -WindowStyle Hidden -RedirectStandardOutput 'ocr_server.log' -RedirectStandardError 'ocr_server_err.log'"
 
 timeout /t 8 /nobreak > nul
 set /a _tries=0
@@ -48,8 +50,9 @@ goto wait_loop
 :start_failed
 echo.
 echo  [ERROR] Server did not start within ~60s.
-echo  Open this log to see why:
+echo  Open these logs to see why:
 echo     "%~dp0ocr_server.log"
+echo     "%~dp0ocr_server_err.log"
 echo   - If packages are missing, run install.bat
 echo   - Port 7860 may be in use by another program
 echo.
@@ -61,9 +64,8 @@ rem Browser tab is opened by ocr_gradio.py (launch inbrowser=True).
 rem Do NOT open it here too - that produced two tabs.
 echo.
 echo  [DONE] Open http://localhost:7860 in your browser.
-echo  To stop: close this window or press Enter.
+echo  The server keeps running in the background.
+echo  To stop: double-click STOP_OCR.bat
 echo.
-pause > nul
-
-for /f "tokens=5" %%p in ('netstat -ano 2^>nul ^| findstr ":7860 " ^| findstr "LISTENING"') do taskkill /f /pid %%p > nul 2>&1
+timeout /t 5 > nul
 exit
