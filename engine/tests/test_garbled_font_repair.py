@@ -49,6 +49,15 @@ def test_repair_page_text_replaces_garbled_lines_only():
     assert n == 2 and new == "본문 첫 줄은 멀쩡하다.\n전통적 회계\n본문 둘째 줄.\n개편후"
 
 
+def test_repair_page_text_longest_first_and_indent():
+    # 짧은 깨진 줄이 긴 깨진 줄의 일부여도 둘 다 고쳐지고, 줄 정보의 들여쓰기 공백은 무시한다
+    text = "전통੶ 회계\n(전통੶ 회계 기઱)"
+    lines = [("전통੶ 회계", "R1"), ("    (전통੶ 회계 기઱) ", "R2")]
+    fake = {"R1": "전통적 회계", "R2": "(전통적 회계 기준)"}
+    new, n = ptl.repair_page_text(text, lines, lambda rect, orig: fake[rect])
+    assert n == 2 and new == "전통적 회계\n(전통적 회계 기준)"
+
+
 def test_repair_page_text_strips_leftover_garbage():
     # OCR 결과가 없어도 깨진 문자는 남기지 않는다
     new, n = ptl.repair_page_text("표 칸 ମ이", [("표 칸 ମ이", "R")], lambda rect, orig: "")

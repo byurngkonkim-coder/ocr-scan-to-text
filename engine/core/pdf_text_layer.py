@@ -161,10 +161,15 @@ def repair_page_text(text: str, lines, ocr_line) -> tuple[str, int]:
     """쪽 텍스트에서 깨진 줄(lines: [(원문 줄, 위치)])을 ocr_line(위치, 원문) 결과로 고친다. (텍스트, 고친 줄 수).
     끝에 남은 깨진 문자는 지운다."""
     fixed = 0
-    for orig, rect in lines:
-        new, ok = merge_reocr(orig, ocr_line(rect, orig))
-        if orig in text:
-            text = text.replace(orig, new, 1)
+    # 긴 줄부터 — 짧은 깨진 줄('전통੶ 회계')이 긴 줄('(전통੶ 회계 기준)')의 일부일 때 긴 줄이 먼저 바뀌어야 한다.
+    # 앞뒤 공백은 떼고 맞춘다(줄 정보의 들여쓰기 공백이 쪽 텍스트와 다를 수 있다)
+    for orig, rect in sorted(lines, key=lambda x: len(x[0].strip()), reverse=True):
+        key = orig.strip()
+        if not key:
+            continue
+        new, ok = merge_reocr(key, ocr_line(rect, key))
+        if key in text:
+            text = text.replace(key, new.strip(), 1)
             fixed += ok
     return _FOREIGN_RE.sub("", text), fixed
 
