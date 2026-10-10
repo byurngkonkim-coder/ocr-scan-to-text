@@ -185,10 +185,16 @@ def iter_clean(pages: list[str], drop_front_matter: bool = False, on_chunk=None,
     # 청크만 보는 LLM은 책 전체에 반복되는 머리글을 알아보지 못한다 → 문서 단위로 선제거
     pages = strip_running_headers(pages)
     matter_notes: list[str] = []
+    # 머리글을 뗀 뒤라야 잡음 쪽이 짧아져 후보가 된다. 지운 잡음 쪽은 빈 자리로 남겨
+    # 부속물 보고와 같은 쪽 번호 기준(내용 있는 쪽 순서)을 유지하고, 부속물 제거 뒤에 걸러 낸다
+    noise_notes: list[str] = []
+    pages = drop_noise_pages(pages, noise_notes)
     if drop_front_matter:
         pages, matter_notes = strip_book_matter(pages)
-        if not pages:
-            return ""
+    pages = [p for p in pages if p.strip()]
+    if not pages:
+        return ""
+    matter_notes = noise_notes + matter_notes
 
     soft = config.get_cleanup_chunk_chars()
     hard = soft * 2
@@ -289,6 +295,44 @@ def _glue(before: str, after: str) -> str:
 # 권당 최대 84건(성경)·83(고백록)·82(드러커). 띄어쓰기는 _glue 추정이라 '크라이슬 러'처럼 틀릴 수 있다.
 _SPLIT_MIN_LEN = 60     # 이보다 짧은 줄은 제목·시행일 수 있어 잇지 않는다
 _TOC_LIKE_RE = re.compile(r'\s\d{1,4}$| · ')
+# 단어 첫머리에 올 수 없는 어미·조사 — 다음 줄이 이걸로 시작하면 앞 줄이 짧아도(제목일 수 없으니) 잇는다.
+# 실측(MyOCR 1분의사결정): '…잘못을 발견하' ⟨쪽 경계⟩ '며, 아무도…'. '이·가·서·만·도' 는 '이 책'·'서 있다'·
+# '만 원' 처럼 독립 단어로도 쓰여 제외한다
+_BOUND_START = {"며", "으며", "니", "으니", "니까", "지만", "면서", "도록", "거나", "는데", "은데", "으면",
+                "는", "은", "을", "를", "에", "의", "에서", "에게", "으로", "로", "께서",
+                "었다", "았다", "였다", "했다", "한다", "된다", "합니다", "입니다", "습니다", "니다"}
+
+
+def _starts_bound(line: str) -> bool:
+    # 첫 토큰의 앞쪽 한글만 본다 — 전각 쉼표가 반각으로 바뀌며 '며,아무도' 처럼 붙어 오는 경우가 있다
+    m = re.match(r'[가-힣]+', line.strip())
+    return bool(m) and m.group(0) in _BOUND_START
+
+
+# ── OCR 잡음 쪽 (MyOCR text_refiner 이식) ───────────────────────────────────────
+# 실측(MyOCR 1분의사결정 91쪽): '…해낼 만큼' ⟨'인걸' 두 글자뿐인 쪽⟩ '의 인격을…' — 그림·얼룩을 읽은 쪽이
+# 문장 한가운데 끼어든다. 글자 수만으로는 '서문'·'PART 1' 같은 제목 쪽과 구분되지 않으므로
+# 문장이 그 쪽을 건너 실제로 이어질 때 — 앞 쪽은 문장이 끝나지 않았고 다음 쪽은 단어 첫머리에 올 수 없는
+# 어미·조사('의 인격을')로 시작 — 만 잡음으로 본다. 앞 쪽 끝만 보면 서명('스펜서 존슨') 뒤 장 제목 쪽을 지운다.
+_NOISE_PAGE_MAX = 15        # 의미 있는 글자(한글·영문·숫자)가 이보다 적은 쪽만 후보
+
+
+def drop_noise_pages(pages: list[str], notes: list[str]) -> list[str]:
+    """문장 중간에 끼어든 짧은 잡음 쪽을 비운다(쪽 순서 유지). 지운 쪽은 notes 에 보고."""
+    out = list(pages)
+    dropped = []
+    for i, p in enumerate(out):
+        s = p.strip()
+        if not s or len(re.findall(r'[가-힣A-Za-z0-9]', s)) >= _NOISE_PAGE_MAX or _SENT_END.search(s):
+            continue
+        prev = next((q.rstrip() for q in reversed(out[:i]) if q.strip()), "")
+        nxt = next((q for q in out[i + 1:] if q.strip()), "")
+        if prev and nxt and not _SENT_END.search(prev) and _starts_bound(nxt):
+            dropped.append(f"{i + 1}번째 쪽('{' '.join(s.split())[:10]}')")
+            out[i] = ""
+    if dropped:
+        notes.append(f"OCR 잡음 쪽 자동 제거 — {', '.join(dropped)} (정제 전 원문 사본에서 확인 가능)")
+    return out
 
 
 # 실측(드러커 471쪽): OCR이 책과 무관한 글('디지털 전환…')을 지어낸 쪽을 LLM 정제가 조용히 지우고
@@ -332,6 +376,12 @@ def rejoin_split_sentences(text: str) -> tuple[str, int]:
             if j >= len(lines):
                 break
             s, nxt = cur.rstrip(), lines[j].strip()
+            bound = bool(s) and re.search(r'[가-힣]$', s) is not None and _starts_bound(nxt)
+            if bound:   # 끊긴 어미·조사 — 한 단어가 잘린 것이니 공백 없이 잇는다
+                cur = s + nxt
+                joined += 1
+                i = j
+                continue
             if (len(s) < _SPLIT_MIN_LEN or _SENT_END.search(s) or _TOC_LIKE_RE.search(s)
                     or not re.match(r'[가-힣]', nxt)
                     or (len(nxt) < 30 and not _SENT_END.search(nxt))):   # 다음 줄이 제목 꼴
@@ -586,11 +636,25 @@ _PAGE_NO_RE = re.compile(r'^\d{1,4}\s+|\s+\d{1,4}$')
 _FOOTER_RE = re.compile(r'^(?:[^|\d][^|]{0,39}\|\s*\d{1,4}|\d{1,4}\s*\|[^|]{1,40})$')
 
 
+# OCR 이 같은 머리글을 쪽마다 다르게 읽는 경우(실측: MyOCR 1분의사결정 165쪽) —
+#   장 번호가 깨짐('IV.'·'n.'·'in,'), 쪽번호가 깨지거나 붙음('6?'·'6i'·'찾는다23'), 띄어쓰기가 다름('머리를써라')
+_SECTION_PREFIX_RE = re.compile(r'^(?:[IVXivxnl]{1,4}|\d{1,3})?\s*[.,]\s*')     # 'IV.'·'I .'·'n.'·'in,'
+# 쪽번호: 숫자가 섞인 꼬리('6?'·'6i'·'찾는다23'), 또는 한글 뒤 숫자 닮은 글자뿐인 꼬리('51'→'si')
+_GARBLED_PAGE_NO_RE = re.compile(r'\s*[\dIlOoi?!|]*\d[\dIlOoi?!|]*$|(?<=[가-힣])\s+[IlOoiSsZz?!|]{1,3}$')
+
+
 def _header_key(line: str) -> str | None:
     k = re.sub(r'\s+', ' ', line.strip())
     stripped = _PAGE_NO_RE.sub('', k).strip()
     if stripped != k and ' ' in stripped:
         k = stripped
+    # 장 번호 표시가 앞에 있으면 깨진·붙은 쪽번호까지 떼고 공백 없이 비교한다.
+    # 장 번호 표시가 없는 '누가복음 5'·'Chapter 1' 은 위 규칙대로 묶지 않는다(장 머리글 보호)
+    m = _SECTION_PREFIX_RE.match(k)
+    if m and m.end() > 0:
+        core = _GARBLED_PAGE_NO_RE.sub('', k[m.end():]).strip()
+        if len(re.findall(r'[가-힣A-Za-z]', core)) >= 4:
+            k = '§' + re.sub(r'\s+', '', core)
     if not (2 <= len(k) <= _HEADER_MAX_LEN) or k.startswith('['):
         return None
     if not re.search(r'[가-힣A-Za-z]{2}', k):
@@ -693,7 +757,7 @@ def _drop_toc(pages: list[str], notes: list[str]) -> list[str]:
                 j += 1
         notes.append(f"차례 {i + 1}~{last + 1}번째 쪽('{first[:12]}…')")
         i = last + 1
-    return [p for p in out if p.strip()] if out != pages else pages
+    return out   # 빈 쪽은 strip_book_matter 가 걸러낸다(여기서 빼면 이후 보고 쪽 번호가 당겨진다)
 
 
 # 실측(2026-10-05): '교정하면서 앞부속만 지워라'(규칙 7)는 같은 입력·temperature 0 에서도
@@ -784,7 +848,8 @@ def _drop_colophon(pages: list[str], notes: list[str]) -> list[str]:
             found.setdefault("판권", []).append(last + 1)
     for kind, idxs in found.items():
         notes.append(f"{kind} {', '.join(str(i) for i in sorted(set(idxs)))}번째 쪽")
-    return [p for p in out if p.strip()] if found else pages
+    # 빈 쪽은 여기서 빼지 않는다 — 앞쪽 판권·광고를 지운 뒤 빼면 다음 차례 보고의 쪽 번호가 당겨진다
+    return out if found else pages
 
 
 def strip_book_matter(pages: list[str]) -> tuple[list[str], list[str]]:
@@ -792,7 +857,7 @@ def strip_book_matter(pages: list[str]) -> tuple[list[str], list[str]]:
     notes: list[str] = []
     pages = _drop_colophon(pages, notes)   # 말미 먼저 — 쪽 번호가 입력 기준으로 유지된다
     pages = _drop_toc(pages, notes)
-    return pages, [f"앞부속·뒤부속 자동 제거 — {s} (정제 전 원문 사본에서 확인 가능)" for s in notes]
+    return [p for p in pages if p.strip()], [f"앞부속·뒤부속 자동 제거 — {s} (정제 전 원문 사본에서 확인 가능)" for s in notes]
 
 
 def deterministic_preclean(text: str) -> str:

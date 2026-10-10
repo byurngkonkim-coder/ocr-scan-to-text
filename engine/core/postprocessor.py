@@ -20,6 +20,10 @@ from core.figure_detector import Region, build_placeholder
 _SENT_END = re.compile(r'[.!?。！？…\"\'\)\]》」』]\s*$')
 # 단락 시작 판단 (들여쓰기 없이 시작하는 한글·영문)
 _PARA_START = re.compile(r'^[가-힣A-Za-z0-9\"\'\(「『《]')
+# 줄이 오른쪽 끝까지 찼다고 볼 비율 — 쪽에서 흔한 줄 길이(중앙값)의 이만큼 이상이어야 다음 줄과 잇는다.
+# MyOCR 정제본 23권 실측: 길이만 보면 제목('목표는 완전한 이해다')·표 행('국내 극장 4,928,000')을 본문에 붙였다
+_FULL_LINE_RATIO = 0.75
+_LIST_START_RE = re.compile(r'^[-–—•·*▶▷►>»※□■○●◆◇]')
 # 노이즈 줄 (2자 미만 의미 있는 문자)
 _NOISE_LINE = re.compile(r'^[\s\W]{0,2}$')
 # 구조 마커 패턴 (미리보기에서 제거할 것들)
@@ -184,7 +188,8 @@ def remove_noise_lines(text: str) -> str:
             continue
         # 의미 있는 문자(한글·영문·숫자)가 2자 이상이면 유지
         meaningful = re.sub(r'[^\w가-힣]', '', line)
-        if len(meaningful) >= 2:
+        # '즉,'·'단,' 처럼 한 글자 말 + 문장부호인 줄은 내용이라 남긴다 (MyOCR 정제본 실측)
+        if len(meaningful) >= 2 or re.fullmatch(r'[가-힣][,.:]', line.strip()):
             result.append(line)
     return '\n'.join(result)
 
@@ -200,8 +205,12 @@ def join_broken_lines(text: str) -> str:
       - 현재 줄 길이가 10자 이상 (짧은 제목/레이블 제외)
       - 다음 줄이 들여쓰기 없이 한글·영문으로 시작
       - 다음 줄이 새 단락 표시(빈 줄, 숫자. 로 시작)가 아님
+      - 현재 물리적 줄이 오른쪽 끝까지 참(흔한 줄 길이의 75% 이상) — 짧은 제목·표 행 제외
+      - 다음 줄이 목록 기호(- • ▶ 등)로 시작하지 않음
     """
     lines = text.splitlines()
+    lens = sorted(len(l.strip()) for l in lines if l.strip())
+    full = lens[len(lens) // 2] * _FULL_LINE_RATIO if lens else 0
     out: list[str] = []
     i = 0
     while i < len(lines):
@@ -217,7 +226,9 @@ def join_broken_lines(text: str) -> str:
             nxt = lines[i + 1]
             if not nxt.strip():
                 break  # 빈 줄 → 연결 중단
-            if _should_join(cur, nxt):
+            # 지금까지 이은 줄이 아니라 '현재 물리적 줄'(lines[i])이 끝까지 찼는지를 본다
+            if (len(lines[i].strip()) >= full and not _LIST_START_RE.match(nxt.strip())
+                    and _should_join(cur, nxt)):
                 cur = cur.rstrip() + ' ' + nxt.lstrip()
                 i += 1
             else:
@@ -255,11 +266,14 @@ def _should_join(cur: str, nxt: str) -> bool:
 
 
 def _fix_spacing(text: str) -> str:
-    """구두점 앞뒤 공백 정규화."""
-    # 구두점 앞 공백 제거
-    text = re.sub(r'\s+([.,!?。！？、,])', r'\1', text)
-    # 구두점 뒤 공백 확보 (이미 있으면 유지)
-    text = re.sub(r'([.,!?。！？])([^\s\n\"\'\)\]0-9])', r'\1 \2', text)
+    """구두점 앞뒤 공백 정규화.
+    예전엔 구두점 뒤 영문까지 띄워 'www.naver.com'·'C.의' 를 망가뜨렸고, 구두점 앞 공백 제거가
+    줄바꿈까지 먹었다 → 한글 앞만 띄우고(영문 머리글자 뒤 마침표 제외), 공백·탭만 지운다 (MyOCR 이식)."""
+    # 구두점 앞 공백 제거 (뒤가 공백·줄끝·한글일 때만 — '.NET'·' ...' 보존)
+    text = re.sub(r'(?<=\S)[ \t]+([.,!?。！？、])(?=\s|$|[가-힣])', r'\1', text, flags=re.M)
+    # 구두점 뒤 한글 앞 공백 확보 (이미 있으면 유지)
+    text = re.sub(r'(?<![A-Za-z])([.。])([가-힣])|([,!?！？])([가-힣])',
+                  lambda m: f"{m.group(1) or m.group(3)} {m.group(2) or m.group(4)}", text)
     # 괄호 앞뒤 공백
     text = re.sub(r'\(\s+', '(', text)
     text = re.sub(r'\s+\)', ')', text)
