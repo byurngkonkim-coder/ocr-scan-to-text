@@ -564,7 +564,7 @@ def _page_reader(file_path: Path, lang: str, no_preprocess: bool, no_fallback: b
 def _run_digital_pdf(file_path: Path, pages_text: list[str], out_fmt: OutputFormat,
                      cleanup: bool, front_matter: bool, start_time: float,
                      label: str = "디지털 PDF 추출",
-                     garbled_pages=(), read_page=None, noisy_pages=()):
+                     garbled_pages=(), read_page=None, noisy_pages=(), repaired_lines=None):
     """디지털 PDF(텍스트 레이어 보유) 전용 초고속 경로.
 
     이미지 렌더링·OCR·Vision API를 모두 건너뛰고 내장 텍스트를 그대로 읽는다.
@@ -619,6 +619,10 @@ def _run_digital_pdf(file_path: Path, pages_text: list[str], out_fmt: OutputForm
     text_pages  = sum(1 for p in result.pages if not p.is_blank)
     blank_count = total - text_pages
     step_logs.append("  ⚡ 텍스트 레이어 직접 추출 — OCR·API 미사용 (무료·오프라인)")
+    if repaired_lines:
+        pgs = sorted(repaired_lines)
+        step_logs.append(f"  🔤 글자 정보가 깨진 글꼴(표·제목 등) {sum(repaired_lines.values())}줄은 이미지로 다시 읽음"
+                         f" ({', '.join(map(str, pgs[:10]))}{'…' if len(pgs) > 10 else ''}쪽)")
     if reread:
         step_logs.append(f"  🔁 내장 글자가 깨진 {reread}쪽은 이미지로 다시 읽음"
                          f" ({', '.join(map(str, sorted(garbled)[:10]))}{'…' if len(garbled) > 10 else ''})")
@@ -797,12 +801,13 @@ def process_preview(
     # 텍스트 레이어가 있으면 렌더·OCR·API 없이 즉시 전체 추출한다(미리보기/이어서
     # 분할 불필요). 스캔 PDF는 is_digital=False → 아래 일반 미리보기 경로로 진행.
     if file_path.suffix.lower() == ".pdf" and pdf_text_layer.is_available():
-        _info = pdf_text_layer.analyze(file_path)
+        _info = pdf_text_layer.analyze(file_path, repair=True)
         if _info and _info.is_digital:
             yield from _run_digital_pdf(
                 file_path, _info.pages, out_fmt, cleanup, front_matter, start_time,
                 label="디지털 PDF 추출",
                 garbled_pages=_info.garbled_pages, noisy_pages=_info.noisy_pages,
+                repaired_lines=_info.repaired_lines,
                 read_page=_page_reader(file_path, lang, no_preprocess, no_fallback, no_figure,
                                        llm_correct, llm_budget, vision_first),
             )
@@ -1091,12 +1096,13 @@ def _run_ocr(
     # 텍스트 레이어가 있으면 렌더·OCR·Vision API를 건너뛰고 즉시 직접 추출한다.
     # 스캔 PDF는 is_digital=False → 아래 기존 OCR 경로로 자동 전환.
     if not cached_images and file_path.suffix.lower() == ".pdf" and pdf_text_layer.is_available():
-        _info = pdf_text_layer.analyze(file_path)
+        _info = pdf_text_layer.analyze(file_path, repair=True)
         if _info and _info.is_digital:
             yield from _run_digital_pdf(
                 file_path, _info.pages, out_fmt, cleanup, front_matter, start_time,
                 label=label,
                 garbled_pages=_info.garbled_pages, noisy_pages=_info.noisy_pages,
+                repaired_lines=_info.repaired_lines,
                 read_page=_page_reader(file_path, lang, no_preprocess, no_fallback, no_figure,
                                        llm_correct, llm_budget, vision_first),
             )

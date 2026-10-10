@@ -97,6 +97,114 @@ def real_chars(text: str) -> int:
     return len(_WS_RE.sub("", text))
 
 
+# ── 글자 대응표가 깨진 글꼴 (2026-10-10) ───────────────────────────────────────
+# 실측: DBR 잡지 PDF 의 표·제목·캡션 글꼴(DongA3G)이 한글 일부를 구르무키·말라얄람·아랍 문자 등으로,
+# 영문을 밀린 글자('TVA'→'57A')로 내보냈다('전통੶ 회계'·'포인트\x10ഊఔ'). 깨진 곳이 쪽마다 몇 줄뿐이라
+# 쪽 점수(위 garble_score)로는 안 잡히고, 쪽 전체를 다시 읽으면 멀쩡한 본문까지 OCR 오류를 떠안는다.
+# → 그런 글자가 든 줄만 이미지로 다시 읽고, 원문과 글자 정렬해 깨진 구간만 바꾼다.
+# 오탐 실측(01_입력 98권 33,682쪽): 걸린 쪽 40 — 38쪽은 같은 DBR 글꼴 문제, 2쪽은 기호 글꼴()·제어문자.
+# 키릴 문자는 확장 영역(U+0460~052F, 'ҳ주의'=군주의)만 — 현대 러시아어(U+0400~045F)는 책에 나올 수 있다
+_FOREIGN_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1fѠ-ࣿऀ-෿-]")
+_ALNUM_RE = re.compile(r"[A-Za-z0-9]")
+# (배율, 흰 여백 px) — 같은 줄도 이미지 조건에 따라 OCR 이 다르게 읽어, 둘 다 읽고 원문과 더 맞는 쪽을 쓴다
+_REOCR_VARIANTS = ((3, 6), (2, 0))
+_REOCR_MIN_AGREEMENT = 0.5    # 원문의 멀쩡한 글자 중 OCR 과 정렬되는 비율이 이보다 낮으면 OCR 을 믿지 않는다
+
+
+def has_foreign_glyphs(text: str) -> bool:
+    """한글 책에 나올 리 없는 문자(제어문자·인도계·아랍 문자 등)가 있으면 True — 깨진 글꼴의 흔적."""
+    return bool(_FOREIGN_RE.search(text or ""))
+
+
+def _trust_chars(s: str) -> str:
+    """원문에서 믿을 만한 글자만 — 깨진 문자·영문·숫자(깨진 글꼴에선 밀려 있다)·공백 제외."""
+    return _WS_RE.sub("", _FOREIGN_RE.sub("", _ALNUM_RE.sub("", s)))
+
+
+def _agreement(orig: str, ocr: str) -> float | None:
+    """원문의 믿을 만한 글자 중 OCR 과 정렬되는 비율. 그런 글자가 없으면 None."""
+    clean = _trust_chars(orig)
+    if not clean:
+        return None
+    import difflib
+    sm = difflib.SequenceMatcher(None, orig, ocr, autojunk=False)
+    return sum(len(_trust_chars(orig[i:i + n])) for i, _, n in sm.get_matching_blocks()) / len(clean)
+
+
+def merge_reocr(orig: str, ocr: str) -> tuple[str, bool]:
+    """원문 줄과 OCR 결과를 글자 정렬해 깨진 글자·영문·숫자 구간만 OCR 로 바꾼다. (결과, OCR 을 믿었나).
+    OCR 을 믿지 못하면 원문에서 깨진 문자만 지운다."""
+    import difflib
+    glyphs = len(_WS_RE.sub("", orig))
+    if len(_trust_chars(orig)) < 4:      # 맞춰 볼 글자가 거의 없는 짧은 줄 — 길이가 그럴듯하면 믿는다
+        ok = bool(ocr) and (not glyphs or 0.5 <= len(_WS_RE.sub("", ocr)) / glyphs <= 2)
+    else:
+        ag = _agreement(orig, ocr)
+        ok = ag is not None and ag >= _REOCR_MIN_AGREEMENT
+    if not ok:
+        return _FOREIGN_RE.sub("", orig), False
+    out = []
+    for op, i1, i2, j1, j2 in difflib.SequenceMatcher(None, orig, ocr, autojunk=False).get_opcodes():
+        a, b = orig[i1:i2], ocr[j1:j2]
+        if op == "equal":
+            out.append(a)
+        elif _FOREIGN_RE.search(a) or _ALNUM_RE.search(a):
+            out.append(b)                    # 깨진 구간 → OCR
+        elif op == "insert":                 # OCR 에만 있는 글자 — 깨진 글자 옆일 때만 받는다
+            out.append(b if b.strip() and _FOREIGN_RE.search(orig[max(0, i1 - 1):i1 + 1]) else "")
+        else:
+            out.append(a)                    # 멀쩡한 원문 유지 (OCR 이 빠뜨리거나 다르게 읽은 곳)
+    return "".join(out), True
+
+
+def repair_page_text(text: str, lines, ocr_line) -> tuple[str, int]:
+    """쪽 텍스트에서 깨진 줄(lines: [(원문 줄, 위치)])을 ocr_line(위치, 원문) 결과로 고친다. (텍스트, 고친 줄 수).
+    끝에 남은 깨진 문자는 지운다."""
+    fixed = 0
+    for orig, rect in lines:
+        new, ok = merge_reocr(orig, ocr_line(rect, orig))
+        if orig in text:
+            text = text.replace(orig, new, 1)
+            fixed += ok
+    return _FOREIGN_RE.sub("", text), fixed
+
+
+def _reocr_line(page, rect, orig: str) -> str:
+    """줄 영역을 이미지로 다시 읽는다 — 이미 한 줄이라 글자 위치 찾기(검출) 없이 인식만(줄당 약 0.1초)."""
+    import fitz
+    import numpy as np
+    from PIL import Image, ImageOps
+    from core import rapidocr_engine
+    engine = rapidocr_engine.get_engine("kor+eng")
+    best = None
+    for zoom, pad in _REOCR_VARIANTS:
+        pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), clip=rect)
+        img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+        if pad:
+            img = ImageOps.expand(img, border=pad, fill="white")
+        res = engine(np.array(img), use_det=False, use_cls=False, use_rec=True)
+        txt = " ".join(str(t) for t in (getattr(res, "txts", None) or [])).strip()
+        cand = (_agreement(orig, txt) or 0, len(txt), txt)
+        best = cand if best is None or cand > best else best
+    return best[2]
+
+
+def _repair_garbled_font(page, text: str) -> tuple[str, int]:
+    """쪽에 깨진 글꼴 흔적이 있으면 그 줄만 다시 읽어 고친다. RapidOCR 이 없으면 그대로 둔다."""
+    if not has_foreign_glyphs(text):
+        return text, 0
+    from core import rapidocr_engine
+    if not rapidocr_engine.is_available():
+        return text, 0
+    lines = []
+    for b in page.get_text("dict")["blocks"]:
+        for l in b.get("lines", []):
+            orig = "".join(s["text"] for s in l["spans"])
+            if has_foreign_glyphs(orig):
+                lines.append((orig, l["bbox"]))
+    return repair_page_text(text, lines, lambda rect, orig: _reocr_line(page, rect, orig))
+
+
 # ── 백엔드 감지 ────────────────────────────────────────────────────────────────
 
 def _has_fitz() -> bool:
@@ -133,14 +241,16 @@ def is_available() -> bool:
 
 # ── 페이지 텍스트 추출 ─────────────────────────────────────────────────────────
 
-def extract_pages(pdf_path: str | Path) -> list[str]:
+def extract_pages(pdf_path: str | Path, repaired: dict[int, int] | None = None) -> list[str]:
     """PDF의 페이지별 텍스트 레이어를 리스트로 추출한다(index 0 = 1페이지).
 
+    repaired 를 넘기면 깨진 글꼴 줄을 이미지로 다시 읽어 고치고, 고친 수를 {쪽 번호: 줄 수}로 채운다
+    (fitz 백엔드만). 넘기지 않으면 내장 글자 그대로 — 파일 정보 표시처럼 빨라야 하는 곳용.
     사용 가능한 백엔드가 없으면 RuntimeError.
     """
     b = backend()
     if b == "fitz":
-        return _extract_fitz(pdf_path)
+        return _extract_fitz(pdf_path, repaired)
     if b == "pdftotext":
         return _extract_pdftotext(pdf_path)
     raise RuntimeError(
@@ -151,9 +261,17 @@ def extract_pages(pdf_path: str | Path) -> list[str]:
 _FITZ_LOCK = threading.Lock()   # PyMuPDF 는 스레드 안전이 아니다 — 여러 파일 동시 처리 시 한 번에 하나만
 
 
-def _extract_fitz(pdf_path: str | Path) -> list[str]:
+def _extract_fitz(pdf_path: str | Path, repaired: dict[int, int] | None = None) -> list[str]:
     with _FITZ_LOCK:
-        return _extract_fitz_unlocked(pdf_path)
+        pages = _extract_fitz_unlocked(pdf_path)
+        if repaired is not None and any(has_foreign_glyphs(p) for p in pages):
+            import fitz
+            with fitz.open(str(pdf_path)) as doc:
+                for i, p in enumerate(pages):
+                    pages[i], n = _repair_garbled_font(doc[i], p)
+                    if n:
+                        repaired[i + 1] = n
+        return pages
 
 
 def _extract_fitz_unlocked(pdf_path: str | Path) -> list[str]:
@@ -235,19 +353,22 @@ class DigitalPdf:
     is_digital: bool
     garbled_pages: list[int] = field(default_factory=list)   # 내장 글자가 깨진 쪽(1부터)
     noisy_pages: list[int] = field(default_factory=list)     # 잡음·띄어쓰기 문제 쪽(깨진 쪽 제외)
+    repaired_lines: dict[int, int] = field(default_factory=dict)  # 깨진 글꼴 줄을 다시 읽어 고친 {쪽: 줄 수}
 
 
-def analyze(pdf_path: str | Path) -> DigitalPdf | None:
+def analyze(pdf_path: str | Path, repair: bool = False) -> DigitalPdf | None:
     """PDF를 열어 텍스트 레이어를 추출하고 디지털 여부까지 판정한다.
 
+    repair=True: 깨진 글꼴 줄을 이미지로 다시 읽어 고친다(실제 추출용). 정보 표시용은 False(빠름).
     반환:
       DigitalPdf — 추출 성공(디지털 여부는 .is_digital 로 확인)
       None       — 추출 백엔드 없음 또는 추출 실패(→ 호출부는 기존 OCR로 진행)
     """
     if not is_available():
         return None
+    repaired: dict[int, int] | None = {} if repair else None
     try:
-        pages = extract_pages(pdf_path)
+        pages = extract_pages(pdf_path, repaired)
     except Exception:
         return None
     total = len(pages)
@@ -264,4 +385,5 @@ def analyze(pdf_path: str | Path) -> DigitalPdf | None:
         is_digital=looks_digital(pages) and not mostly_garbled,
         garbled_pages=garbled,
         noisy_pages=[i + 1 for i, p in enumerate(pages) if i + 1 not in garbled and is_noisy(p)],
+        repaired_lines=repaired or {},
     )
