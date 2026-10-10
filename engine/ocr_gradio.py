@@ -776,6 +776,7 @@ def process_preview(
     미리보기는 '속도 확인' 목적이라 정제(교정) 단계는 적용하지 않는다.
     정제는 전체 처리(🚀/✅ 계속) 시에만 실행된다(cleanup 인자는 시그니처
     호환을 위해 받되 여기서는 사용하지 않음)."""
+    file_obj = _first_file(file_obj)   # 여러 개를 올렸으면 미리보기는 첫 파일만
     start_time = time.time()
     elapsed = lambda: _fmt_elapsed(time.time() - start_time)
 
@@ -965,21 +966,77 @@ def process_full_or_queue(
     cleanup=True, front_matter=False,
     progress: gr.Progress = gr.Progress(track_tqdm=False),
 ):
-    """① 탭 '전체 처리'. ④ 일괄 처리 대기열이 돌고 있으면 겹치지 않게 대기열 끝에 넣는다."""
+    """① 탭 '전체 처리'. ④ 일괄 처리 대기열이 돌고 있으면 겹치지 않게 대기열 끝에 넣는다.
+    여러 파일을 올렸으면 올린 순서대로 하나씩 처리한다."""
     rest = (lang, fmt, no_preprocess, no_fallback, no_figure,
             llm_correct, llm_budget, api_key_input, vision_first_str)
-    if file_obj is not None and batch_runner.busy():
-        batch_runner.submit([file_obj.name], rest, {"cleanup": cleanup, "front_matter": front_matter})
+    files = _as_file_list(file_obj)
+    if files and batch_runner.busy():
+        batch_runner.submit([f.name for f in files], rest,
+                            {"cleanup": cleanup, "front_matter": front_matter})
         yield (_progress_html(0, 0, "대기열에 추가됨"),
                "④ 일괄 처리 대기열이 돌고 있어 끝에 추가했습니다. ④ 탭에서 진행 상황을 볼 수 있습니다.",
                "", None, gr.update(visible=False), None)
         return
     batch_runner.direct_running.set()
     try:
-        yield from process_full(file_obj, *rest, cleanup=cleanup, front_matter=front_matter,
-                                progress=progress)
+        if len(files) <= 1:
+            yield from process_full(files[0] if files else None, *rest, cleanup=cleanup,
+                                    front_matter=front_matter, progress=progress)
+        else:
+            yield from _process_many(files, rest, cleanup, front_matter, progress)
     finally:
         batch_runner.direct_running.clear()
+
+
+def _as_file_list(files) -> list:
+    """① 탭 파일 입력(여러 개 허용) → 리스트. 단일 값(④ 대기열의 SimpleNamespace 등)도 받는다."""
+    if not files:
+        return []
+    return list(files) if isinstance(files, list) else [files]
+
+
+def _first_file(files):
+    lst = _as_file_list(files)
+    return lst[0] if lst else None
+
+
+def _process_many(files: list, rest: tuple, cleanup, front_matter, progress):
+    """여러 파일을 차례로 전체 처리. 한 파일이 실패해도 다음 파일로 넘어간다."""
+    n = len(files)
+    saved: list[str] = []
+    failed: list[str] = []
+    preview = ""
+    for i, f in enumerate(files, 1):
+        name = Path(f.name).name
+        head = f"[{i}/{n}] {name}"
+        last = None
+        try:
+            for last in process_full(f, *rest, cleanup=cleanup, front_matter=front_matter,
+                                     progress=progress):
+                bar, status, preview_i, out, _cont, _imgs = last
+                yield (bar, f"{head}\n{status}", preview_i or preview,
+                       saved + [str(out)] if out else (saved or None),
+                       gr.update(visible=False), None)
+        except Exception as e:   # 한 파일의 실패가 나머지 파일을 막지 않게
+            failed.append(f"{name} — {type(e).__name__}: {e}")
+            continue
+        out = last[3] if last else None
+        if out:
+            saved.append(str(out))
+            preview = last[2] or preview
+        else:
+            failed.append(f"{name} — {_last_status_line(last[1]) if last else '결과 없음'}")
+    summary = [f"여러 파일 처리 끝: 성공 {len(saved)}개 / 실패 {len(failed)}개 (전체 {n}개)"]
+    summary += [f"✅ {Path(p).name}" for p in saved]
+    summary += [f"❌ {x}" for x in failed]
+    yield (_progress_html(n, n, f"{n}개 파일 처리 완료"), "\n".join(summary), preview,
+           saved or None, gr.update(visible=False), None)
+
+
+def _last_status_line(text) -> str:
+    lines = [ln.strip() for ln in str(text or "").splitlines() if ln.strip()]
+    return lines[-1] if lines else ""
 
 
 def process_continue(
@@ -990,6 +1047,7 @@ def process_continue(
     progress: gr.Progress = gr.Progress(track_tqdm=False),
 ):
     """미리보기 이후 나머지 페이지를 이어서 처리."""
+    file_obj = _first_file(file_obj)   # 미리보기와 같은 첫 파일
     vision_first = "Vision 우선" in str(vision_first_str)
     batch_runner.direct_running.set()   # 대기열은 이 처리가 끝날 때까지 다음 파일을 시작하지 않는다
     try:
@@ -1329,11 +1387,12 @@ def build_ui() -> gr.Blocks:
 
                         with gr.Column(elem_classes="step-card"):
                             gr.HTML(_step_head(1, "파일 선택",
-                                    "처리할 PDF나 이미지를 올리세요. 올리면 종류를 자동으로 판별합니다."))
+                                    "처리할 PDF나 이미지를 올리세요. 여러 개를 끌어다 놓으면 "
+                                    "「전체 처리」 때 올린 순서대로 하나씩 처리합니다."))
                             file_input = gr.File(
                                 show_label=False,
                                 file_types=[".pdf", ".png", ".jpg", ".jpeg", ".tiff", ".tif"],
-                                file_count="single",
+                                file_count="multiple",
                                 height=150,
                             )
                             file_info = gr.HTML(_file_info_html(None))
@@ -1422,7 +1481,8 @@ def build_ui() -> gr.Blocks:
                                 label="본문 미리보기 (앞 4,000자)",
                                 lines=8, interactive=False,
                                 placeholder="처리가 끝나면 추출된 본문 앞부분이 여기에 표시됩니다.")
-                            download_out = gr.File(label="결과 파일", height=90)
+                            download_out = gr.File(label="결과 파일", height=90,
+                                                   file_count="multiple")
                             gr.HTML(_results_location_html())
                             open_folder_btn = gr.Button("결과 폴더 열기", variant="secondary", size="sm")
                             folder_msg = gr.Markdown("")
@@ -1991,7 +2051,15 @@ def _cleanup_info() -> str:
 
 def _file_info_html(f) -> str:
     if not f:
-        return '<div class="note">PDF, PNG, JPG, TIFF 파일을 올릴 수 있습니다.</div>'
+        return ('<div class="note">PDF, PNG, JPG, TIFF 파일을 올릴 수 있습니다.'
+                ' 여러 개를 한꺼번에 끌어다 놓아도 됩니다.</div>')
+    if isinstance(f, list) and len(f) > 1:
+        names = "".join(f"<li>{html.escape(Path(getattr(x, 'name', x)).name)}</li>" for x in f)
+        return (f'<div class="note info"><b>파일 {len(f)}개</b> — 「전체 처리」를 누르면 아래 순서대로'
+                f' 하나씩 처리합니다. 미리보기는 첫 파일만 합니다.<ol style="margin:4px 0 0 18px">'
+                f'{names}</ol></div>')
+    if isinstance(f, list):
+        f = f[0]
     path = Path(getattr(f, "name", f))
     name = html.escape(path.name)
     try:
