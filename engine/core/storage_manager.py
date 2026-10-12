@@ -16,7 +16,7 @@ from datetime import datetime
 from pathlib import Path
 
 # 기본 저장 경로 (도구 루트 기준)
-_BASE    = Path(__file__).parent.parent / "storage"
+_BASE = Path(__file__).parent.parent / "storage"
 _UPLOADS = _BASE / "uploads"
 _RESULTS = _BASE / "results"
 _HISTORY = _BASE / "history.json"

@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 
 # 설정 파일 위치: 도구 루트 디렉터리
-_CONFIG_DIR  = Path(__file__).parent.parent
+_CONFIG_DIR = Path(__file__).parent.parent
 _CONFIG_FILE = _CONFIG_DIR / "config.json"
 
 _DEFAULTS: dict = {

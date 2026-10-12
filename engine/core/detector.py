@@ -1,7 +1,10 @@
 """파일 포맷 감지 — 확장자 + 매직 바이트 이중 검증"""
+import os
 from pathlib import Path
 
 SUPPORTED_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".tiff", ".tif"}
+# 폴더 탐색 때 들어가지 않을 폴더 (숨김 폴더 '.xxx' 도 제외)
+_SKIP_DIRS = {"node_modules", "__pycache__", "venv", ".venv"}
 
 # 이미지 매직 바이트 시그니처
 _MAGIC: list[tuple[bytes, str]] = [
@@ -71,9 +74,11 @@ def collect_files(path: str | Path) -> list[Path]:
 
     if p.is_dir():
         files = []
-        for f in sorted(p.rglob("*")):
-            if f.is_file() and f.suffix.lower() in SUPPORTED_EXTENSIONS:
-                files.append(f)
+        # rglob 은 모든 폴더를 다 돈 뒤 거르므로 큰 트리에서 오래 걸린다 → 진입 자체를 막는다
+        for root, dirs, names in os.walk(p):
+            dirs[:] = [d for d in dirs if d not in _SKIP_DIRS and not d.startswith(".")]
+            files += [Path(root) / n for n in names if Path(n).suffix.lower() in SUPPORTED_EXTENSIONS]
+        files.sort()
         if not files:
             raise ValueError(f"처리 가능한 파일이 없습니다: {p}")
         return files

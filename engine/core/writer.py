@@ -5,9 +5,9 @@ from pathlib import Path
 from core.types import FileResult, OutputFormat
 
 PAGE_SEPARATOR_TXT = "─" * 60
-PAGE_SEPARATOR_MD  = "---"
-REVIEW_MARKER_TXT  = "⚠ [검토필요]"
-REVIEW_MARKER_MD   = "> ⚠ **검토 필요**"
+PAGE_SEPARATOR_MD = "---"
+REVIEW_MARKER_TXT = "⚠ [검토필요]"
+REVIEW_MARKER_MD = "> ⚠ **검토 필요**"
 
 
 def write(result: FileResult, output_dir: str | Path, fmt: OutputFormat = OutputFormat.TXT) -> Path:

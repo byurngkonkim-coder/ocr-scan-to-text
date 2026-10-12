@@ -33,7 +33,7 @@ class DetectionResult:
 
 # 영역 종류별 최소 면적 (px²)
 _MIN_FIGURE_AREA = 5_000
-_MIN_TABLE_AREA  = 3_000
+_MIN_TABLE_AREA = 3_000
 _MIN_FORMULA_AREA = 1_000
 
 # 수식 판단용 수학 기호 패턴

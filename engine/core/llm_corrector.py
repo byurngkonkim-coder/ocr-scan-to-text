@@ -6,7 +6,7 @@ from core.config import get_api_key
 
 # 페이지당 최대 토큰 청크 크기 (A4 1p ≈ 500토큰, Haiku 기준 약 $0.0004/p)
 _CHUNK_CHARS = 1_500
-_MODEL       = "claude-haiku-4-5-20251001"
+_MODEL = "claude-haiku-4-5-20251001"
 _MIN_RATIO, _MAX_RATIO = 0.75, 1.25  # 출력/입력 비공백 분량 허용 범위
 
 CORRECTION_PROMPT = """\

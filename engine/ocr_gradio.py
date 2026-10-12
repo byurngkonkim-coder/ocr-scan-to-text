@@ -27,8 +27,8 @@ from core import pdf_text_layer
 import batch_runner
 from core.types import FileResult, OutputFormat, PageResult, OCREngine
 
-PREVIEW_PAGES        = 3      # 빠른 미리보기 처리 페이지 수
-WARN_SIZE_MB         = 20
+PREVIEW_PAGES = 3      # 빠른 미리보기 처리 페이지 수
+WARN_SIZE_MB = 20
 
 # 사용자가 결과를 바로 찾는 고정 폴더(프로그램 루트/02_결과).
 # storage/ 는 이력 관리용 보관소이고, 이쪽은 '작업 산출물' 자리다.
@@ -2178,7 +2178,7 @@ def _history_table() -> list[list]:
 
 # 기록 표는 gr.Dataframe 대신 HTML — Dataframe 은 숨겨진 탭에서 값이 바뀌면 그 탭을 여는 순간
 # 크기 계산을 반복하며 브라우저가 멈춘다(RETRO 오류 10 · 2026-09-27 재현). HTML 은 그 과정이 없다.
-_USAGE_HEADERS   = ["시간", "유형", "입력토큰", "출력토큰", "비용(USD)"]
+_USAGE_HEADERS = ["시간", "유형", "입력토큰", "출력토큰", "비용(USD)"]
 _RECORDS_HEADERS = ["처리일시", "원본 파일명", "전체p", "빈p", "엔진 모드",
                     "결과 크기", "결과파일", "원본파일", "ID"]
 

@@ -62,6 +62,15 @@ class TestDetector:
         files = detector.collect_files(tmp_path)
         assert len(files) == 2  # txt 제외
 
+    def test_collect_folder_prunes_skip_dirs(self, tmp_path):
+        # 하위 폴더는 찾되, 숨김·가상환경 폴더는 들어가지 않는다 (N01 — rglob 은 다 돈 뒤 걸렀다)
+        for rel in ["a.png", "sub/b.png", ".git/c.png", "venv/d.png", "node_modules/e.png"]:
+            p = tmp_path / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            _make_image(["x"]).save(str(p))
+        files = detector.collect_files(tmp_path)
+        assert [f.relative_to(tmp_path).as_posix() for f in files] == ["a.png", "sub/b.png"]
+
 
 # ── V-02: 이미지 로드 ──────────────────────────────────────────────────────────
 

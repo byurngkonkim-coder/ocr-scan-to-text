@@ -15,8 +15,8 @@ if platform.system() == "Windows":
 
 # psm 3: 자동 레이아웃 분석 (느림·정확), psm 6: 단일 텍스트 블록 (빠름)
 # preserve_interword_spaces=1: 한글·한영 혼합문의 어절 띄어쓰기 보존 (CJK 권장)
-_CONFIG_FULL  = "--psm 3 --oem 1 -c preserve_interword_spaces=1"
-_CONFIG_FAST  = "--psm 6 --oem 1 -c preserve_interword_spaces=1"
+_CONFIG_FULL = "--psm 3 --oem 1 -c preserve_interword_spaces=1"
+_CONFIG_FAST = "--psm 6 --oem 1 -c preserve_interword_spaces=1"
 
 
 def run(image: Image.Image, lang: str = "kor+eng", fast: bool = False, force_tesseract: bool = False) -> OCRResult:

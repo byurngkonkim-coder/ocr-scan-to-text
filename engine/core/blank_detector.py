@@ -24,9 +24,9 @@ from PIL import Image
 #   페이지 번호만     : white=99.98%, edge=0.00010
 #   텍스트 4줄        : white=99.29%, edge=0.00434  ← 이 경계가 핵심
 #   책 본문 (빽빽)    : white=92.98%, edge=0.04348
-WHITE_RATIO_BLANK    = 0.9995  # 99.95% 이상 흰색 → 완전 공백 (stage 1)
-WHITE_RATIO_SUSPECT  = 0.999   # 99.9~99.95% → 의심 → edge 검사 (stage 2)
-EDGE_DENSITY_BLANK   = 0.0005  # 엣지 밀도 0.05% 미만 → 텍스트 없음
+WHITE_RATIO_BLANK = 0.9995  # 99.95% 이상 흰색 → 완전 공백 (stage 1)
+WHITE_RATIO_SUSPECT = 0.999   # 99.9~99.95% → 의심 → edge 검사 (stage 2)
+EDGE_DENSITY_BLANK = 0.0005  # 엣지 밀도 0.05% 미만 → 텍스트 없음
 MIN_MEANINGFUL_CHARS = 10      # Tesseract 결과 의미 문자 수 최소값
 
 
