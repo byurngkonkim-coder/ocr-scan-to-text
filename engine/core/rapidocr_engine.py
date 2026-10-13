@@ -62,6 +62,20 @@ def get_engine(lang: str = "kor+eng"):
     return _ENGINE_INSTANCE
 
 
+def read_boxes(image: Image.Image, lang: str = "kor+eng") -> list[tuple[str, float, tuple[int, int, int, int]]]:
+    """이미지의 글자 줄마다 (글자, 신뢰도 0~1, 상자 x·y·w·h) — 그림·표 감지에서 쓴다."""
+    result = get_engine(lang=lang)(np.array(image.convert("RGB")))
+    if result is None or getattr(result, "txts", None) is None or getattr(result, "boxes", None) is None:
+        return []
+    out = []
+    for text, score, box in zip(result.txts, result.scores, result.boxes):
+        pts = np.asarray(box)
+        x0, y0 = pts.min(axis=0)
+        x1, y1 = pts.max(axis=0)
+        out.append((str(text).strip(), float(score), (int(x0), int(y0), int(x1 - x0), int(y1 - y0))))
+    return out
+
+
 def run(image: Image.Image, lang: str = "kor+eng", fast: bool = False, refine: bool = True) -> OCRResult:
     """
     이미지에 RapidOCR(ONNX)을 실행하고 OCRResult 반환.

@@ -82,7 +82,6 @@ class TestFigureDetectorUnit:
 
     def test_text_lines_not_masked_as_figures(self):
         # 회귀: 본문 행이 그림으로 오인·마스킹돼 문장이 잘려 나가던 문제 (하루명화하루명언)
-        from core import tesseract_engine  # noqa: F401 — tesseract 경로 설정
         img = Image.new("RGB", (1240, 800), "white")
         draw = ImageDraw.Draw(img)
         for i, t in enumerate([
@@ -109,7 +108,6 @@ class TestFigureDetectorUnit:
 
     def test_text_on_picture_survives_masking(self):
         # 회귀: 그림(색 영역) 위에 얹힌 글자가 영역째 흰색으로 지워지던 문제
-        from core import tesseract_engine  # noqa: F401 — tesseract 경로 설정
         img = Image.new("RGB", (1240, 1100), "white")
         g = np.linspace(0, 1, 900)[None, :, None]
         paint = (np.array([200, 220, 245]) * (1 - g) + np.array([250, 215, 170]) * g).astype("uint8")

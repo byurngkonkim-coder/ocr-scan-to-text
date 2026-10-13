@@ -4,7 +4,6 @@
 # OCR 핵심
 rapidocr>=3.9.0
 onnxruntime>=1.20.0
-pytesseract>=0.3.10
 pdf2image>=1.16.0
 
 # 디지털 PDF 텍스트 레이어 직접 추출 (born-digital PDF → OCR·API 없이 즉시 추출)

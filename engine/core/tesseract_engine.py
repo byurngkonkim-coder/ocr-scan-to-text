@@ -1,93 +1,38 @@
-"""Tesseract OCR 엔진 — 블록별 언어 감지 + 신뢰도 반환"""
-import pytesseract
+"""로컬 OCR 진입점 — RapidOCR 한글 v5 만 쓴다 (모듈 이름은 호출부 호환을 위해 유지).
+
+예전엔 RapidOCR 오류·미설치 때 Tesseract 로 조용히 넘어가 한글 품질이 크게 떨어진 결과를
+'완료'로 냈다(2026-10-13). 이제 RapidOCR 이 없거나 실패하면 그대로 오류를 낸다 —
+호출부가 Vision 폴백하거나 그 쪽을 실패로 드러낸다.
+"""
 from PIL import Image
 
+from core import rapidocr_engine
 from core.types import OCREngine, OCRResult
-from core.char_normalizer import has_jamo_decomposition
-
-# Windows Tesseract 기본 경로
-import platform
-if platform.system() == "Windows":
-    import os
-    _default_path = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-    if os.path.exists(_default_path):
-        pytesseract.pytesseract.tesseract_cmd = _default_path
-
-# psm 3: 자동 레이아웃 분석 (느림·정확), psm 6: 단일 텍스트 블록 (빠름)
-# preserve_interword_spaces=1: 한글·한영 혼합문의 어절 띄어쓰기 보존 (CJK 권장)
-_CONFIG_FULL = "--psm 3 --oem 1 -c preserve_interword_spaces=1"
-_CONFIG_FAST = "--psm 6 --oem 1 -c preserve_interword_spaces=1"
 
 
-def run(image: Image.Image, lang: str = "kor+eng", fast: bool = False, force_tesseract: bool = False) -> OCRResult:
-    """
-    이미지에 로컬 OCR을 실행하고 OCRResult 반환.
-    RapidOCR(ONNX)이 사용 가능한 경우 최우선 실행하고, 미설치 또는 force_tesseract=True인 경우 Tesseract로 폴백합니다.
-
-    Args:
-        image: 전처리된 PIL 이미지
-        lang: 언어 코드 (기본 kor+eng)
-        fast: True면 빠른 설정 사용
-        force_tesseract: True면 RapidOCR 대신 Tesseract 강제 사용
-
-    Returns:
-        OCRResult (text, confidence, engine)
-    """
-    if not force_tesseract:
-        try:
-            from core import rapidocr_engine
-            if rapidocr_engine.is_available():
-                res = rapidocr_engine.run(image, lang=lang, fast=fast)
-                return OCRResult(
-                    text=res.text,
-                    confidence=res.confidence,
-                    engine=OCREngine.TESSERACT,
-                    has_jamo_split=res.has_jamo_split,
-                )
-        except Exception:
-            pass
-
-    cfg = _CONFIG_FAST if fast else _CONFIG_FULL
-
-    # 블록별 신뢰도 데이터 수집
-    data = pytesseract.image_to_data(
-        image, lang=lang,
-        output_type=pytesseract.Output.DICT,
-        config=cfg,
-    )
-
-    confs = [int(c) for c in data["conf"] if str(c).lstrip("-").isdigit() and int(c) != -1]
-    avg_conf = sum(confs) / len(confs) if confs else 0.0
-
-    # 전체 텍스트 추출
-    text = pytesseract.image_to_string(
-        image, lang=lang,
-        config=cfg,
-    )
-
-    # 자모 분리 감지 → 신뢰도 강제 0 (폴백 트리거)
-    jamo_split = has_jamo_decomposition(text)
-    if jamo_split:
-        avg_conf = 0.0
-
+def run(image: Image.Image, lang: str = "kor+eng", fast: bool = False) -> OCRResult:
+    """이미지에 RapidOCR 을 실행하고 OCRResult 반환. 미설치면 RuntimeError."""
+    if not rapidocr_engine.is_available():
+        raise RuntimeError("RapidOCR 이 설치돼 있지 않습니다 — engine\\install.bat 을 실행하세요")
+    res = rapidocr_engine.run(image, lang=lang, fast=fast)
     return OCRResult(
-        text=text,
-        confidence=avg_conf,
-        engine=OCREngine.TESSERACT,
-        has_jamo_split=jamo_split,
+        text=res.text,
+        confidence=res.confidence,
+        engine=OCREngine.TESSERACT,   # 처리 기록·화면의 '로컬 엔진' 구분값 (실제 엔진은 RapidOCR)
+        has_jamo_split=res.has_jamo_split,
     )
 
 
 def smart_run(image: Image.Image, default_lang: str = "kor+eng",
               fast: bool = False) -> OCRResult:
-    """
-    1차 OCR 후 블록별 언어 비율을 분석하여
-    최적 언어팩으로 재처리하는 스마트 OCR.
+    """한 번 읽고, 거의 영문인 쪽만 영문 모델로 다시 읽는다.
+
+    한국어 모델은 'kor'·'kor+eng' 가 같은 모델이라, 한국어 쪽을 언어만 바꿔 다시 읽으면
+    같은 결과에 모델만 쪽마다 다시 불러온다(예전 동작).
     """
     rough_result = run(image, lang=default_lang, fast=fast)
-    optimal_lang = _detect_language(rough_result.text)
-    if optimal_lang != default_lang:
-        return run(image, lang=optimal_lang, fast=fast)
+    if _detect_language(rough_result.text) == "eng" and default_lang != "eng":
+        return run(image, lang="eng", fast=fast)
     return rough_result
 
 
