@@ -55,3 +55,14 @@ def test_no_tesseract_left_in_engine_code():
     assert hits == []
     assert not (engine / "core" / "tesseract_engine.py").exists()
     assert not hasattr(OCREngine, "TESSERACT")
+
+
+def test_textline_angle_classifier_off(monkeypatch):
+    # 방향 판별(cls)이 짧은 줄을 뒤집힌 글자로 보고 180° 돌려 읽어 줄이 깨지거나 빠졌다 (2026-10-13 예측기계 30·150쪽)
+    import rapidocr
+    seen = []
+    monkeypatch.setattr(rapidocr, "RapidOCR", lambda params=None: seen.append(params) or object())
+    for lang in ("kor+eng", "eng"):
+        monkeypatch.setattr(rapidocr_engine, "_ENGINE_INSTANCE", None)
+        rapidocr_engine.get_engine(lang)
+    assert [p["Global.use_cls"] for p in seen] == [False, False]

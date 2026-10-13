@@ -42,17 +42,18 @@ def get_engine(lang: str = "kor+eng"):
     from rapidocr import RapidOCR
     from rapidocr.utils.typings import OCRVersion, LangRec, ModelType
 
-    params = {}
+    # 방향 판별(cls) 끔 — 짧은 줄을 뒤집힌 글자로 보고 180° 돌려 읽어 줄이 깨지거나 빠졌다(2026-10-13)
+    params = {"Global.use_cls": False}
     # 한국어 또는 한영 혼합인 경우 한국어 특화 v5 모바일 인식 모델 적용
     if any(k in lang.lower() for k in ("kor", "korean", "ko")):
-        params = {
+        params.update({
             "Rec.ocr_version": OCRVersion.PPOCRV5,
             "Rec.lang_type": LangRec.KOREAN,
             "Rec.model_type": ModelType.MOBILE,
-        }
+        })
 
     try:
-        _ENGINE_INSTANCE = RapidOCR(params=params if params else None)
+        _ENGINE_INSTANCE = RapidOCR(params=params)
         _ENGINE_LANG = lang
     except Exception as e:
         logger.warning(f"RapidOCR Korean 모델 초기화 실패, 기본 모델로 전환: {e}")
