@@ -95,3 +95,27 @@ def test_hanging_indent_after_bullet_not_marked():
     lines = ["본문 줄", "다이얼의 최고 숫자는 보통 10이지만 다이얼이 나", "온다.", "34"]
     boxes = [_box(100, 0, 1000), _box(100, 50, 1000), _box(130, 100, 200), _box(100, 200, 140)]
     assert rapidocr_engine._mark_paragraph_starts(lines, boxes) == lines
+
+
+def _page(last_text, last_x1, gap_rows):
+    # 본문 6줄(줄 간격 50, 높이 30) + 맨 아래 한 줄(gap_rows 줄 간격만큼 떨어짐)
+    lines = [f"본문 {k}번째 줄입니다" for k in range(6)] + [last_text]
+    boxes = [_box(100, 50 * k, 1000) for k in range(6)] + [_box(100, 250 + 50 * gap_rows, last_x1)]
+    return lines, boxes
+
+
+def test_footer_separated_by_gap_dropped():
+    # 예측기계 표본 40쪽 실측: 꼬리말은 앞 줄과 줄 간격 2.15배 이상 떨어져 있고 짧다(39/39).
+    # 꼬리말 아닌 쪽 마지막 줄은 0.9배 이하
+    for footer in ("28", "피터 드러커의 매니지먼트 029", "1582부의사결정"):
+        lines, boxes = _page(footer, 400, 2.3)
+        out_lines, out_boxes = rapidocr_engine._drop_page_footer(lines, boxes)
+        assert out_lines == lines[:-1] and len(out_boxes) == 6, footer
+
+
+def test_last_line_kept_when_close_long_or_no_digit():
+    for text, x1, gap in (("그림 이름표 12", 400, 0.9),        # 본문과 붙어 있음
+                          ("숫자 2026년이 든 긴 각주 줄", 900, 2.3),   # 짧지 않음
+                          ("예측", 400, 2.3)):                 # 쪽번호 없음
+        lines, boxes = _page(text, x1, gap)
+        assert rapidocr_engine._drop_page_footer(lines, boxes)[0] == lines, text

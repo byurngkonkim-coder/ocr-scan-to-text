@@ -77,6 +77,40 @@ def read_boxes(image: Image.Image, lang: str = "kor+eng") -> list[tuple[str, flo
     return out
 
 
+def _drop_page_footer(lines: list[str], boxes) -> tuple[list[str], list]:
+    """쪽 맨 아래 줄이 본문과 떨어진 짧은 쪽번호 줄(꼬리말)이면 뺀다.
+
+    꼬리말은 본문 아래로 넉넉히 떨어져 있다 — 예측기계 표본 40쪽 실측: 꼬리말 39개는 앞 줄과
+    줄 간격의 2.15배 이상, 꼬리말 아닌 마지막 줄은 0.9배 이하(2026-10-14). 모양이 책마다 달라
+    ('2장 …19'·'1582부의사결정'·'피터 드러커의 매니지먼트 029') 글자 규칙만으로는 다 못 잡고,
+    줄 잇기 전에 떼야 본문 끝에 붙지 않는다.
+    꼬리말 = 마지막 줄(같은 높이 상자 묶음) + 앞 줄과 1.5배 이상 떨어짐 + 본문 너비 40% 이하 + 숫자 포함.
+    위쪽 머리글은 장 시작 쪽의 '11장'·'3부' 와 구분되지 않아 다루지 않는다.
+    """
+    if len(lines) != len(boxes) or len(lines) < 4:
+        return lines, boxes
+    y0 = [min(p[1] for p in b) for b in boxes]
+    y1 = [max(p[1] for p in b) for b in boxes]
+    x0 = [min(p[0] for p in b) for b in boxes]
+    x1 = [max(p[0] for p in b) for b in boxes]
+    h = float(np.median([y1[i] - y0[i] for i in range(len(lines))]))
+    low = max(y0)
+    foot = [i for i in range(len(lines)) if y0[i] >= low - 0.5 * h]
+    rest = [i for i in range(len(lines)) if i not in foot]
+    rows = sorted(y0[i] for i in rest)
+    steps = [b - a for a, b in zip(rows, rows[1:]) if b - a > 0.5 * h]   # 같은 줄 상자는 건너뜀
+    if len(steps) < 2:
+        return lines, boxes
+    pitch = float(np.median(steps))
+    gap = min(y0[i] for i in foot) - max(y1[i] for i in rest)
+    width = max(x1[i] for i in foot) - min(x0[i] for i in foot)
+    body = max(x1[i] for i in rest) - min(x0[i] for i in rest)
+    text = " ".join(lines[i] for i in foot)
+    if gap >= 1.5 * pitch and width <= 0.4 * body and any(c.isdigit() for c in text):
+        return [lines[i] for i in rest], [boxes[i] for i in rest]
+    return lines, boxes
+
+
 def _mark_paragraph_starts(lines: list[str], boxes) -> list[str]:
     """들여 쓴 줄(문단 첫 줄) 앞에 공백 2칸을 붙인다 — postprocessor.join_broken_lines 가 앞 줄과 잇지 않는다.
 
@@ -160,6 +194,8 @@ def run(image: Image.Image, lang: str = "kor+eng", fast: bool = False, refine: b
             # 0.0~1.0 score -> 0.0~100.0 스케일
             confs.append(score * 100.0)
 
+    if len(line_boxes) == len(lines):
+        lines, line_boxes = _drop_page_footer(lines, line_boxes)
     full_text = "\n".join(_mark_paragraph_starts(lines, line_boxes))
     avg_conf = sum(confs) / len(confs) if confs else 0.0
 
