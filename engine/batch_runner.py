@@ -114,6 +114,9 @@ def _run() -> None:
                 job.state = "완료" if job.result else "실패"
                 if not job.result:
                     job.detail = _last_line(last[1]) if last else "결과 없음"
+                else:   # 정제 강등 안내만 남긴다 — '완료'만 보이면 정제가 안 된 것을 모른다(2026-10-13)
+                    job.detail = next((ln.strip(" ⚠️") for ln in str(last[1]).splitlines()
+                                       if "문장 정제 미적용" in ln), "")
         except Exception as e:   # 한 파일의 실패가 대기열 전체를 멈추지 않게
             job.state, job.detail = "실패", f"{type(e).__name__}: {e}"
         job.ended = time.time()
@@ -209,6 +212,8 @@ def status_html() -> str:
         if j.started:
             took = _fmt_sec((j.ended or now) - j.started)
         note = j.result if j.state == "완료" else j.detail
+        if j.state == "완료" and j.detail:
+            note = f"⚠ {j.detail} · {j.result}"
         rows.append(f"<tr><td>{icon.get(j.state, '')} {j.state}</td><td>{html.escape(j.path.name)}</td>"
                     f"<td>{took}</td><td style='color:#6f6962'>{html.escape(note)[:140]}</td></tr>")
     from core import config

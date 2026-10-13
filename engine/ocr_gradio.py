@@ -300,6 +300,23 @@ def _progress_html(pages_done: int, total: int, label: str,
 </div>"""
 
 
+def _clean_degrade_note(crep: dict | None) -> str:
+    """정제가 원문으로 강등된 구간 안내. 없으면 ''.
+
+    2026-10-13: 키가 401 로 거절돼 결과물 4건 모두 정제가 안 됐는데 '완료'로만 보여 알 수 없었다 —
+    처리 로그·④ 대기열·③ 처리 기록에 같은 문구로 남긴다.
+    """
+    if not crep or not (crep["fallback_api"] or crep["fallback_guard"]):
+        return ""
+    why = []
+    if crep["fallback_api"]:
+        why.append(f"API 오류 {crep['fallback_api']} — 키·연결 확인")
+    if crep["fallback_guard"]:
+        why.append(f"응답 부족 {crep['fallback_guard']}")
+    n = crep["fallback_api"] + crep["fallback_guard"]
+    return f"문장 정제 미적용 {n}/{crep['chunks']} 구간({', '.join(why)}) — 그 구간은 원문 그대로 저장"
+
+
 def _status_text(page_num: int, total: int, pct: int,
                  logs: list[str], elapsed_str: str = "") -> str:
     header = f"처리 중: {page_num}/{total} 페이지 ({pct}%)"
@@ -667,6 +684,7 @@ def _run_digital_pdf(file_path: Path, pages_text: list[str], out_fmt: OutputForm
     # cleanup=True 이고 Gemini 키가 있으면 추출 텍스트도 문서 맥락 교정을 적용한다.
     # (완전 오프라인·무비용을 원하면 '문장 정제' 체크를 끄면 이 단계가 생략된다.)
     cleaned_text = None
+    clean_note = ""
     ckpt = None
     content_pages = [p for p in result.pages if not p.is_blank]
     if cleanup and content_pages and text_cleaner.is_available():
@@ -697,10 +715,9 @@ def _run_digital_pdf(file_path: Path, pages_text: list[str], out_fmt: OutputForm
         if cleaned_text:
             step_logs.append(f"  📝 문장 정제 완료 ({len(cleaned_text):,}자)")
         _crep = crep or None
-        if _crep and (_crep["fallback_guard"] or _crep["fallback_api"]):
-            step_logs.append(
-                f"  ⚠️ 정제 무결성 가드 발동 {_crep['fallback_guard'] + _crep['fallback_api']}"
-                f"/{_crep['chunks']} 구간 — LLM 교정 대신 원문 보존(내용 무손실)")
+        clean_note = _clean_degrade_note(_crep)
+        if clean_note:
+            step_logs.append(f"  ⚠️ {clean_note}")
         if _crep:   # 부속물 제거·지어낸 문장 등 확인할 경고 — 강등 건은 위 개수 줄로 대신한다
             step_logs.extend(f"  ⚠ {w}" for w in _crep["warnings"] if "강등" not in w)
 
@@ -768,6 +785,7 @@ def _run_digital_pdf(file_path: Path, pages_text: list[str], out_fmt: OutputForm
             engine_mode     = "pdf_text_layer",
             file_size_bytes = file_path.stat().st_size,
             output_path     = results_path,
+            clean_note      = clean_note,
         )
     except Exception as e:
         # 조용히 넘기면 화면엔 '완료'만 뜨고 파일은 없다 — 반드시 표면화한다.
@@ -1269,6 +1287,7 @@ def _run_ocr(
     #   쪽번호·러닝헤더 제거 · 페이지 넘김으로 잘린 단어/문단 복원 · 띄어쓰기·맞춤법.
     # 결과가 있으면 '마커 없는 클린 플레인텍스트'로 저장한다.
     cleaned_text = None
+    clean_note = ""
     ckpt = None
     content_pages = [p for p in result.pages if not p.is_blank]
     if cleanup and content_pages and text_cleaner.is_available():
@@ -1299,10 +1318,9 @@ def _run_ocr(
         if cleaned_text:
             step_logs.append(f"  📝 문장 정제 완료 ({len(cleaned_text):,}자, 마커 없는 클린 텍스트)")
         _crep = crep or None
-        if _crep and (_crep["fallback_guard"] or _crep["fallback_api"]):
-            step_logs.append(
-                f"  ⚠️ 정제 무결성 가드 발동 {_crep['fallback_guard'] + _crep['fallback_api']}"
-                f"/{_crep['chunks']} 구간 — LLM 교정 대신 원문 보존(내용 무손실)")
+        clean_note = _clean_degrade_note(_crep)
+        if clean_note:
+            step_logs.append(f"  ⚠️ {clean_note}")
         if _crep:   # 부속물 제거·지어낸 문장 등 확인할 경고 — 강등 건은 위 개수 줄로 대신한다
             step_logs.extend(f"  ⚠ {w}" for w in _crep["warnings"] if "강등" not in w)
     elif cleanup and not text_cleaner.is_available():
@@ -1380,6 +1398,7 @@ def _run_ocr(
             engine_mode     = "vision_first" if vision_first else "rapidocr_first",
             file_size_bytes = file_path.stat().st_size,
             output_path     = results_path,
+            clean_note      = clean_note,
         )
     except Exception as e:
         # 조용히 넘기면 화면엔 '완료'만 뜨고 파일은 없다 — 반드시 표면화한다.

@@ -105,6 +105,7 @@ def record(
     engine_mode: str,
     file_size_bytes: int,
     output_path: Path | None = None,
+    clean_note: str = "",
 ) -> str:
     """처리 이력 1건 추가. 생성된 entry_id 반환. output_path = 02_결과/ 확정본."""
     entry_id = str(uuid.uuid4())[:8]
@@ -121,6 +122,7 @@ def record(
         "pages_blank":   pages_blank,
         "vision_pages":  vision_pages,
         "engine_mode":   engine_mode,       # 'vision_first' or 'rapidocr_first'
+        "clean_note":    clean_note,        # 문장 정제 강등 안내('' = 전부 정제됨 또는 정제 안 함)
         "file_size_kb":  round(file_size_bytes / 1024, 1),
         "result_size_kb": round(Path(result_path).stat().st_size / 1024, 1)
                           if result_path and Path(result_path).exists() else 0,
@@ -202,7 +204,9 @@ def _engine_cell(e: dict) -> str:
     if mode == "tesseract_first":   # 2026-10-13 이전 기록의 같은 모드(로컬 엔진 우선) 이름
         mode = "rapidocr_first"
     if mode in ("vision_first", "rapidocr_first") and e.get("pages_total"):
-        return f"{mode} · Vision {e.get('vision_pages', 0)}/{e['pages_total']}쪽"
+        mode = f"{mode} · Vision {e.get('vision_pages', 0)}/{e['pages_total']}쪽"
+    if e.get("clean_note"):     # 정제 강등 — '— 그 구간은…' 꼬리는 빼고 짧게
+        mode += " · ⚠ " + e["clean_note"].split(" — ")[0]
     return mode
 
 
