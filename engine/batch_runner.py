@@ -1,4 +1,4 @@
-"""④ 일괄 처리 — 01_입력 폴더 목록과 백그라운드 대기열.
+"""④ 일괄 처리 — 입력 폴더(OCR프로젝트/입력) 목록과 백그라운드 대기열.
 
 화면(브라우저)과 분리된 작업 스레드들이 대기열을 처리한다. 브라우저를 닫아도
 처리는 계속되고, 화면은 주기적으로 status_html() 을 읽어 보여 준다.
@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 
-INPUT_DIR = Path(__file__).resolve().parent.parent / "01_입력"
+INPUT_DIR = Path(__file__).resolve().parents[2] / "입력"  # 프로그램 폴더 옆 OCR프로젝트/입력
 _EXTS = {".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff"}
 
 
@@ -124,7 +124,7 @@ def _last_line(text) -> str:
     return lines[-1] if lines else ""
 
 
-# ── 01_입력 목록 ───────────────────────────────────────────────────────────────
+# ── 입력 폴더 목록 ─────────────────────────────────────────────────────────────
 
 _info_cache: dict[tuple, tuple[int | None, str]] = {}
 
@@ -161,7 +161,7 @@ def _done_names(results_dir: Path) -> tuple[set[str], list[str]]:
 
 
 def list_inputs(results_dir: Path) -> list[dict]:
-    """01_입력 파일 목록 — 이름순. 처리 여부는 처리 기록 원본명 또는 02_결과 파일명으로 판정."""
+    """입력 폴더 파일 목록 — 이름순. 처리 여부는 처리 기록 원본명 또는 02_결과 파일명으로 판정."""
     if not INPUT_DIR.exists():
         return []
     hist, outs = _done_names(results_dir)

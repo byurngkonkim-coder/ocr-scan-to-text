@@ -1622,7 +1622,7 @@ def build_ui() -> gr.Blocks:
                             clear_msg = gr.Markdown("")
 
             # ══════════════════════════════════════════════════════════════════
-            # 탭 4: 일괄 처리 — 01_입력 폴더에서 골라 대기열로 차례 처리
+            # 탭 4: 일괄 처리 — 입력 폴더(OCR프로젝트/입력)에서 골라 대기열로 차례 처리
             # ══════════════════════════════════════════════════════════════════
             with gr.Tab("④ 일괄 처리") as batch_tab:
                 with gr.Column(elem_classes="step-card"):
@@ -1648,7 +1648,7 @@ def build_ui() -> gr.Blocks:
                         )
 
                 with gr.Column(elem_classes="step-card"):
-                    gr.HTML(_step_head(None, "01_입력 폴더",
+                    gr.HTML(_step_head(None, "입력 폴더",
                             "폴더에 넣은 파일을 골라 차례로 처리합니다. 위에서 지정한 처리 방식으로 대기열에서 자동 실행됩니다."))
                     batch_note = gr.HTML("")
                     batch_list = gr.CheckboxGroup(show_label=False, choices=[], value=[],
