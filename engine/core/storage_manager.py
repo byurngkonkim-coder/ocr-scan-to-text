@@ -3,8 +3,8 @@
 
 디렉터리 구조:
   storage/
-  ├── uploads/          원본 파일 (save_original=True 시)
-  ├── results/          추출 텍스트 (.txt / .md)
+  ├── uploads/          원본 파일 (save_original=True 시) · 정제 전 원문 사본(*_원문)
+  ├── results/          02_결과 저장이 실패했을 때만 쓰는 결과 사본 (평소엔 비어 있음 — 결과는 02_결과 한 곳)
   └── history.json      처리 이력 (최대 500건)
 """
 from __future__ import annotations
@@ -55,13 +55,17 @@ def save_result(result_path: Path | str, original_name: str) -> Path:
 
 
 def raw_copy_path(result_path: Path | str) -> Path:
-    """결과 파일의 '정제 전 원문' 사본 경로 — 저장과 삭제가 같은 규칙을 쓴다."""
+    """결과 파일의 '정제 전 원문' 사본 경로(storage/uploads/결과이름_원문) — 저장과 삭제가 같은 규칙을 쓴다.
+
+    결과는 02_결과 에만 두고, 보관소에는 입력 쪽 자료(원본·정제 전 원문)만 남긴다.
+    """
     p = Path(result_path)
-    return p.with_name(f"{p.stem}_원문{p.suffix}")
+    return _UPLOADS / f"{p.stem}_원문{p.suffix}"
 
 
 def save_raw_copy(raw_path: Path | str, stored_result: Path | str) -> Path:
-    """정제 전 원문을 보관소 결과 파일 옆에 '결과이름_원문' 으로 복사."""
+    """정제 전 원문을 storage/uploads/ 에 '결과이름_원문' 으로 복사."""
+    init()
     dst = raw_copy_path(stored_result)
     shutil.copy2(raw_path, dst)
     return dst

@@ -550,6 +550,33 @@ def _finalize_digital(text: str, page_num: int) -> PageResult:
     )
 
 
+def _finalize_text(text: str, page_num: int) -> PageResult:
+    """txt 1쪽 → PageResult. 이미 읽어 정리된 본문이라 후처리 없이 그대로 쓴다."""
+    return PageResult(page_num=page_num, raw_text=text, corrected_text=text,
+                      engine=OCREngine.PDF_TEXT, confidence=100.0)
+
+
+def _text_pages(text: str, size: int = 2000) -> list[str]:
+    """txt 본문을 문단 경계에서 약 size자씩 묶어 '쪽'으로 나눈다.
+
+    정제기는 쪽을 쪼개지 않고 구간으로 묶으므로, 책 전체를 한 쪽으로 넘기면 구간이 하나가 된다.
+    """
+    pages: list[str] = []
+    cur: list[str] = []
+    cur_len = 0
+    for para in (p.strip("\n") for p in text.replace("\r\n", "\n").split("\n\n")):
+        if not para.strip():
+            continue
+        if cur and cur_len + len(para) > size:
+            pages.append("\n\n".join(cur))
+            cur, cur_len = [], 0
+        cur.append(para)
+        cur_len += len(para)
+    if cur:
+        pages.append("\n\n".join(cur))
+    return pages
+
+
 def _page_reader(file_path: Path, lang: str, no_preprocess: bool, no_fallback: bool,
                  no_figure: bool, llm_correct: bool, llm_budget: int, vision_first: bool):
     """쪽 번호 → (PageResult, 로그). 디지털 PDF에서 내장 글자가 깨진 쪽만 이미지로 다시 읽는다."""
@@ -564,7 +591,8 @@ def _page_reader(file_path: Path, lang: str, no_preprocess: bool, no_fallback: b
 def _run_digital_pdf(file_path: Path, pages_text: list[str], out_fmt: OutputFormat,
                      cleanup: bool, front_matter: bool, start_time: float,
                      label: str = "디지털 PDF 추출",
-                     garbled_pages=(), read_page=None, noisy_pages=(), repaired_lines=None):
+                     garbled_pages=(), read_page=None, noisy_pages=(), repaired_lines=None,
+                     page_fn=_finalize_digital):
     """디지털 PDF(텍스트 레이어 보유) 전용 초고속 경로.
 
     이미지 렌더링·OCR·Vision API를 모두 건너뛰고 내장 텍스트를 그대로 읽는다.
@@ -604,7 +632,7 @@ def _run_digital_pdf(file_path: Path, pages_text: list[str], out_fmt: OutputForm
                 step_logs.append(f"  p.{page_num}: 다시 읽기 실패 → 내장 글자 사용 ({e})")
                 result.pages.append(_finalize_digital(txt, page_num))
         else:
-            result.pages.append(_finalize_digital(txt, page_num))
+            result.pages.append(page_fn(txt, page_num))
         # 초고속이라 5페이지마다(또는 마지막)만 진행률 갱신
         if page_num == total or page_num % 5 == 0 or page_num in garbled:
             pct = int(page_num / total * 100) if total else 100
@@ -694,6 +722,10 @@ def _run_digital_pdf(file_path: Path, pages_text: list[str], out_fmt: OutputForm
                 # 안전망이 없다는 사실을 숨기면 '완료'만 보고 원문을 믿게 된다 — 표면화
                 raw_path = None
                 step_logs.append(f"  ⚠ 정제 전 원문 사본을 만들지 못했습니다(복구용 원문 없음): {e}")
+        elif page_fn is _finalize_text:
+            # txt 를 정제 없이 저장 — 문단 묶음일 뿐인 '쪽' 표시를 넣지 않는다
+            out_path = writer.write_plain(
+                file_path, "\n\n".join(p.corrected_text for p in result.pages), tmp_dir, out_fmt)
         else:
             out_path = writer.write(result, tmp_dir, out_fmt)
     except Exception as e:
@@ -715,7 +747,8 @@ def _run_digital_pdf(file_path: Path, pages_text: list[str], out_fmt: OutputForm
 
     # ── storage: 결과 파일 영구 저장 + 이력 기록 ───────────────────────────────
     try:
-        stored_path = storage_manager.save_result(out_path, file_path.name)
+        # 결과는 02_결과 한 곳에만 — 보관소 사본은 02_결과 저장이 실패했을 때만 만든다
+        stored_path = results_path or storage_manager.save_result(out_path, file_path.name)
         if raw_path is not None:
             try:
                 storage_manager.save_raw_copy(raw_path, stored_path)
@@ -741,7 +774,8 @@ def _run_digital_pdf(file_path: Path, pages_text: list[str], out_fmt: OutputForm
 
     total_el = elapsed()
     summary = [
-        f"✅ 완료  |  디지털 PDF 텍스트 레이어 직접 추출  |  총 소요: {total_el}",
+        f"✅ 완료  |  {'텍스트 파일(OCR 없음)' if page_fn is _finalize_text else '디지털 PDF 텍스트 레이어 직접 추출'}"
+        f"  |  총 소요: {total_el}",
         f"   전체 {total}p → 추출 {text_pages}p  ·  OCR·API 미사용 (무료)",
     ]
     if blank_count:
@@ -1092,6 +1126,15 @@ def _run_ocr(
     out_fmt   = OutputFormat.MD if fmt == "md" else OutputFormat.TXT
     file_mb   = file_path.stat().st_size / 1_048_576
 
+    # ── 텍스트 파일(.txt) — 이미 읽은 본문: OCR 없이 문장 정제·저장·기록만 한다 ──
+    if file_path.suffix.lower() == ".txt":
+        yield from _run_digital_pdf(
+            file_path, _text_pages(file_path.read_text(encoding="utf-8-sig")),
+            out_fmt, cleanup, front_matter, start_time,
+            label="텍스트 파일 정제", page_fn=_finalize_text,
+        )
+        return
+
     # ── 디지털 PDF 우선 경로 (신규 처리 시에만; 이어서-처리는 이미지 캐시 사용) ──
     # 텍스트 레이어가 있으면 렌더·OCR·Vision API를 건너뛰고 즉시 직접 추출한다.
     # 스캔 PDF는 is_digital=False → 아래 기존 OCR 경로로 자동 전환.
@@ -1316,7 +1359,8 @@ def _run_ocr(
     stored_path   = None
     stored_upload = None
     try:
-        stored_path = storage_manager.save_result(out_path, file_path.name)
+        # 결과는 02_결과 한 곳에만 — 보관소 사본은 02_결과 저장이 실패했을 때만 만든다
+        stored_path = results_path or storage_manager.save_result(out_path, file_path.name)
         if raw_path is not None:
             try:
                 storage_manager.save_raw_copy(raw_path, stored_path)

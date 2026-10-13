@@ -293,6 +293,21 @@ class TestStorageManagerIntegration:
                              output_path=output)
         return entry_id, stored, copy, output
 
+    def test_raw_copy_stays_in_storage_when_result_is_in_results_folder(self, tmp_path, monkeypatch):
+        # 결과는 02_결과 한 곳에만 — 정제 전 원문은 보관소 uploads/ 에 남는다
+        sm = self._patch_storage(tmp_path, monkeypatch)
+        output = tmp_path / "02_결과" / "20261013_120000_책.txt"
+        output.parent.mkdir()
+        output.write_text("정제본", encoding="utf-8")
+        raw = tmp_path / "책_raw.txt"
+        raw.write_text("원문", encoding="utf-8")
+        copy = sm.save_raw_copy(raw, output)
+        assert copy == sm._UPLOADS / "20261013_120000_책_원문.txt" and copy.exists()
+        assert sorted(p.name for p in output.parent.iterdir()) == [output.name]
+        entry_id = sm.record("책.pdf", output, None, 1, 1, 0, 0, "test", 100, output_path=output)
+        sm.delete_entry(entry_id, delete_files=True)
+        assert not output.exists() and not copy.exists()
+
     def test_delete_entry_removes_raw_copy_and_output(self, tmp_path, monkeypatch):
         sm = self._patch_storage(tmp_path, monkeypatch)
         entry_id, stored, copy, output = self._record_with_raw_copy(sm, tmp_path, "책")

@@ -103,8 +103,10 @@ def test_no_warning_when_raw_copy_succeeds(source, sandbox):
     # 의도한 경로를 실제로 탔는지 — 디지털은 텍스트 레이어, 이미지는 OCR 요약
     assert ("텍스트 레이어" in status) == (kind == "digital_pdf")
     assert "원문 사본" not in status
-    saved = list(storage_manager._RESULTS.glob("*_원문*"))
+    saved = list(storage_manager._UPLOADS.glob("*_원문*"))
     assert len(saved) == 1
+    # 결과 사본은 보관소에 만들지 않는다 — 결과는 02_결과 한 곳에만
+    assert not storage_manager._RESULTS.exists() or not any(storage_manager._RESULTS.iterdir())
     # 이력에 02_결과 확정본 경로가 남아야 '파일도 함께 삭제' 때 지워진다
     output = Path(storage_manager.load_history()[0]["output_path"])
     assert output.parent == ocr_gradio.RESULTS_DIR and output.is_file()

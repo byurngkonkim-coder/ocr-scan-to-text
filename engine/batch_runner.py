@@ -19,7 +19,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 INPUT_DIR = Path(__file__).resolve().parent.parent / "입력"
-_EXTS = {".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff"}
+_EXTS = {".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".txt"}   # .txt 는 OCR 없이 문장 정제만
 
 
 @dataclass
@@ -136,7 +136,9 @@ def _file_kind(path: Path) -> tuple[int | None, str]:
     if key in _info_cache:
         return _info_cache[key]
     from core import pdf_text_layer
-    if path.suffix.lower() != ".pdf":
+    if path.suffix.lower() == ".txt":
+        res = (None, "텍스트(정제만)")
+    elif path.suffix.lower() != ".pdf":
         res = (1, "이미지")
     else:
         info = pdf_text_layer.analyze(path) if pdf_text_layer.is_available() else None
