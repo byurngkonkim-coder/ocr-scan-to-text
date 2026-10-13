@@ -135,3 +135,15 @@ def test_punctuation_spacing_keeps_urls_and_newlines():
 
 def test_single_char_word_line_kept():
     assert pp.remove_noise_lines("즉,\n본문 줄\nl") == "즉,\n본문 줄"
+
+
+def test_page_footer_not_joined_into_last_body_line():
+    # 예측기계 54쪽 실측: 쪽 꼬리('장 제목+쪽번호')가 앞 줄 끝에 붙어('…된다.회 4장왜지능이라고 하는가?55')
+    # 문서 단위 머리글 제거가 놓쳤고, 각주 줄에 붙은 것은 정제 LLM 이 각주째 지웠다
+    body = "".join(f"본문 {k}번째 줄은 쪽의 오른쪽 끝까지 꽉 차 있다.\n" for k in range(6))
+    for footer in ("4장왜지능이라고 하는가?55", "12장워크플로해체179", "2장 값이 싸지면 모든 것이 바뀐다 19"):
+        page = body + "평균적으로 정확하다는것은사실 번번이 틀린다는뜻도 된다.회\n" + footer
+        assert pp.join_broken_lines(page).splitlines()[-1] == footer, footer
+    # 쪽 끝 본문 줄이 숫자로 끝나는 보통 문장이면 그대로 잇는다
+    page = body + "그 회사의 매출은 꾸준히 늘어 2019년에는 역대 최고인\n1,250억 원에 이르렀다 2019"
+    assert pp.join_broken_lines(page).splitlines()[-1].startswith("그 회사의 매출은")

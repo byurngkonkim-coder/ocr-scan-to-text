@@ -65,3 +65,12 @@ def test_iter_clean_applies_it(monkeypatch):
                         lambda p: seen.append(p) or p.split("---")[1])
     text_cleaner.clean_pages(_pages(6))
     assert seen and seen[0].count(H) == 1
+
+
+def test_glued_page_number_on_chapter_footer():
+    # 예측기계 실측: '4장왜지능이라고 하는가?55' — 쪽번호가 붙어 쪽마다 다른 줄로 보여 반복을 못 셌다
+    pages = [f"본문 {i}쪽 문장입니다.\n4장왜지능이라고 하는가?{51 + 2 * i}" for i in range(6)]
+    out = text_cleaner.strip_running_headers(pages)
+    assert out[0].endswith("?51")
+    assert all("지능이라고" not in p for p in out[1:])
+    assert all("문장입니다." in p for p in out)

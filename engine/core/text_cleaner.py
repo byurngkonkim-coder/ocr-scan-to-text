@@ -655,6 +655,11 @@ def _header_key(line: str) -> str | None:
         core = _GARBLED_PAGE_NO_RE.sub('', k[m.end():]).strip()
         if len(re.findall(r'[가-힣A-Za-z]', core)) >= 4:
             k = '§' + re.sub(r'\s+', '', core)
+    # '4장왜지능이라고 하는가?55' — 장·부 번호로 시작하는 쪽 꼬리는 붙은 쪽번호까지 떼고 비교한다(예측기계 실측)
+    elif re.match(r'\d{1,2}\s?[장부]', k):
+        core = re.sub(r'\s*\d{1,4}$', '', k)
+        if len(re.findall(r'[가-힣A-Za-z]', core)) >= 4:
+            k = '§' + re.sub(r'\s+', '', core)
     if not (2 <= len(k) <= _HEADER_MAX_LEN) or k.startswith('['):
         return None
     if not re.search(r'[가-힣A-Za-z]{2}', k):
