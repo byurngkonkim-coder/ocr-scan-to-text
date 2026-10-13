@@ -21,6 +21,8 @@ engine/ocr_server.log
 .playwright-mcp/
 
 # User data & results (User Layer)
+입력/*
+!입력/.gitkeep
 02_결과/*
 !02_결과/.gitkeep
 

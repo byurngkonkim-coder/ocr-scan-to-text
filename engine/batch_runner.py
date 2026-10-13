@@ -1,4 +1,4 @@
-"""④ 일괄 처리 — 입력 폴더(OCR프로젝트/입력) 목록과 백그라운드 대기열.
+"""④ 일괄 처리 — 입력 폴더 목록과 백그라운드 대기열.
 
 화면(브라우저)과 분리된 작업 스레드들이 대기열을 처리한다. 브라우저를 닫아도
 처리는 계속되고, 화면은 주기적으로 status_html() 을 읽어 보여 준다.
@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 
-INPUT_DIR = Path(__file__).resolve().parents[2] / "입력"  # 프로그램 폴더 옆 OCR프로젝트/입력
+INPUT_DIR = Path(__file__).resolve().parent.parent / "입력"
 _EXTS = {".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff"}
 
 
