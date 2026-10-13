@@ -117,11 +117,28 @@ class TestFigureDetectorUnit:
         draw.text((230, 500), "끝을 기억할 때 삶은 단단해지리라", fill=(40, 30, 30), font=_font(36))
 
         result = figure_detector.detect(img)
-        assert result.regions, "그림 영역이 감지돼야 이 테스트가 의미 있다"
+        # 예전엔 이 그림이 1칸짜리 '표'로 잡혀 글자가 표 블록에 한 번 더 써졌다 — 이제 표·그림 어느 쪽도 아니다
+        assert [r for r in result.regions if r.kind == "table"] == []
 
         box = (220, 410, 1010, 560)  # 두 글자 줄을 감싸는 영역
         dark = lambda im: int((np.array(im.convert("L").crop(box)) < 100).sum())
         assert dark(result.masked_image) >= dark(img) * 0.95
+
+    def test_single_column_grid_is_not_table(self, monkeypatch):
+        # 회귀: 쪽 가장자리 선·도식이 표로 잡혀, 본문 글자 조각이 한 칸짜리 행으로 '표' 블록에
+        # 다시 써졌다('| 로더정확 |'·'| 보다큰실 |' — 예측기계 54·107·133·135쪽, 도식 39·201쪽 등)
+        monkeypatch.setattr(figure_detector, "_detect_tables", lambda g: [(10, 10, 300, 200)])
+        monkeypatch.setattr(figure_detector, "_extract_table_markdown",
+                            lambda c, l: "| 로더정확 |\n| --- |\n| 보다큰실 |\n| 특히비교 |")
+        img = Image.new("RGB", (800, 600), "white")
+        assert [r for r in figure_detector.detect(img).regions if r.kind == "table"] == []
+
+    def test_multi_column_table_kept(self, monkeypatch):
+        monkeypatch.setattr(figure_detector, "_detect_tables", lambda g: [(10, 10, 300, 200)])
+        monkeypatch.setattr(figure_detector, "_extract_table_markdown",
+                            lambda c, l: "| 이름 | 부서 |\n| --- | --- |\n| 김철수 | 영업부 |\n| 이영희 |")
+        img = Image.new("RGB", (800, 600), "white")
+        assert [r.kind for r in figure_detector.detect(img).regions] == ["table"]
 
     def test_save_crops_creates_dir(self, tmp_path):
         from core.figure_detector import Region

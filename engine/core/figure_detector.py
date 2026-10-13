@@ -83,6 +83,11 @@ def detect(image: Image.Image, lang: str = "kor+eng") -> DetectionResult:
     for (x, y, bw, bh) in table_boxes:
         crop = image.crop((x, y, x + bw, y + bh))
         md = _extract_table_markdown(crop, lang)
+        # 행 절반 이상이 한 칸이면 표가 아니다 — 쪽 가장자리 선·도식이 격자로 잡혀 본문 조각을
+        # '| 로더정확 |' 처럼 다시 썼다(예측기계 54·107·133·135쪽). 그림 감지로 넘긴다(글자 영역이면 거기서 빠짐)
+        rows = [l for l in md.splitlines() if not l.startswith("| ---")]
+        if rows and sum(l.count("|") > 2 for l in rows) * 2 < len(rows):
+            continue
         _, _, boxes = _rough_ocr(crop, lang)
         regions.append(Region(
             kind="table", index=tab_idx,
