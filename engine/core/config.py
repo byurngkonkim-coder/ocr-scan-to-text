@@ -95,8 +95,9 @@ def load() -> dict:
 # 환경변수 우선 (키별로 허용하는 환경변수 이름 목록, 앞쪽이 우선)
 ENV_KEY_NAMES = {
     "anthropic_api_key": ["ANTHROPIC_API_KEY"],
-    # 유료(결제 계정) 키를 최우선 — 사용자 지정 2026-09-26
-    "google_api_key":    ["Gemini_api_key(biiing acount)", "GEMINI_API_KEY", "GOOGLE_API_KEY"],
+    # 유료(결제 계정) 키를 최우선 — 사용자 지정 2026-09-26, 새 키 '...2' 2026-10-13(이전 키는 401)
+    "google_api_key":    ["Gemini_api_key(biiing acount)2", "Gemini_api_key(biiing acount)",
+                          "GEMINI_API_KEY", "GOOGLE_API_KEY"],
 }
 
 
