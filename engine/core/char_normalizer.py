@@ -16,8 +16,7 @@ LIGATURES: dict[str, str] = {
 
 # ── 2. 특수기호·단위·약어 치환 ─────────────────────────────────────────────────
 SYMBOL_MAP: dict[str, str] = {
-    # 법적·상표 기호
-    "(c)": "©", "(C)": "©",
+    # 법적·상표 기호 — (c)는 목록 기호와 겹쳐 _CONTEXT_SYMBOLS 에서 문맥으로만 바꾼다
     "(r)": "®", "(R)": "®",
     "(tm)": "™", "(TM)": "™",
     # 수학·과학
@@ -28,10 +27,17 @@ SYMBOL_MAP: dict[str, str] = {
     "m2": "m²", "km2": "km²",
     # 약어
     "e,g,": "e.g.", "i,e,": "i.e.",
-    "etc,": "etc.", "No,": "No.",
+    "etc,": "etc.",
     # [A안] 구두점 변환(...→…, --→—)은 원문 보존을 위해 제거.
     #       말줄임표·대시 정규화는 하위 정제 파이프라인(02_01)에서 처리.
 }
+
+# 문맥이 있을 때만 바꾸는 기호 — 그대로 치환하면 본문 뜻이 바뀐다
+# ('(a) (b) (c)' 목록 기호가 '©'로, 대답 'No, 그는'이 'No. 그는'으로)
+_CONTEXT_SYMBOLS: list[tuple[re.Pattern, str]] = [
+    (re.compile(r"\([cC]\)(?=\s*(?:1[89]|20)\d\d)|(?<=Copyright )\([cC]\)"), "©"),
+    (re.compile(r"\bNo,(?=\s*\d)"), "No."),
+]
 
 def normalize_all(text: str) -> str:
     """L1 보정 전체 파이프라인 실행"""
@@ -78,6 +84,8 @@ def _expand_ligatures(text: str) -> str:
 def _apply_symbol_map(text: str) -> str:
     for src, dst in SYMBOL_MAP.items():
         text = text.replace(src, dst)
+    for pattern, dst in _CONTEXT_SYMBOLS:
+        text = pattern.sub(dst, text)
     return text
 
 
