@@ -32,7 +32,9 @@ engine/storage/results/*
 engine/storage/uploads/*
 !engine/storage/uploads/.gitkeep
 engine/storage/history.json
+engine/storage/history.json.bak_*
 engine/usage_stats.json
+engine/ocr_server.pid
 
 # Backup
 _백업/move_log_*.tsv
