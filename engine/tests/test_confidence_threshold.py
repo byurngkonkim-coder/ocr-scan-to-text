@@ -70,3 +70,15 @@ def test_threshold_read_from_config(monkeypatch, tmp_path, run):
 def test_body_page_conf_90_stays_rapidocr(monkeypatch, tmp_path, run):
     _setup(monkeypatch, 90.0, tmp_path)
     assert run().engine == OCREngine.RAPIDOCR
+
+
+@pytest.mark.parametrize("run", [_gui, _cli])
+def test_korean_corrector_applied_once_per_page(monkeypatch, tmp_path, run):
+    # 교정기가 판독(rapidocr_engine.run)과 쪽 마무리에서 두 번 돌았다 — 다시 돌리면 결과가 또 바뀌어
+    # '경제학 박사학위'→'경제학박사학위' 처럼 띄어쓰기를 붙이기도 했다(2026-10-13 예측기계). 쪽 마무리 1번만.
+    _setup(monkeypatch, 90.0, tmp_path)
+    seen = []
+    monkeypatch.setattr(rapidocr_engine, "smart_run", lambda *a, **k: seen.append(k.get("refine", True)) or OCRResult(
+        text="본문 글자입니다", confidence=90.0, engine=OCREngine.RAPIDOCR))
+    run()
+    assert seen == [False]

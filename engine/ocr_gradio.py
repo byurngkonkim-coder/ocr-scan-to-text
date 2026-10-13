@@ -450,7 +450,8 @@ def _process_page(image, page_num: int, lang: str,
         processed = preprocessor.preprocess_for_rapidocr(ocr_image, report)
 
     # RapidOCR 이 실패하면 신뢰도 0 결과가 와서 아래 저신뢰 흐름(Vision 폴백·검토 필요)을 탄다
-    ocr_result  = rapidocr_engine.smart_run(processed, default_lang=lang, fast=quick)
+    # 한글 교정기는 _finalize 에서 1번만 — 두 번 돌리면 띄어쓰기를 다시 붙이기도 한다
+    ocr_result  = rapidocr_engine.smart_run(processed, default_lang=lang, fast=quick, refine=False)
     low_quality = ocr_result.confidence < config.get_confidence_threshold() or ocr_result.has_jamo_split
 
     # RapidOCR 저신뢰도 → Vision 폴백 (비용 우선 모드일 때만)

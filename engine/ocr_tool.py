@@ -418,7 +418,8 @@ def _process_page(
         processed = preprocessor.preprocess_for_rapidocr(ocr_image, report)
 
     # 로컬 OCR — RapidOCR 한글 v5 (실패하면 신뢰도 0 결과 → 아래 저신뢰 흐름)
-    ocr_result = rapidocr_engine.smart_run(processed, default_lang=lang)
+    # 한글 교정기는 쪽 마무리에서 1번만 — 두 번 돌리면 띄어쓰기를 다시 붙이기도 한다
+    ocr_result = rapidocr_engine.smart_run(processed, default_lang=lang, refine=False)
 
     if verbose:
         console.print(
