@@ -1,9 +1,12 @@
 """파일 포맷 감지 — 확장자 + 매직 바이트 이중 검증"""
+import logging
 import os
 from pathlib import Path
 
+logger = logging.getLogger(__name__)
+
 SUPPORTED_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".tiff", ".tif"}
-# 폴더 탐색 때 들어가지 않을 폴더 (숨김 폴더 '.xxx' 도 제외)
+# 폴더 탐색 때 들어가지 않을 폴더 (소문자로 비교, 숨김 폴더 '.xxx' 도 제외)
 _SKIP_DIRS = {"node_modules", "__pycache__", "venv", ".venv"}
 
 # 이미지 매직 바이트 시그니처
@@ -65,7 +68,8 @@ def detect(path: str | Path) -> str:
 def collect_files(path: str | Path) -> list[Path]:
     """
     파일 또는 폴더 경로를 받아 처리 가능한 파일 목록 반환.
-    폴더인 경우 재귀적으로 탐색.
+    폴더인 경우 재귀적으로 탐색하되, 숨김 폴더('.xxx')와 _SKIP_DIRS 는 들어가지 않는다
+    (대소문자 무시). 건너뛴 폴더는 경고 로그로 남긴다.
     """
     p = Path(path)
     if p.is_file():
@@ -73,14 +77,22 @@ def collect_files(path: str | Path) -> list[Path]:
         return [p]
 
     if p.is_dir():
-        files = []
+        files, skipped = [], []
         # rglob 은 모든 폴더를 다 돈 뒤 거르므로 큰 트리에서 오래 걸린다 → 진입 자체를 막는다
         for root, dirs, names in os.walk(p):
-            dirs[:] = [d for d in dirs if d not in _SKIP_DIRS and not d.startswith(".")]
-            files += [Path(root) / n for n in names if Path(n).suffix.lower() in SUPPORTED_EXTENSIONS]
+            keep = [d for d in dirs if d.lower() not in _SKIP_DIRS and not d.startswith(".")]
+            skipped += [Path(root) / d for d in dirs if d not in keep]
+            dirs[:] = keep
+            for n in names:
+                f = Path(root) / n
+                if f.suffix.lower() in SUPPORTED_EXTENSIONS and os.path.isfile(f):
+                    files.append(f)
         files.sort()
+        if skipped:
+            logger.warning("탐색에서 건너뛴 폴더 %d개: %s", len(skipped), ", ".join(map(str, skipped)))
         if not files:
-            raise ValueError(f"처리 가능한 파일이 없습니다: {p}")
+            hint = f" (건너뛴 폴더: {', '.join(map(str, skipped))})" if skipped else ""
+            raise ValueError(f"처리 가능한 파일이 없습니다: {p}{hint}")
         return files
 
     raise FileNotFoundError(f"경로를 찾을 수 없습니다: {p}")

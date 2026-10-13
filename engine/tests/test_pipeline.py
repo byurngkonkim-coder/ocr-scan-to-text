@@ -1,4 +1,5 @@
 """Phase 1 파이프라인 테스트 — V-01 ~ V-03"""
+import os
 import sys
 from pathlib import Path
 import pytest
@@ -70,6 +71,33 @@ class TestDetector:
             _make_image(["x"]).save(str(p))
         files = detector.collect_files(tmp_path)
         assert [f.relative_to(tmp_path).as_posix() for f in files] == ["a.png", "sub/b.png"]
+
+    def test_collect_folder_skip_dirs_case_insensitive(self, tmp_path):
+        # Windows 는 대소문자를 가리지 않는다 — 'Venv' 도 건너뛴다
+        for rel in ["a.png", "Venv/b.png", "Node_Modules/c.png"]:
+            p = tmp_path / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            _make_image(["x"]).save(str(p))
+        files = detector.collect_files(tmp_path)
+        assert [f.relative_to(tmp_path).as_posix() for f in files] == ["a.png"]
+
+    def test_collect_folder_only_in_skipped_dirs_names_them(self, tmp_path):
+        # 파일이 전부 건너뛴 폴더에만 있으면, 그 폴더를 오류 메시지에 알려 준다
+        p = tmp_path / ".scans" / "a.png"
+        p.parent.mkdir()
+        _make_image(["x"]).save(str(p))
+        with pytest.raises(ValueError, match=r"\.scans"):
+            detector.collect_files(tmp_path)
+
+    def test_collect_folder_skips_non_regular_entries(self, tmp_path, monkeypatch):
+        # 깨진 바로가기처럼 실제 파일이 아닌 항목은 목록에 넣지 않는다
+        _make_image(["x"]).save(str(tmp_path / "a.png"))
+        (tmp_path / "ghost.png").write_bytes(b"")
+        real_isfile = os.path.isfile
+        monkeypatch.setattr(detector.os.path, "isfile",
+                            lambda f: not str(f).endswith("ghost.png") and real_isfile(f))
+        files = detector.collect_files(tmp_path)
+        assert [f.name for f in files] == ["a.png"]
 
 
 # ── V-02: 이미지 로드 ──────────────────────────────────────────────────────────
