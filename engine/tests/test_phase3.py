@@ -31,7 +31,7 @@ def _make_text_image(texts: list[str], size=(800, 400)) -> Image.Image:
 def _make_page(text: str, figures: list[str] | None = None) -> PageResult:
     return PageResult(
         page_num=1, raw_text=text, corrected_text=text,
-        engine=OCREngine.TESSERACT, confidence=85.0,
+        engine=OCREngine.RAPIDOCR, confidence=85.0,
         figures=figures or [],
     )
 
@@ -82,7 +82,6 @@ class TestFigureDetectorUnit:
 
     def test_text_lines_not_masked_as_figures(self):
         # 회귀: 본문 행이 그림으로 오인·마스킹돼 문장이 잘려 나가던 문제 (하루명화하루명언)
-        from core import tesseract_engine  # noqa: F401 — tesseract 경로 설정
         img = Image.new("RGB", (1240, 800), "white")
         draw = ImageDraw.Draw(img)
         for i, t in enumerate([
@@ -94,9 +93,21 @@ class TestFigureDetectorUnit:
         result = figure_detector.detect(img)
         assert [r for r in result.regions if r.kind == "figure"] == []
 
+    def test_line_height_blobs_are_not_figure_candidates(self):
+        # 회귀: 스캔 본문 쪽에서 글자 줄 조각(한 줄 높이)이 쪽마다 40~70개 그림 후보가 되고,
+        # Tesseract 가 한글 조각을 못 읽어 그대로 마스킹 → 줄 누락·깨진 글자 (예측기계 30쪽)
+        gray = np.full((1750, 1240), 255, np.uint8)
+        for i in range(8):                                   # 본문 줄 조각 (높이 30px)
+            gray[200 + i * 60:230 + i * 60, 150:450] = 0
+        gray[900:1400, 300:900] = 80                         # 진짜 그림 (500x600)
+        gray[100:1650, 1120:1220] = 120                      # 쪽 가장자리 그림자 띠 (너비 8%)
+        boxes = figure_detector._detect_figures(gray, Image.fromarray(gray).convert("RGB"))
+        assert len(boxes) == 1
+        x, y, w, h = boxes[0]
+        assert y <= 900 and y + h >= 1400 and w >= 600
+
     def test_text_on_picture_survives_masking(self):
         # 회귀: 그림(색 영역) 위에 얹힌 글자가 영역째 흰색으로 지워지던 문제
-        from core import tesseract_engine  # noqa: F401 — tesseract 경로 설정
         img = Image.new("RGB", (1240, 1100), "white")
         g = np.linspace(0, 1, 900)[None, :, None]
         paint = (np.array([200, 220, 245]) * (1 - g) + np.array([250, 215, 170]) * g).astype("uint8")
@@ -106,11 +117,28 @@ class TestFigureDetectorUnit:
         draw.text((230, 500), "끝을 기억할 때 삶은 단단해지리라", fill=(40, 30, 30), font=_font(36))
 
         result = figure_detector.detect(img)
-        assert result.regions, "그림 영역이 감지돼야 이 테스트가 의미 있다"
+        # 예전엔 이 그림이 1칸짜리 '표'로 잡혀 글자가 표 블록에 한 번 더 써졌다 — 이제 표·그림 어느 쪽도 아니다
+        assert [r for r in result.regions if r.kind == "table"] == []
 
         box = (220, 410, 1010, 560)  # 두 글자 줄을 감싸는 영역
         dark = lambda im: int((np.array(im.convert("L").crop(box)) < 100).sum())
         assert dark(result.masked_image) >= dark(img) * 0.95
+
+    def test_single_column_grid_is_not_table(self, monkeypatch):
+        # 회귀: 쪽 가장자리 선·도식이 표로 잡혀, 본문 글자 조각이 한 칸짜리 행으로 '표' 블록에
+        # 다시 써졌다('| 로더정확 |'·'| 보다큰실 |' — 예측기계 54·107·133·135쪽, 도식 39·201쪽 등)
+        monkeypatch.setattr(figure_detector, "_detect_tables", lambda g: [(10, 10, 300, 200)])
+        monkeypatch.setattr(figure_detector, "_extract_table_markdown",
+                            lambda c, l: "| 로더정확 |\n| --- |\n| 보다큰실 |\n| 특히비교 |")
+        img = Image.new("RGB", (800, 600), "white")
+        assert [r for r in figure_detector.detect(img).regions if r.kind == "table"] == []
+
+    def test_multi_column_table_kept(self, monkeypatch):
+        monkeypatch.setattr(figure_detector, "_detect_tables", lambda g: [(10, 10, 300, 200)])
+        monkeypatch.setattr(figure_detector, "_extract_table_markdown",
+                            lambda c, l: "| 이름 | 부서 |\n| --- | --- |\n| 김철수 | 영업부 |\n| 이영희 |")
+        img = Image.new("RGB", (800, 600), "white")
+        assert [r.kind for r in figure_detector.detect(img).regions] == ["table"]
 
     def test_save_crops_creates_dir(self, tmp_path):
         from core.figure_detector import Region

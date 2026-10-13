@@ -35,7 +35,7 @@ target: 04_처리엔진 (구 ocr-tool-Claude — 2026-09-26 폴더 정비로 이
 ├── START_OCR.bat         ← 맨 위 실행 래퍼 → 04_처리엔진\START_OCR.bat 호출 (ASCII 전용)
 ├── INSTALL.bat           ← 맨 위 설치 래퍼 → 04_처리엔진\install.bat 호출
 ├── OCR_대시보드_열기.url  ← http://localhost:7860 바로가기
-├── 01_입력/              ← 처리할 원본
+├── 입력/                ← 처리할 원본 (batch_runner.INPUT_DIR)
 ├── 02_결과/              ← 사용자 결과(ocr_gradio.RESULTS_DIR)
 ├── 03_문서/              ← 사용자매뉴얼·설계가이드·정제규칙서·인수인계서
 └── 04_처리엔진/          ← (구 ocr-tool-Claude)

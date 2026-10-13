@@ -16,7 +16,7 @@ except ImportError:
     sys.exit(1)
 
 from core import detector, pdf_splitter, quality_diagnoser, preprocessor
-from core import rapidocr_engine, tesseract_engine, char_normalizer, postprocessor, writer
+from core import rapidocr_engine, char_normalizer, postprocessor, writer
 # vision 파사드 — config.json 의 vision_provider 에 따라 Gemini/Claude 라우팅.
 # 기존 호출부 호환을 위해 claude_vision 이름으로 import 한다.
 from core import vision as claude_vision
@@ -29,6 +29,9 @@ from core.types import FileResult, OutputFormat, PageResult, OCREngine
 
 PREVIEW_PAGES = 3      # 빠른 미리보기 처리 페이지 수
 WARN_SIZE_MB = 20
+
+# 진행 기록에 쓰는 로컬 OCR 엔진 이름 (로컬 엔진은 RapidOCR 하나뿐)
+LOCAL_OCR_NAME = "RapidOCR 한글 v5"
 
 # 사용자가 결과를 바로 찾는 고정 폴더(프로그램 루트/02_결과).
 # storage/ 는 이력 관리용 보관소이고, 이쪽은 '작업 산출물' 자리다.
@@ -297,6 +300,23 @@ def _progress_html(pages_done: int, total: int, label: str,
 </div>"""
 
 
+def _clean_degrade_note(crep: dict | None) -> str:
+    """정제가 원문으로 강등된 구간 안내. 없으면 ''.
+
+    2026-10-13: 키가 401 로 거절돼 결과물 4건 모두 정제가 안 됐는데 '완료'로만 보여 알 수 없었다 —
+    처리 로그·④ 대기열·③ 처리 기록에 같은 문구로 남긴다.
+    """
+    if not crep or not (crep["fallback_api"] or crep["fallback_guard"]):
+        return ""
+    why = []
+    if crep["fallback_api"]:
+        why.append(f"API 오류 {crep['fallback_api']} — 키·연결 확인")
+    if crep["fallback_guard"]:
+        why.append(f"응답 부족 {crep['fallback_guard']}")
+    n = crep["fallback_api"] + crep["fallback_guard"]
+    return f"문장 정제 미적용 {n}/{crep['chunks']} 구간({', '.join(why)}) — 그 구간은 원문 그대로 저장"
+
+
 def _status_text(page_num: int, total: int, pct: int,
                  logs: list[str], elapsed_str: str = "") -> str:
     header = f"처리 중: {page_num}/{total} 페이지 ({pct}%)"
@@ -360,13 +380,13 @@ def _process_page(image, page_num: int, lang: str,
                   quick: bool = False,
                   vision_first: bool = False) -> tuple[PageResult, list[str]]:
     """
-    vision_first=True : Claude Vision 우선 모드 (API 키 있을 때)
-      1순위: Claude Vision  — 레이아웃 이해, 마진 무시, 한국어 고정확도
-      2순위: Tesseract       — Vision 실패/미설정 시 자동 전환
+    vision_first=True : Vision 우선 모드 (API 키 있을 때)
+      1순위: Vision 엔진     — 레이아웃 이해, 마진 무시, 한국어 고정확도
+      2순위: RapidOCR 한글 v5 — Vision 실패/미설정 시 자동 전환
 
-    vision_first=False (기본): Tesseract 우선 모드
-      1순위: Tesseract       — 로컬·무료·빠름
-      2순위: Claude Vision   — 저신뢰도·자모분리 시 폴백
+    vision_first=False (기본): RapidOCR 우선 모드 (비용 우선)
+      1순위: RapidOCR 한글 v5 — 로컬·무료·빠름
+      2순위: Vision 엔진     — 저신뢰도·자모분리 시 폴백
 
     quick=True : 미리보기 전용 경량 모드
     """
@@ -375,8 +395,8 @@ def _process_page(image, page_num: int, lang: str,
 
     # ══════════════════════════════════════════════════════════════════════════
     # 0단계: 빈 페이지 감지 (OCR 전 차단 — API 크레딧 절약)
-    # Vision 우선 모드에서는 fast 모드(픽셀·엣지만, Tesseract 생략)로 실행 —
-    # 어차피 Gemini가 본문을 읽으므로 느린 Tesseract 빈페이지 확정은 불필요.
+    # Vision 우선 모드에서는 fast 모드(픽셀·엣지만, OCR 생략)로 실행 —
+    # 어차피 Vision 이 본문을 읽으므로 로컬 OCR 로 빈 쪽을 확정할 필요가 없다.
     # ══════════════════════════════════════════════════════════════════════════
     blank = blank_detector.check(image, fast=(quick or vision_first))
     if blank.is_blank:
@@ -387,7 +407,7 @@ def _process_page(image, page_num: int, lang: str,
             page_num=page_num,
             raw_text="",
             corrected_text="",
-            engine=OCREngine.TESSERACT,
+            engine=OCREngine.RAPIDOCR,
             confidence=0.0,
             is_blank=True,
             blank_reason=blank.reason,
@@ -404,14 +424,14 @@ def _process_page(image, page_num: int, lang: str,
             logs.append(f"  p.{page_num}: ✅ Vision 완료 ({time.time() - _t:.1f}s)")
             return _finalize(ocr_result, page_num, placeholders, llm_correct, llm_budget), logs
         except Exception as e:
-            logs.append(f"  p.{page_num}: Vision 오류 {time.time() - _t:.1f}s → Tesseract 폴백 ({e})")
-            # Vision 실패 시 Tesseract로 전환
+            logs.append(f"  p.{page_num}: Vision 오류 {time.time() - _t:.1f}s → {LOCAL_OCR_NAME} 폴백 ({e})")
+            # Vision 실패 시 RapidOCR 로 전환
 
     elif vision_first and not claude_vision.is_available():
-        logs.append(f"  p.{page_num}: ⚠ API 키 미설정 → Tesseract로 처리")
+        logs.append(f"  p.{page_num}: ⚠ API 키 미설정 → {LOCAL_OCR_NAME}(으)로 처리")
 
     # ══════════════════════════════════════════════════════════════════════════
-    # Tesseract 처리 (우선 or Vision 실패 폴백)
+    # RapidOCR 처리 (우선 or Vision 실패 폴백)
     # ══════════════════════════════════════════════════════════════════════════
     report    = quality_diagnoser.diagnose(image)
     ocr_image = image
@@ -424,7 +444,7 @@ def _process_page(image, page_num: int, lang: str,
             ocr_image = det.masked_image or image
             logs.append(f"  p.{page_num} 감지 영역: {len(det.regions)}개")
 
-    # 품질 불량 즉시 Vision 폴백 (Tesseract 우선 모드일 때)
+    # 품질 불량 즉시 Vision 폴백 (RapidOCR 우선 모드일 때)
     # Vision 엔진은 실패 시 예외를 던진다 — 받지 않으면 한 쪽 실패로 파일 전체가 중단된다
     vision_err = ""
     if not vision_first and not no_fallback and report.needs_fallback and claude_vision.is_available():
@@ -433,7 +453,7 @@ def _process_page(image, page_num: int, lang: str,
             ocr_result = claude_vision.run(image, lang_hint=lang)
         except Exception as e:
             vision_err = str(e)
-            logs.append(f"  p.{page_num}: 폴백 실패 → Tesseract로 계속 ({e})")
+            logs.append(f"  p.{page_num}: 폴백 실패 → {LOCAL_OCR_NAME}(으)로 계속 ({e})")
         else:
             return _finalize(ocr_result, page_num, placeholders, llm_correct, llm_budget), logs
 
@@ -443,16 +463,15 @@ def _process_page(image, page_num: int, lang: str,
     elif quick:
         processed = preprocessor.quick_preprocess(ocr_image)
     else:
-        # RapidOCR 사용 가능 시 딥러닝 피처(RGB 컬러/그라데이션) 보존 경량 전처리 적용
-        if rapidocr_engine.is_available():
-            processed = preprocessor.preprocess_for_rapidocr(ocr_image, report)
-        else:
-            processed = preprocessor.preprocess(ocr_image, report)
+        # 딥러닝 피처(RGB 컬러/그라데이션) 보존 경량 전처리
+        processed = preprocessor.preprocess_for_rapidocr(ocr_image, report)
 
-    ocr_result  = tesseract_engine.smart_run(processed, default_lang=lang, fast=quick)
+    # RapidOCR 이 실패하면 신뢰도 0 결과가 와서 아래 저신뢰 흐름(Vision 폴백·검토 필요)을 탄다
+    # 한글 교정기는 _finalize 에서 1번만 — 두 번 돌리면 띄어쓰기를 다시 붙이기도 한다
+    ocr_result  = rapidocr_engine.smart_run(processed, default_lang=lang, fast=quick, refine=False)
     low_quality = ocr_result.confidence < config.get_confidence_threshold() or ocr_result.has_jamo_split
 
-    # Tesseract/RapidOCR 저신뢰도 → Vision 폴백 (비용 우선 모드일 때만)
+    # RapidOCR 저신뢰도 → Vision 폴백 (비용 우선 모드일 때만)
     if not vision_first and not no_fallback and low_quality:
         if claude_vision.is_available() and not vision_err:  # 이미 실패했으면 재시도 안 함 (Ollama 쪽당 최대 9분)
             reason = "자모분리" if ocr_result.has_jamo_split else f"신뢰도 {ocr_result.confidence:.1f}%"
@@ -472,9 +491,8 @@ def _process_page(image, page_num: int, lang: str,
         return _finalize(ocr_result, page_num, placeholders, llm_correct, llm_budget,
                          needs_review=True, review_reason=reason), logs
 
-    engine_name = "RapidOCR 한글 v5" if rapidocr_engine.is_available() else "Tesseract"
-    logs.append(f"  p.{page_num}: {engine_name} 신뢰도 {ocr_result.confidence:.1f}%")
-    # 품질 불량 진단 쪽은 Tesseract 신뢰도가 높아도 폴백 실패를 결과에 남긴다
+    logs.append(f"  p.{page_num}: {LOCAL_OCR_NAME} 신뢰도 {ocr_result.confidence:.1f}%")
+    # 품질 불량 진단 쪽은 RapidOCR 신뢰도가 높아도 폴백 실패를 결과에 남긴다
     return _finalize(ocr_result, page_num, placeholders, llm_correct, llm_budget,
                      needs_review=bool(vision_err),
                      review_reason="품질 불량 · Vision 폴백 실패" if vision_err else ""), logs
@@ -490,11 +508,11 @@ def _finalize(ocr_result, page_num: int, placeholders: list[str],
       1. L1  — char_normalizer  (Unicode·합자·특수기호·한글분절·영문혼동)
       2. L2  — spellcheck       (한국어 맞춤법, 설치 시 자동)
       3. 후처리 — postprocessor.process_full()
-              Tesseract: 마진노이즈제거 → 단락복원 → 공백정규화
-              Vision:    단락복원 → 공백정규화
+              RapidOCR: 쪽번호·마진노이즈제거 → 단락복원 → 공백정규화
+              Vision:   단락복원 → 공백정규화
       4. L3  — llm_corrector    (Claude Haiku 문맥 교정, 활성화 시)
     """
-    engine_str = ocr_result.engine.value  # 'tesseract' or 'claude_vision'
+    engine_str = ocr_result.engine.value  # 'rapidocr' 또는 Vision 엔진('gemini'·'claude_vision'·'ollama')
 
     # L1 — 규칙 기반 보정 (합자·특수기호·한글분절·영문혼동)
     text = char_normalizer.normalize_all(ocr_result.text)
@@ -550,6 +568,33 @@ def _finalize_digital(text: str, page_num: int) -> PageResult:
     )
 
 
+def _finalize_text(text: str, page_num: int) -> PageResult:
+    """txt 1쪽 → PageResult. 이미 읽어 정리된 본문이라 후처리 없이 그대로 쓴다."""
+    return PageResult(page_num=page_num, raw_text=text, corrected_text=text,
+                      engine=OCREngine.PDF_TEXT, confidence=100.0)
+
+
+def _text_pages(text: str, size: int = 2000) -> list[str]:
+    """txt 본문을 문단 경계에서 약 size자씩 묶어 '쪽'으로 나눈다.
+
+    정제기는 쪽을 쪼개지 않고 구간으로 묶으므로, 책 전체를 한 쪽으로 넘기면 구간이 하나가 된다.
+    """
+    pages: list[str] = []
+    cur: list[str] = []
+    cur_len = 0
+    for para in (p.strip("\n") for p in text.replace("\r\n", "\n").split("\n\n")):
+        if not para.strip():
+            continue
+        if cur and cur_len + len(para) > size:
+            pages.append("\n\n".join(cur))
+            cur, cur_len = [], 0
+        cur.append(para)
+        cur_len += len(para)
+    if cur:
+        pages.append("\n\n".join(cur))
+    return pages
+
+
 def _page_reader(file_path: Path, lang: str, no_preprocess: bool, no_fallback: bool,
                  no_figure: bool, llm_correct: bool, llm_budget: int, vision_first: bool):
     """쪽 번호 → (PageResult, 로그). 디지털 PDF에서 내장 글자가 깨진 쪽만 이미지로 다시 읽는다."""
@@ -564,7 +609,8 @@ def _page_reader(file_path: Path, lang: str, no_preprocess: bool, no_fallback: b
 def _run_digital_pdf(file_path: Path, pages_text: list[str], out_fmt: OutputFormat,
                      cleanup: bool, front_matter: bool, start_time: float,
                      label: str = "디지털 PDF 추출",
-                     garbled_pages=(), read_page=None, noisy_pages=(), repaired_lines=None):
+                     garbled_pages=(), read_page=None, noisy_pages=(), repaired_lines=None,
+                     page_fn=_finalize_digital):
     """디지털 PDF(텍스트 레이어 보유) 전용 초고속 경로.
 
     이미지 렌더링·OCR·Vision API를 모두 건너뛰고 내장 텍스트를 그대로 읽는다.
@@ -604,7 +650,7 @@ def _run_digital_pdf(file_path: Path, pages_text: list[str], out_fmt: OutputForm
                 step_logs.append(f"  p.{page_num}: 다시 읽기 실패 → 내장 글자 사용 ({e})")
                 result.pages.append(_finalize_digital(txt, page_num))
         else:
-            result.pages.append(_finalize_digital(txt, page_num))
+            result.pages.append(page_fn(txt, page_num))
         # 초고속이라 5페이지마다(또는 마지막)만 진행률 갱신
         if page_num == total or page_num % 5 == 0 or page_num in garbled:
             pct = int(page_num / total * 100) if total else 100
@@ -638,6 +684,7 @@ def _run_digital_pdf(file_path: Path, pages_text: list[str], out_fmt: OutputForm
     # cleanup=True 이고 Gemini 키가 있으면 추출 텍스트도 문서 맥락 교정을 적용한다.
     # (완전 오프라인·무비용을 원하면 '문장 정제' 체크를 끄면 이 단계가 생략된다.)
     cleaned_text = None
+    clean_note = ""
     ckpt = None
     content_pages = [p for p in result.pages if not p.is_blank]
     if cleanup and content_pages and text_cleaner.is_available():
@@ -668,10 +715,9 @@ def _run_digital_pdf(file_path: Path, pages_text: list[str], out_fmt: OutputForm
         if cleaned_text:
             step_logs.append(f"  📝 문장 정제 완료 ({len(cleaned_text):,}자)")
         _crep = crep or None
-        if _crep and (_crep["fallback_guard"] or _crep["fallback_api"]):
-            step_logs.append(
-                f"  ⚠️ 정제 무결성 가드 발동 {_crep['fallback_guard'] + _crep['fallback_api']}"
-                f"/{_crep['chunks']} 구간 — LLM 교정 대신 원문 보존(내용 무손실)")
+        clean_note = _clean_degrade_note(_crep)
+        if clean_note:
+            step_logs.append(f"  ⚠️ {clean_note}")
         if _crep:   # 부속물 제거·지어낸 문장 등 확인할 경고 — 강등 건은 위 개수 줄로 대신한다
             step_logs.extend(f"  ⚠ {w}" for w in _crep["warnings"] if "강등" not in w)
 
@@ -694,6 +740,10 @@ def _run_digital_pdf(file_path: Path, pages_text: list[str], out_fmt: OutputForm
                 # 안전망이 없다는 사실을 숨기면 '완료'만 보고 원문을 믿게 된다 — 표면화
                 raw_path = None
                 step_logs.append(f"  ⚠ 정제 전 원문 사본을 만들지 못했습니다(복구용 원문 없음): {e}")
+        elif page_fn is _finalize_text:
+            # txt 를 정제 없이 저장 — 문단 묶음일 뿐인 '쪽' 표시를 넣지 않는다
+            out_path = writer.write_plain(
+                file_path, "\n\n".join(p.corrected_text for p in result.pages), tmp_dir, out_fmt)
         else:
             out_path = writer.write(result, tmp_dir, out_fmt)
     except Exception as e:
@@ -715,7 +765,8 @@ def _run_digital_pdf(file_path: Path, pages_text: list[str], out_fmt: OutputForm
 
     # ── storage: 결과 파일 영구 저장 + 이력 기록 ───────────────────────────────
     try:
-        stored_path = storage_manager.save_result(out_path, file_path.name)
+        # 결과는 02_결과 한 곳에만 — 보관소 사본은 02_결과 저장이 실패했을 때만 만든다
+        stored_path = results_path or storage_manager.save_result(out_path, file_path.name)
         if raw_path is not None:
             try:
                 storage_manager.save_raw_copy(raw_path, stored_path)
@@ -734,6 +785,7 @@ def _run_digital_pdf(file_path: Path, pages_text: list[str], out_fmt: OutputForm
             engine_mode     = "pdf_text_layer",
             file_size_bytes = file_path.stat().st_size,
             output_path     = results_path,
+            clean_note      = clean_note,
         )
     except Exception as e:
         # 조용히 넘기면 화면엔 '완료'만 뜨고 파일은 없다 — 반드시 표면화한다.
@@ -741,7 +793,8 @@ def _run_digital_pdf(file_path: Path, pages_text: list[str], out_fmt: OutputForm
 
     total_el = elapsed()
     summary = [
-        f"✅ 완료  |  디지털 PDF 텍스트 레이어 직접 추출  |  총 소요: {total_el}",
+        f"✅ 완료  |  {'텍스트 파일(OCR 없음)' if page_fn is _finalize_text else '디지털 PDF 텍스트 레이어 직접 추출'}"
+        f"  |  총 소요: {total_el}",
         f"   전체 {total}p → 추출 {text_pages}p  ·  OCR·API 미사용 (무료)",
     ]
     if blank_count:
@@ -1092,6 +1145,15 @@ def _run_ocr(
     out_fmt   = OutputFormat.MD if fmt == "md" else OutputFormat.TXT
     file_mb   = file_path.stat().st_size / 1_048_576
 
+    # ── 텍스트 파일(.txt) — 이미 읽은 본문: OCR 없이 문장 정제·저장·기록만 한다 ──
+    if file_path.suffix.lower() == ".txt":
+        yield from _run_digital_pdf(
+            file_path, _text_pages(file_path.read_text(encoding="utf-8-sig")),
+            out_fmt, cleanup, front_matter, start_time,
+            label="텍스트 파일 정제", page_fn=_finalize_text,
+        )
+        return
+
     # ── 디지털 PDF 우선 경로 (신규 처리 시에만; 이어서-처리는 이미지 캐시 사용) ──
     # 텍스트 레이어가 있으면 렌더·OCR·Vision API를 건너뛰고 즉시 직접 추출한다.
     # 스캔 PDF는 is_digital=False → 아래 기존 OCR 경로로 자동 전환.
@@ -1152,7 +1214,7 @@ def _run_ocr(
         except Exception as page_err:   # 한 쪽의 예외가 파일 전체를 죽이지 않게 — 검토 필요로 남김
             reason = f"처리 오류: {page_err}"
             return (PageResult(page_num=page_num, raw_text="", corrected_text="",
-                               engine=OCREngine.TESSERACT, confidence=0.0,
+                               engine=OCREngine.RAPIDOCR, confidence=0.0,
                                needs_review=True, review_reason=reason),
                     [f"  p.{page_num}: ⚠ {reason} — 이 쪽은 비워 두고 계속"])
 
@@ -1225,6 +1287,7 @@ def _run_ocr(
     #   쪽번호·러닝헤더 제거 · 페이지 넘김으로 잘린 단어/문단 복원 · 띄어쓰기·맞춤법.
     # 결과가 있으면 '마커 없는 클린 플레인텍스트'로 저장한다.
     cleaned_text = None
+    clean_note = ""
     ckpt = None
     content_pages = [p for p in result.pages if not p.is_blank]
     if cleanup and content_pages and text_cleaner.is_available():
@@ -1255,10 +1318,9 @@ def _run_ocr(
         if cleaned_text:
             step_logs.append(f"  📝 문장 정제 완료 ({len(cleaned_text):,}자, 마커 없는 클린 텍스트)")
         _crep = crep or None
-        if _crep and (_crep["fallback_guard"] or _crep["fallback_api"]):
-            step_logs.append(
-                f"  ⚠️ 정제 무결성 가드 발동 {_crep['fallback_guard'] + _crep['fallback_api']}"
-                f"/{_crep['chunks']} 구간 — LLM 교정 대신 원문 보존(내용 무손실)")
+        clean_note = _clean_degrade_note(_crep)
+        if clean_note:
+            step_logs.append(f"  ⚠️ {clean_note}")
         if _crep:   # 부속물 제거·지어낸 문장 등 확인할 경고 — 강등 건은 위 개수 줄로 대신한다
             step_logs.extend(f"  ⚠ {w}" for w in _crep["warnings"] if "강등" not in w)
     elif cleanup and not text_cleaner.is_available():
@@ -1284,6 +1346,11 @@ def _run_ocr(
                 raw_path = None
                 step_logs.append(f"  ⚠ 정제 전 원문 사본을 만들지 못했습니다(복구용 원문 없음): {e}")
         else:
+            # 정제 없이 저장하는 결과물에도 쪽 머리·꼬리('2장 …19'·'1582부의사결정')를 뗀다 —
+            # 예전엔 정제 경로에서만 떼어 RapidOCR 결과물은 표본 40쪽 중 28쪽에 남았다(2026-10-14)
+            for page, text in zip(content_pages, text_cleaner.strip_running_headers(
+                    [p.corrected_text for p in content_pages])):
+                page.corrected_text = text
             out_path = writer.write(result, tmp_dir, out_fmt)
     except Exception as e:
         if ckpt is not None:
@@ -1316,7 +1383,8 @@ def _run_ocr(
     stored_path   = None
     stored_upload = None
     try:
-        stored_path = storage_manager.save_result(out_path, file_path.name)
+        # 결과는 02_결과 한 곳에만 — 보관소 사본은 02_결과 저장이 실패했을 때만 만든다
+        stored_path = results_path or storage_manager.save_result(out_path, file_path.name)
         if raw_path is not None:
             try:
                 storage_manager.save_raw_copy(raw_path, stored_path)
@@ -1332,9 +1400,10 @@ def _run_ocr(
             pages_ocr       = ocr_count,
             pages_blank     = blank_count,
             vision_pages    = vision_count,
-            engine_mode     = "vision_first" if vision_first else "tesseract_first",
+            engine_mode     = "vision_first" if vision_first else "rapidocr_first",
             file_size_bytes = file_path.stat().st_size,
             output_path     = results_path,
+            clean_note      = clean_note,
         )
     except Exception as e:
         # 조용히 넘기면 화면엔 '완료'만 뜨고 파일은 없다 — 반드시 표면화한다.
@@ -1421,10 +1490,10 @@ def build_ui() -> gr.Blocks:
                             vision_first = gr.Radio(
                                 label="읽는 방식",
                                 choices=_vision_choices(),
-                                value="Vision 우선" if has_key else "Tesseract 우선",
+                                value="Vision 우선" if has_key else "RapidOCR 우선",
                             )
                             vision_first_note = gr.HTML(
-                                _vision_mode_note("Vision 우선" if has_key else "Tesseract 우선"))
+                                _vision_mode_note("Vision 우선" if has_key else "RapidOCR 우선"))
                             cleanup_chk = gr.Checkbox(
                                 label="문장 정제 — 쪽번호·머리글 제거, 띄어쓰기·맞춤법 교정, 문단 복원",
                                 value=bool(cfg.get("enable_cleanup", True)) and text_cleaner.is_available(),
@@ -1622,7 +1691,7 @@ def build_ui() -> gr.Blocks:
                             clear_msg = gr.Markdown("")
 
             # ══════════════════════════════════════════════════════════════════
-            # 탭 4: 일괄 처리 — 01_입력 폴더에서 골라 대기열로 차례 처리
+            # 탭 4: 일괄 처리 — 입력 폴더에서 골라 대기열로 차례 처리
             # ══════════════════════════════════════════════════════════════════
             with gr.Tab("④ 일괄 처리") as batch_tab:
                 with gr.Column(elem_classes="step-card"):
@@ -1632,9 +1701,9 @@ def build_ui() -> gr.Blocks:
                         batch_vision_first = gr.Radio(
                             label="읽는 방식",
                             choices=_vision_choices(),
-                            value="Tesseract 우선",  # 기본값: 비용 우선 (RapidOCR 한글 v5)
+                            value="RapidOCR 우선",  # 기본값: 비용 우선 (RapidOCR 한글 v5)
                         )
-                    batch_vision_note = gr.HTML(_vision_mode_note("Tesseract 우선"))
+                    batch_vision_note = gr.HTML(_vision_mode_note("RapidOCR 우선"))
                     with gr.Row():
                         batch_cleanup_chk = gr.Checkbox(
                             label="문장 정제 — 쪽번호·머리글 제거, 띄어쓰기·맞춤법 교정, 문단 복원",
@@ -1648,7 +1717,7 @@ def build_ui() -> gr.Blocks:
                         )
 
                 with gr.Column(elem_classes="step-card"):
-                    gr.HTML(_step_head(None, "01_입력 폴더",
+                    gr.HTML(_step_head(None, "입력 폴더",
                             "폴더에 넣은 파일을 골라 차례로 처리합니다. 위에서 지정한 처리 방식으로 대기열에서 자동 실행됩니다."))
                     batch_note = gr.HTML("")
                     batch_list = gr.CheckboxGroup(show_label=False, choices=[], value=[],
@@ -1785,7 +1854,7 @@ def build_ui() -> gr.Blocks:
 
         # 엔진 변경 — config.json 의 vision_provider 에 저장하고 관련 화면을 갱신
         def _engine_views():
-            mode = "Vision 우선" if _engine_ok(fresh=True) else "Tesseract 우선"
+            mode = "Vision 우선" if _engine_ok(fresh=True) else "RapidOCR 우선"
             return (_header_html(), _engine_guide_html(),
                     gr.update(choices=_vision_choices(), value=mode),
                     _vision_mode_note(mode),
@@ -2022,11 +2091,11 @@ def _header_html() -> str:
 
 
 def _vision_choices() -> list[tuple[str, str]]:
-    """값("Vision 우선"/"Tesseract 우선")은 처리 함수가 판별에 쓰므로 고정, 표시 문구만 엔진명 반영."""
+    """값("Vision 우선"/"RapidOCR 우선")은 처리 함수가 판별에 쓰므로 고정, 표시 문구만 엔진명 반영."""
     label = claude_vision.provider_label()
     return [
         (f"정확도 우선 — {label}가 먼저 읽고, 실패하면 로컬 엔진(RapidOCR)", "Vision 우선"),
-        (f"비용 우선 — 로컬 고성능 엔진(RapidOCR 한글 v5)이 무료로 읽고, 흐린 쪽만 {label}", "Tesseract 우선"),
+        (f"비용 우선 — 로컬 고성능 엔진(RapidOCR 한글 v5)이 무료로 읽고, 흐린 쪽만 {label}", "RapidOCR 우선"),
     ]
 
 

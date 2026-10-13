@@ -102,6 +102,26 @@ def test_heading_and_list_not_joined_to_body():
     assert "국내 극장 4,928,000" in out and "국외 극장 1,228,000" in out
 
 
+def test_line_wrap_inside_word_joined_without_space():
+    # 예측기계 30쪽 실측: 줄 끝에서 잘린 낱말을 띄워 이었다('운용되었 다', '일 반적인')
+    body = "".join(f"본문 {k}번째 줄은 쪽의 오른쪽 끝까지 꽉 차 있다.\n" for k in range(6))
+    page = (body +
+            "그런 차량은 공장이나 창고 등 세부 평면도가 확보된 장소에서만 운용되었\n"
+            "다. 그러나 일반 도로에서는 이런 차량을 사용할 수 없었고 모든 데이터를\n"
+            "꼼꼼히 살피는 동시에 운전자의 행동을 유심히 관찰했다고 한다.")
+    out = pp.join_broken_lines(page)
+    assert "운용되었다." in out and "운용되었 다" not in out
+    assert "데이터를 꼼꼼히" in out          # 낱말 경계는 그대로 띄운다
+
+
+def test_page_number_lines_dropped_at_page_edges():
+    # 예측기계 30쪽: 쪽 번호 줄이 본문 끝에 붙었다('어떤 환경데 30')
+    text = "31\n본문 첫 줄은 이렇게 시작한다.\n2017년에 11까지 돌려 보라\n30"
+    out = pp.process_full(text, engine="rapidocr")
+    assert out.splitlines()[0] == "본문 첫 줄은 이렇게 시작한다."
+    assert not out.rstrip().endswith("30") and "11까지" in out
+
+
 def test_punctuation_after_initials_kept():
     assert pp._fix_spacing("C.의 주장과 U.S.의 정책") == "C.의 주장과 U.S.의 정책"
     assert pp._fix_spacing("했다.그리고") == "했다. 그리고"
@@ -115,3 +135,27 @@ def test_punctuation_spacing_keeps_urls_and_newlines():
 
 def test_single_char_word_line_kept():
     assert pp.remove_noise_lines("즉,\n본문 줄\nl") == "즉,\n본문 줄"
+
+
+def test_page_footer_not_joined_into_last_body_line():
+    # 예측기계 54쪽 실측: 쪽 꼬리('장 제목+쪽번호')가 앞 줄 끝에 붙어('…된다.회 4장왜지능이라고 하는가?55')
+    # 문서 단위 머리글 제거가 놓쳤고, 각주 줄에 붙은 것은 정제 LLM 이 각주째 지웠다
+    body = "".join(f"본문 {k}번째 줄은 쪽의 오른쪽 끝까지 꽉 차 있다.\n" for k in range(6))
+    # 짝수 쪽 꼬리('쪽번호+부 제목')는 OCR 이 숫자를 붙여 읽는다 — '1582부의사결정'(158쪽 2부, 예측기계 실측 4건)
+    for footer in ("4장왜지능이라고 하는가?55", "12장워크플로해체179", "2장 값이 싸지면 모든 것이 바뀐다 19",
+                   "1582부의사결정", "172 3부툴"):
+        page = body + "평균적으로 정확하다는것은사실 번번이 틀린다는뜻도 된다.회\n" + footer
+        assert pp.join_broken_lines(page).splitlines()[-1] == footer, footer
+    # 쪽 끝 본문 줄이 숫자로 끝나는 보통 문장이면 그대로 잇는다
+    page = body + "그 회사의 매출은 꾸준히 늘어 2019년에는 역대 최고인\n1,250억 원에 이르렀다 2019"
+    assert pp.join_broken_lines(page).splitlines()[-1].startswith("그 회사의 매출은")
+
+
+def test_paragraph_start_mark_survives_without_period():
+    # 예측기계 158쪽 실측: OCR 이 마침표를 빠뜨려('…따라달라진다') 다음 문단이 앞 문장 끝에 붙었다.
+    # rapidocr_engine 이 들여 쓴 줄 앞에 붙인 공백 2칸을 잡음 제거가 지워 줄 잇기가 몰랐다
+    body = "".join(f"본문 {k}번째 줄은 쪽의 오른쪽 끝까지 꽉 차 있는 줄이다\n" for k in range(4))
+    page = body + "된기능도할 때그상대적 이득이어느정도인지에 따라달라진다\n  인간과 기계는데이터의유형에 따라 입력이나 훈련이나\n위한데이터를축적한다."
+    out = pp.process_full(page).splitlines()
+    assert out[-1] == "인간과 기계는데이터의유형에 따라 입력이나 훈련이나 위한데이터를축적한다.", out
+    assert out[-2].endswith("따라달라진다"), out

@@ -65,3 +65,23 @@ def test_iter_clean_applies_it(monkeypatch):
                         lambda p: seen.append(p) or p.split("---")[1])
     text_cleaner.clean_pages(_pages(6))
     assert seen and seen[0].count(H) == 1
+
+
+def test_glued_page_number_on_chapter_footer():
+    # 예측기계 실측: '4장왜지능이라고 하는가?55' — 쪽번호가 붙어 쪽마다 다른 줄로 보여 반복을 못 셌다
+    pages = [f"본문 {i}쪽 문장입니다.\n4장왜지능이라고 하는가?{51 + 2 * i}" for i in range(6)]
+    out = text_cleaner.strip_running_headers(pages)
+    assert all("지능이라고" not in p for p in out)   # 쪽번호가 붙은 쪽 꼬리는 첫 등장도 지운다
+    assert all("문장입니다." in p for p in out)
+
+
+def test_chapter_footer_shape_removed_without_repetition():
+    # 예측기계 실측: 짧은 장은 쪽 꼬리가 5번 미만이라 반복 규칙에 안 걸리고, 짝수 쪽 꼬리
+    # ('1582부의사결정'·'172 3부툴')는 쪽마다 달라 묶이지 않았다 — 모양으로 바로 지운다
+    pages = ["2장\n값이 싸지면 모든 것이 바뀐다\n본문 첫 문장이다.\n2장 값이 싸지면 모든것이바뀐다19",
+             "본문 둘째 문장이다.\n1582부의사결정",
+             "172 3부툴\n본문 셋째 문장이다.",
+             "1장들어가는말: 기계지능15\n본문 넷째 문장이다."]
+    out = text_cleaner.strip_running_headers(pages)
+    assert out == ["2장\n값이 싸지면 모든 것이 바뀐다\n본문 첫 문장이다.",   # 장 제목(쪽번호 없음)은 보존
+                   "본문 둘째 문장이다.", "본문 셋째 문장이다.", "본문 넷째 문장이다."]

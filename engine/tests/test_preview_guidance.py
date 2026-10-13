@@ -23,11 +23,11 @@ def test_preview_points_to_full_run_button(tmp_path, monkeypatch):
     doc.close()
     monkeypatch.setattr(ocr_gradio, "_process_page", lambda img, n, *a, **k: (PageResult(
         page_num=n, raw_text="본문.", corrected_text="본문.",
-        engine=OCREngine.TESSERACT, confidence=95.0), []))
+        engine=OCREngine.RAPIDOCR, confidence=95.0), []))
     last = None
     for last in ocr_gradio.process_preview(
             SimpleNamespace(name=str(pdf)), "kor+eng", "txt", False, False, True, False, 0, "",
-            "Tesseract 우선", progress=lambda *a, **k: None):
+            "RapidOCR 우선", progress=lambda *a, **k: None):
         pass
     html = str(last[4])
     assert "전체 처리" in html and "아래 버튼" not in html

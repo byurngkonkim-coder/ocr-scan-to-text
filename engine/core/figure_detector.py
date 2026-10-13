@@ -6,8 +6,9 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-import pytesseract
 from PIL import Image
+
+from core import rapidocr_engine
 
 
 @dataclass
@@ -35,26 +36,22 @@ class DetectionResult:
 _MIN_FIGURE_AREA = 5_000
 _MIN_TABLE_AREA = 3_000
 _MIN_FORMULA_AREA = 1_000
+# 그림 후보의 최소 높이·너비 (쪽 크기 대비) — 높이가 작으면 글자 줄 조각, 너비가 작으면
+# 쪽 가장자리 그림자 띠다(예측기계 실측: 띠 너비 10~11.5%, 진짜 그림 21~60%)
+_MIN_FIGURE_H = 0.08
+_MIN_FIGURE_W = 0.15
 
 # 수식 판단용 수학 기호 패턴
 _MATH_PATTERN = re.compile(r"[∑∫∂√±×÷≤≥≠∞∈∉⊂⊃∪∩αβγδεζηθλμπρστφχψω]|"
                             r"\b(sin|cos|tan|log|lim|sum|int)\b")
 
 # 그림 후보 안에서 이 이상 글자가 확신도 높게 읽히면 본문으로 보고 마스킹하지 않는다
+# (글자 판별·표 읽기는 본문과 같은 RapidOCR 한글 v5 — 예전 Tesseract 는 한글 조각을 못 읽어 본문을 지웠다)
 _WORD_CHARS = re.compile(r"[가-힣A-Za-z0-9]")
-_TEXT_MIN_CONF = 60
+_TEXT_MIN_CONF = 0.6
 _TEXT_MIN_CHARS = 4
 _TEXT_BOX_PAD = 4   # 되살릴 단어 상자 여유 (획 끝 잘림 방지)
 _OCR_MARGIN = 20    # 영역 OCR 시 둘러 줄 흰 여백
-
-
-def _tesseract_ready() -> bool:
-    from core import tesseract_engine  # noqa: F401 — Windows 기본 설치 경로 설정
-    try:
-        pytesseract.get_tesseract_version()
-    except (pytesseract.TesseractNotFoundError, OSError):
-        return False
-    return True
 
 
 def _to_gray_cv(image: Image.Image) -> np.ndarray:
@@ -70,12 +67,10 @@ def detect(image: Image.Image, lang: str = "kor+eng") -> DetectionResult:
       1. 표 감지 (수평·수직 선분 격자 패턴)
       2. 그림 감지 (연속 윤곽선 + 면적)
       3. 수식 감지 (수학 기호 밀집 영역)
-
-    Tesseract 가 없으면 감지를 건너뛴다 — 후보 안의 글자를 확인할 수 없어 마스킹하면
-    본문이 지워질 수 있고, 예외를 올리면 쪽 전체가 처리 오류가 된다(로컬 엔진은 RapidOCR).
     """
-    if not _tesseract_ready():
-        return DetectionResult(masked_image=image)
+    # 글자 판별 엔진이 없으면 본문을 그림으로 잘못 지울 수 있다 — 감지하지 않고 원본 그대로 둔다
+    if not rapidocr_engine.is_available():
+        return DetectionResult(regions=[], masked_image=image.copy())
 
     img_cv = _to_gray_cv(image)
     h, w = img_cv.shape
@@ -88,6 +83,11 @@ def detect(image: Image.Image, lang: str = "kor+eng") -> DetectionResult:
     for (x, y, bw, bh) in table_boxes:
         crop = image.crop((x, y, x + bw, y + bh))
         md = _extract_table_markdown(crop, lang)
+        # 행 절반 이상이 한 칸이면 표가 아니다 — 쪽 가장자리 선·도식이 격자로 잡혀 본문 조각을
+        # '| 로더정확 |' 처럼 다시 썼다(예측기계 54·107·133·135쪽). 그림 감지로 넘긴다(글자 영역이면 거기서 빠짐)
+        rows = [l for l in md.splitlines() if not l.startswith("| ---")]
+        if rows and sum(l.count("|") > 2 for l in rows) * 2 < len(rows):
+            continue
         _, _, boxes = _rough_ocr(crop, lang)
         regions.append(Region(
             kind="table", index=tab_idx,
@@ -224,33 +224,34 @@ def _detect_figures(gray: np.ndarray, orig: Image.Image) -> list[tuple[int, int,
         # 텍스트 행처럼 넓고 얇은 영역 제외
         if bh < 20 or (bw / bh > 15):
             continue
+        # 예측기계 스캔본 실측: 본문 쪽마다 한 줄 높이(쪽 높이의 2~5%) 조각이 40~70개 그림 후보가 돼
+        # 줄이 지워졌고, 가장자리 띠는 줄 끝 글자를 지웠다. 진짜 그림은 높이 13~34%·너비 21~60%였다
+        if bh < h_img * _MIN_FIGURE_H or bw < w_img * _MIN_FIGURE_W:
+            continue
         boxes.append((x, y, bw, bh))
 
     return _merge_overlapping(boxes)
 
 
 def _extract_table_markdown(crop: Image.Image, lang: str) -> str:
-    """표 크롭 이미지에서 Tesseract TSV 모드로 셀 텍스트 추출 → Markdown"""
+    """표 크롭 이미지에서 RapidOCR 로 글자 상자를 읽어 행(세로로 겹치는 상자)·열(왼쪽부터)로 묶어 Markdown"""
     try:
-        data = pytesseract.image_to_data(
-            crop, lang=lang,
-            output_type=pytesseract.Output.DICT,
-            config="--psm 6",
-        )
-        # 블록·단락·라인별 그룹핑으로 행 구성
-        rows: dict[int, list[str]] = {}
-        for i, text in enumerate(data["text"]):
-            if not str(text).strip():
+        rows: list[list] = []   # [y0, y1, [(x, 글자), ...]]
+        for text, _score, (x, y, w, h) in sorted(_read_framed(crop, lang), key=lambda t: t[2][1]):
+            if not text:
                 continue
-            line_num = data["line_num"][i]
-            block_num = data["block_num"][i]
-            key = block_num * 1000 + line_num
-            rows.setdefault(key, []).append(str(text).strip())
+            for row in rows:
+                if y < row[1] and row[0] < y + h:   # 세로 겹침 = 같은 행
+                    row[0], row[1] = min(row[0], y), max(row[1], y + h)
+                    row[2].append((x, text))
+                    break
+            else:
+                rows.append([y, y + h, [(x, text)]])
 
         if not rows:
             return ""
 
-        lines = [" | ".join(cells) for cells in rows.values()]
+        lines = [" | ".join(t for _, t in sorted(cells)) for _, _, cells in rows]
         if len(lines) < 2:
             return ""
 
@@ -270,27 +271,24 @@ def _is_formula(text: str) -> bool:
     return bool(_MATH_PATTERN.search(text))
 
 
-def _rough_ocr(crop: Image.Image, lang: str) -> tuple[str, str, list[tuple[int, int, int, int]]]:
-    """(전체 인식 문자열, 신뢰도 60 이상 단어만 이은 문자열, 그 단어들의 상자)
-
-    psm 11(흩어진 글자 탐색) — 그림 위에 놓인 글자처럼 행 구조가 없는 글자도 찾는다.
-    글자 줄에 딱 맞게 잘린 영역은 Tesseract가 못 읽으므로 흰 여백을 둘러 읽는다.
-    """
+def _read_framed(crop: Image.Image, lang: str) -> list[tuple[str, float, tuple[int, int, int, int]]]:
+    """흰 여백을 둘러 RapidOCR 로 읽고 상자를 crop 좌표로 되돌린다 — 글자 줄에 딱 맞게 잘린 영역도 읽히게."""
     m = _OCR_MARGIN
     framed = Image.new("RGB", (crop.width + 2 * m, crop.height + 2 * m), "white")
     framed.paste(crop.convert("RGB"), (m, m))
-    data = pytesseract.image_to_data(
-        framed, lang=lang, config="--psm 11", output_type=pytesseract.Output.DICT,
-    )
+    return [(t, s, (x - m, y - m, w, h)) for t, s, (x, y, w, h) in rapidocr_engine.read_boxes(framed, lang)]
+
+
+def _rough_ocr(crop: Image.Image, lang: str) -> tuple[str, str, list[tuple[int, int, int, int]]]:
+    """(전체 인식 문자열, 신뢰도 0.6 이상 줄만 이은 문자열, 그 줄들의 상자)"""
     rough, confident, boxes = [], [], []
-    for i, t in enumerate(data["text"]):
-        word = str(t).strip()
-        if not word:
+    for text, score, box in _read_framed(crop, lang):
+        if not text:
             continue
-        rough.append(word)
-        if float(data["conf"][i]) >= _TEXT_MIN_CONF and _WORD_CHARS.search(word):
-            confident.append(word)
-            boxes.append((data["left"][i] - m, data["top"][i] - m, data["width"][i], data["height"][i]))
+        rough.append(text)
+        if score >= _TEXT_MIN_CONF and _WORD_CHARS.search(text):
+            confident.append(text)
+            boxes.append(box)
     return " ".join(rough), " ".join(confident), boxes
 
 

@@ -190,7 +190,7 @@ class TestGradioUIStructure:
         gen = process_preview(
             None, "kor+eng", "txt",
             False, True, True, False, 0, "",
-            "⚡ Tesseract 우선 (Tesseract → Vision 폴백)",
+            "RapidOCR 우선",
         )
         result = next(gen)
         # (progress_html, status, preview, download, continue_html, images_state)
@@ -208,7 +208,7 @@ class TestGradioUIStructure:
         gen = process_full(
             FakeFile(), "kor+eng", "txt",
             False, True, True, False, 0, "",
-            "⚡ Tesseract 우선 (Tesseract → Vision 폴백)",
+            "RapidOCR 우선",
         )
         results = list(gen)
         # 마지막 status에 오류 포함 여부

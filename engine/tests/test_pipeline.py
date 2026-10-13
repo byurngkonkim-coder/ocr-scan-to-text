@@ -1,4 +1,5 @@
 """Phase 1 파이프라인 테스트 — V-01 ~ V-03"""
+import os
 import sys
 from pathlib import Path
 import pytest
@@ -7,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from PIL import Image, ImageDraw, ImageFont
 from core import detector, pdf_splitter, quality_diagnoser, preprocessor
-from core import tesseract_engine, char_normalizer, writer
+from core import rapidocr_engine, char_normalizer, writer
 from core.types import OutputFormat, FileResult, PageResult, OCREngine
 
 
@@ -71,6 +72,33 @@ class TestDetector:
         files = detector.collect_files(tmp_path)
         assert [f.relative_to(tmp_path).as_posix() for f in files] == ["a.png", "sub/b.png"]
 
+    def test_collect_folder_skip_dirs_case_insensitive(self, tmp_path):
+        # Windows 는 대소문자를 가리지 않는다 — 'Venv' 도 건너뛴다
+        for rel in ["a.png", "Venv/b.png", "Node_Modules/c.png"]:
+            p = tmp_path / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            _make_image(["x"]).save(str(p))
+        files = detector.collect_files(tmp_path)
+        assert [f.relative_to(tmp_path).as_posix() for f in files] == ["a.png"]
+
+    def test_collect_folder_only_in_skipped_dirs_names_them(self, tmp_path):
+        # 파일이 전부 건너뛴 폴더에만 있으면, 그 폴더를 오류 메시지에 알려 준다
+        p = tmp_path / ".scans" / "a.png"
+        p.parent.mkdir()
+        _make_image(["x"]).save(str(p))
+        with pytest.raises(ValueError, match=r"\.scans"):
+            detector.collect_files(tmp_path)
+
+    def test_collect_folder_skips_non_regular_entries(self, tmp_path, monkeypatch):
+        # 깨진 바로가기처럼 실제 파일이 아닌 항목은 목록에 넣지 않는다
+        _make_image(["x"]).save(str(tmp_path / "a.png"))
+        (tmp_path / "ghost.png").write_bytes(b"")
+        real_isfile = os.path.isfile
+        monkeypatch.setattr(detector.os.path, "isfile",
+                            lambda f: not str(f).endswith("ghost.png") and real_isfile(f))
+        files = detector.collect_files(tmp_path)
+        assert [f.name for f in files] == ["a.png"]
+
 
 # ── V-02: 이미지 로드 ──────────────────────────────────────────────────────────
 
@@ -133,25 +161,25 @@ class TestPreprocessor:
         assert set(arr.flatten()).issubset({0, 255})
 
 
-# ── V-03: Tesseract OCR ───────────────────────────────────────────────────────
+# ── V-03: RapidOCR 한글 v5 ────────────────────────────────────────────────────
 
-class TestTesseractEngine:
+class TestRapidOCREngine:
     def test_english_recognized(self):
         img = _make_image(["Hello World Test"])
-        result = tesseract_engine.run(img, lang="eng")
+        result = rapidocr_engine.run(img, lang="eng")
         assert "Hello" in result.text or "hello" in result.text.lower()
-        assert result.engine == OCREngine.TESSERACT
+        assert result.engine == OCREngine.RAPIDOCR
 
     def test_korean_recognized(self):
         img = _make_image(["안녕하세요 테스트입니다"])
-        result = tesseract_engine.run(img, lang="kor")
+        result = rapidocr_engine.run(img, lang="kor")
         # 일부 글자라도 인식되면 통과
         kor_chars = sum(1 for c in result.text if "가" <= c <= "힣")
         assert kor_chars > 0
 
     def test_confidence_range(self):
         img = _make_image(["test"])
-        result = tesseract_engine.run(img, lang="eng")
+        result = rapidocr_engine.run(img, lang="eng")
         assert 0.0 <= result.confidence <= 100.0
 
 
@@ -193,7 +221,7 @@ class TestWriter:
         result = FileResult(source_path=Path("test.png"), output_path=None)
         result.pages.append(PageResult(
             page_num=1, raw_text=text, corrected_text=text,
-            engine=OCREngine.TESSERACT, confidence=85.0,
+            engine=OCREngine.RAPIDOCR, confidence=85.0,
         ))
         return result
 

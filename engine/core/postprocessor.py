@@ -2,10 +2,10 @@
 후처리 — OCR 엔진별 전체 처리 체인
 
 처리 순서 (엔진별 분기):
-  ┌─ Tesseract ─────────────────────────────────────────────────┐
-  │  L1(char_normalizer) → 마진노이즈제거 → 단락복원 → 공백정규화 │
+  ┌─ RapidOCR ──────────────────────────────────────────────────┐
+  │  L1 → 쪽번호·마진노이즈제거 → 단락복원 → 공백정규화         │
   └─────────────────────────────────────────────────────────────┘
-  ┌─ Claude Vision ──────────────────────────────────────────────┐
+  ┌─ Vision (Gemini·Claude·Ollama) ─────────────────────────────┐
   │  L1(char_normalizer) → 단락복원 → 공백정규화                 │
   │  (Vision은 이미 깨끗한 텍스트 → 마진제거 생략)               │
   └─────────────────────────────────────────────────────────────┘
@@ -13,8 +13,20 @@
 """
 from __future__ import annotations
 import re
+from functools import lru_cache
+from pathlib import Path
 
 from core.figure_detector import Region, build_placeholder
+
+# 줄 끝 글자+다음 줄 첫 글자가 정제본에서 주로 붙어 쓰이는 한글 쌍 — tools/build_wrap_spacing.py 로 만든다.
+# 책 97권 실측: 글자 경계에서 늘 띄우면 30.1%, 이 표로 정하면 95.1% 맞았다.
+_WRAP_TABLE = Path(__file__).parent / "data" / "wrap_nospace.txt"
+# 쪽 머리·끝의 쪽 번호 줄 ('30', '- 30 -')
+_PAGE_NUM_LINE = re.compile(r'^[\s\-–—]*\d{1,3}[\s\-–—]*$')
+# 쪽 꼬리 '장·부 제목+쪽번호' ('4장왜지능이라고 하는가?55', '13 1부 예측') — 쪽 마지막 줄이면 앞 줄에 잇지 않는다.
+# 따로 남아야 문서 단위 머리글 제거(text_cleaner.strip_running_headers)가 모양으로 알아보고 지운다(예측기계 141곳)
+# 짝수 쪽 꼬리는 OCR 이 쪽번호와 부 번호를 붙여 읽는다('1582부의사결정' = 158쪽 2부) → 사이 공백은 없어도 된다
+_PAGE_FOOTER_LINE = re.compile(r'^(?:\d{1,3}\s*)?\d{1,2}\s?[장부]\s?\S.{0,35}?\s?\d{1,3}$|^\d{1,3}\s*\d{1,2}\s?[장부]\s?\S.{0,35}$')
 
 # 단락 끝 판단 (이 문자로 끝나면 새 단락 시작 가능)
 _SENT_END = re.compile(r'[.!?。！？…\"\'\)\]》」』]\s*$')
@@ -57,14 +69,14 @@ def apply(text: str, regions: list[Region] | None = None) -> str:
     return text.strip()
 
 
-def process_full(text: str, engine: str = "tesseract") -> str:
+def process_full(text: str, engine: str = "rapidocr") -> str:
     """
     OCR 결과 전체 처리 체인 — 저장 파일·미리보기 공통 사용.
 
-    engine='tesseract':
-      마진노이즈제거(extract_korean_text) → 단락복원 → 공백정규화
-    engine='claude_vision':
-      단락복원 → 공백정규화  (Vision 결과는 이미 깨끗)
+    engine='rapidocr':
+      쪽번호·마진노이즈제거(extract_korean_text) → 단락복원 → 공백정규화
+    Vision 엔진('gemini'·'claude_vision'·'ollama')·'pdf_text':
+      단락복원 → 공백정규화  (이미 깨끗한 텍스트)
 
     L1(char_normalizer)·L2(spellcheck)·L3(llm_corrector)는
     _finalize()에서 이미 적용되므로 여기서는 호출하지 않음.
@@ -72,12 +84,15 @@ def process_full(text: str, engine: str = "tesseract") -> str:
     if not text.strip():
         return text
 
-    if engine in ("tesseract", "rapidocr"):
-        # 로컬 OCR: 마진 숫자·스캔 잡음·노이즈 줄 제거
+    if engine == "rapidocr":
+        # 로컬 OCR: 쪽 번호·마진 숫자·스캔 잡음·노이즈 줄 제거
+        text = _strip_page_number_lines(text)
         text = extract_korean_text(text)
 
     # 공통: 단락 복원 + 공백 정규화
     text = join_broken_lines(text)
+    if engine == "rapidocr":
+        text = re.sub(r'^[ \t]+', '', text, flags=re.M)   # 문단 첫 줄 표시는 줄 잇기에서 다 썼다
     text = _fix_spacing(text)
     text = remove_noise_lines(text)
     text = _normalize_whitespace(text)
@@ -116,7 +131,8 @@ def extract_korean_text(text: str) -> str:
         if re.sub(r'[^\w가-힣]', '', proc) == '':
             continue
 
-        cleaned.append(proc)
+        # 문단 첫 줄 표시(rapidocr_engine._mark_paragraph_starts 의 공백 2칸)는 남긴다 — join_broken_lines 가 본다
+        cleaned.append('  ' + proc if line.startswith('  ') else proc)
 
     return _normalize_whitespace('\n'.join(cleaned))
 
@@ -227,9 +243,11 @@ def join_broken_lines(text: str) -> str:
             if not nxt.strip():
                 break  # 빈 줄 → 연결 중단
             # 지금까지 이은 줄이 아니라 '현재 물리적 줄'(lines[i])이 끝까지 찼는지를 본다
+            last = not any(l.strip() for l in lines[i + 2:])
             if (len(lines[i].strip()) >= full and not _LIST_START_RE.match(nxt.strip())
+                    and not (last and _PAGE_FOOTER_LINE.match(nxt.strip()))
                     and _should_join(cur, nxt)):
-                cur = cur.rstrip() + ' ' + nxt.lstrip()
+                cur = _join_wrapped(cur, nxt)
                 i += 1
             else:
                 break
@@ -241,6 +259,32 @@ def join_broken_lines(text: str) -> str:
 
 
 # ── 내부 함수 ──────────────────────────────────────────────────────────────────
+
+@lru_cache(maxsize=1)
+def _wrap_nospace() -> frozenset[str]:
+    """붙여 잇는 한글 쌍 표. 파일이 없으면 빈 표(예전처럼 늘 띄운다)."""
+    try:
+        return frozenset(_WRAP_TABLE.read_text(encoding="utf-8").split())
+    except OSError:
+        return frozenset()
+
+
+def _join_wrapped(cur: str, nxt: str) -> str:
+    """줄바꿈으로 갈라진 두 줄을 잇는다 — 낱말 중간에서 잘린 자리('운용되었|다')면 붙이고, 아니면 띄운다."""
+    cur, nxt = cur.rstrip(), nxt.lstrip()
+    if cur and nxt and (cur[-1] + nxt[0]) in _wrap_nospace():
+        return cur + nxt
+    return cur + ' ' + nxt
+
+
+def _strip_page_number_lines(text: str) -> str:
+    """쪽 맨 앞·맨 끝의 쪽 번호 줄을 지운다 — 그대로 두면 본문 줄에 붙는다('어떤 환경데 30')."""
+    lines = text.splitlines()
+    while lines and (not lines[0].strip() or _PAGE_NUM_LINE.match(lines[0])):
+        lines.pop(0)
+    while lines and (not lines[-1].strip() or _PAGE_NUM_LINE.match(lines[-1])):
+        lines.pop()
+    return '\n'.join(lines)
 
 def _should_join(cur: str, nxt: str) -> bool:
     """두 줄을 이어 붙여야 하면 True."""

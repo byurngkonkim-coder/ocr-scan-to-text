@@ -1,4 +1,4 @@
-"""④ 일괄 처리 — 01_입력 폴더 목록과 백그라운드 대기열.
+"""④ 일괄 처리 — 입력 폴더 목록과 백그라운드 대기열.
 
 화면(브라우저)과 분리된 작업 스레드들이 대기열을 처리한다. 브라우저를 닫아도
 처리는 계속되고, 화면은 주기적으로 status_html() 을 읽어 보여 준다.
@@ -18,8 +18,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 
-INPUT_DIR = Path(__file__).resolve().parent.parent / "01_입력"
-_EXTS = {".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff"}
+INPUT_DIR = Path(__file__).resolve().parent.parent / "입력"
+_EXTS = {".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".txt"}   # .txt 는 OCR 없이 문장 정제만
 
 
 @dataclass
@@ -114,6 +114,9 @@ def _run() -> None:
                 job.state = "완료" if job.result else "실패"
                 if not job.result:
                     job.detail = _last_line(last[1]) if last else "결과 없음"
+                else:   # 정제 강등 안내만 남긴다 — '완료'만 보이면 정제가 안 된 것을 모른다(2026-10-13)
+                    job.detail = next((ln.strip(" ⚠️") for ln in str(last[1]).splitlines()
+                                       if "문장 정제 미적용" in ln), "")
         except Exception as e:   # 한 파일의 실패가 대기열 전체를 멈추지 않게
             job.state, job.detail = "실패", f"{type(e).__name__}: {e}"
         job.ended = time.time()
@@ -124,7 +127,7 @@ def _last_line(text) -> str:
     return lines[-1] if lines else ""
 
 
-# ── 01_입력 목록 ───────────────────────────────────────────────────────────────
+# ── 입력 폴더 목록 ─────────────────────────────────────────────────────────────
 
 _info_cache: dict[tuple, tuple[int | None, str]] = {}
 
@@ -136,7 +139,9 @@ def _file_kind(path: Path) -> tuple[int | None, str]:
     if key in _info_cache:
         return _info_cache[key]
     from core import pdf_text_layer
-    if path.suffix.lower() != ".pdf":
+    if path.suffix.lower() == ".txt":
+        res = (None, "텍스트(정제만)")
+    elif path.suffix.lower() != ".pdf":
         res = (1, "이미지")
     else:
         info = pdf_text_layer.analyze(path) if pdf_text_layer.is_available() else None
@@ -161,7 +166,7 @@ def _done_names(results_dir: Path) -> tuple[set[str], list[str]]:
 
 
 def list_inputs(results_dir: Path) -> list[dict]:
-    """01_입력 파일 목록 — 이름순. 처리 여부는 처리 기록 원본명 또는 02_결과 파일명으로 판정."""
+    """입력 폴더 파일 목록 — 이름순. 처리 여부는 처리 기록 원본명 또는 02_결과 파일명으로 판정."""
     if not INPUT_DIR.exists():
         return []
     hist, outs = _done_names(results_dir)
@@ -207,6 +212,8 @@ def status_html() -> str:
         if j.started:
             took = _fmt_sec((j.ended or now) - j.started)
         note = j.result if j.state == "완료" else j.detail
+        if j.state == "완료" and j.detail:
+            note = f"⚠ {j.detail} · {j.result}"
         rows.append(f"<tr><td>{icon.get(j.state, '')} {j.state}</td><td>{html.escape(j.path.name)}</td>"
                     f"<td>{took}</td><td style='color:#6f6962'>{html.escape(note)[:140]}</td></tr>")
     from core import config

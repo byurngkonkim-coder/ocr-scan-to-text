@@ -3,8 +3,8 @@
 
 디렉터리 구조:
   storage/
-  ├── uploads/          원본 파일 (save_original=True 시)
-  ├── results/          추출 텍스트 (.txt / .md)
+  ├── uploads/          원본 파일 (save_original=True 시) · 정제 전 원문 사본(*_원문)
+  ├── results/          02_결과 저장이 실패했을 때만 쓰는 결과 사본 (평소엔 비어 있음 — 결과는 02_결과 한 곳)
   └── history.json      처리 이력 (최대 500건)
 """
 from __future__ import annotations
@@ -55,13 +55,17 @@ def save_result(result_path: Path | str, original_name: str) -> Path:
 
 
 def raw_copy_path(result_path: Path | str) -> Path:
-    """결과 파일의 '정제 전 원문' 사본 경로 — 저장과 삭제가 같은 규칙을 쓴다."""
+    """결과 파일의 '정제 전 원문' 사본 경로(storage/uploads/결과이름_원문) — 저장과 삭제가 같은 규칙을 쓴다.
+
+    결과는 02_결과 에만 두고, 보관소에는 입력 쪽 자료(원본·정제 전 원문)만 남긴다.
+    """
     p = Path(result_path)
-    return p.with_name(f"{p.stem}_원문{p.suffix}")
+    return _UPLOADS / f"{p.stem}_원문{p.suffix}"
 
 
 def save_raw_copy(raw_path: Path | str, stored_result: Path | str) -> Path:
-    """정제 전 원문을 보관소 결과 파일 옆에 '결과이름_원문' 으로 복사."""
+    """정제 전 원문을 storage/uploads/ 에 '결과이름_원문' 으로 복사."""
+    init()
     dst = raw_copy_path(stored_result)
     shutil.copy2(raw_path, dst)
     return dst
@@ -101,6 +105,7 @@ def record(
     engine_mode: str,
     file_size_bytes: int,
     output_path: Path | None = None,
+    clean_note: str = "",
 ) -> str:
     """처리 이력 1건 추가. 생성된 entry_id 반환. output_path = 02_결과/ 확정본."""
     entry_id = str(uuid.uuid4())[:8]
@@ -116,7 +121,8 @@ def record(
         "pages_ocr":     pages_ocr,
         "pages_blank":   pages_blank,
         "vision_pages":  vision_pages,
-        "engine_mode":   engine_mode,       # 'vision_first' or 'tesseract_first'
+        "engine_mode":   engine_mode,       # 'vision_first' or 'rapidocr_first'
+        "clean_note":    clean_note,        # 문장 정제 강등 안내('' = 전부 정제됨 또는 정제 안 함)
         "file_size_kb":  round(file_size_bytes / 1024, 1),
         "result_size_kb": round(Path(result_path).stat().st_size / 1024, 1)
                           if result_path and Path(result_path).exists() else 0,
@@ -193,10 +199,14 @@ def get_stats() -> dict:
 
 
 def _engine_cell(e: dict) -> str:
-    """엔진 모드 + OCR 경로면 Vision 처리 쪽 수 — Tesseract 로 대거 강등된 실행을 드러낸다."""
+    """엔진 모드 + OCR 경로면 Vision 처리 쪽 수 — 로컬 OCR 로 대거 강등된 실행을 드러낸다."""
     mode = e.get("engine_mode", "")
-    if mode in ("vision_first", "tesseract_first") and e.get("pages_total"):
-        return f"{mode} · Vision {e.get('vision_pages', 0)}/{e['pages_total']}쪽"
+    if mode == "tesseract_first":   # 2026-10-13 이전 기록의 같은 모드(로컬 엔진 우선) 이름
+        mode = "rapidocr_first"
+    if mode in ("vision_first", "rapidocr_first") and e.get("pages_total"):
+        mode = f"{mode} · Vision {e.get('vision_pages', 0)}/{e['pages_total']}쪽"
+    if e.get("clean_note"):     # 정제 강등 — '— 그 구간은…' 꼬리는 빼고 짧게
+        mode += " · ⚠ " + e["clean_note"].split(" — ")[0]
     return mode
 
 

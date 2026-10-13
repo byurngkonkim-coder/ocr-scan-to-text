@@ -101,10 +101,30 @@ def test_list_inputs_marks_done_by_result_name(monkeypatch, tmp_path):
     out.mkdir()
     (inp / "책A.png").write_bytes(b"x")
     (inp / "책B.png").write_bytes(b"x")
-    (inp / "메모.txt").write_text("무시")
+    (inp / "메모.docx").write_text("무시")
     (out / "20261005_120000_책A.txt").write_text("결과")
     monkeypatch.setattr(br, "INPUT_DIR", inp)
     monkeypatch.setattr(br, "_done_names", lambda d: (set(), [p.name for p in d.iterdir()]))
     rows = br.list_inputs(out)
     assert [(r["name"], r["status"]) for r in rows] == [("책A.png", "완료"), ("책B.png", "미처리")]
     assert "미처리" in br.choice_label(rows[1])
+
+
+def test_list_inputs_includes_txt_for_cleanup_only(monkeypatch, tmp_path):
+    inp, out = tmp_path / "in", tmp_path / "out"
+    inp.mkdir()
+    out.mkdir()
+    (inp / "책C.txt").write_text("본문", encoding="utf-8")
+    monkeypatch.setattr(br, "INPUT_DIR", inp)
+    monkeypatch.setattr(br, "_done_names", lambda d: (set(), []))
+    rows = br.list_inputs(out)
+    assert [(r["name"], r["kind"]) for r in rows] == [("책C.txt", "텍스트(정제만)")]
+
+
+def test_text_pages_split_at_paragraphs():
+    from ocr_gradio import _text_pages
+    paras = [f"문단{i} " + "가" * 900 + "." for i in range(5)]
+    pages = _text_pages("\n\n".join(paras), size=2000)
+    assert len(pages) == 3                                   # 2+2+1 문단
+    assert "\n\n".join(pages) == "\n\n".join(paras)          # 글자 손실 없음
+    assert all(p.endswith(".") for p in pages)               # 문단 중간에서 자르지 않음

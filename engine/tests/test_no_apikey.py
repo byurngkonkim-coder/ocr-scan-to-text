@@ -13,7 +13,7 @@ def _make_page(page_num=1, confidence=85.0, needs_review=False, review_reason=""
     return PageResult(
         page_num=page_num,
         raw_text="텍스트", corrected_text="텍스트",
-        engine=OCREngine.TESSERACT, confidence=confidence,
+        engine=OCREngine.RAPIDOCR, confidence=confidence,
         needs_review=needs_review, review_reason=review_reason,
     )
 

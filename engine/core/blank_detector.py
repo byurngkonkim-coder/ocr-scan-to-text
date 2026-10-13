@@ -4,7 +4,7 @@
 감지 전략 (단계별, 빠른 순서):
   1. 픽셀 밀도   : 화소의 97% 이상이 흰색 → 완전 공백
   2. 엣지 밀도   : 텍스트/선분 윤곽이 거의 없음 → 공백
-  3. Tesseract   : 빠른 OCR 후 의미 있는 문자 < 10자 → 사실상 공백
+  3. RapidOCR    : 빠른 OCR 후 의미 있는 문자 < 10자 → 사실상 공백
 
 각 단계는 이전 단계보다 느리지만 더 정확함.
 단계 1·2는 CPU 연산만으로 0.1초 미만 완료.
@@ -27,7 +27,7 @@ from PIL import Image
 WHITE_RATIO_BLANK = 0.9995  # 99.95% 이상 흰색 → 완전 공백 (stage 1)
 WHITE_RATIO_SUSPECT = 0.999   # 99.9~99.95% → 의심 → edge 검사 (stage 2)
 EDGE_DENSITY_BLANK = 0.0005  # 엣지 밀도 0.05% 미만 → 텍스트 없음
-MIN_MEANINGFUL_CHARS = 10      # Tesseract 결과 의미 문자 수 최소값
+MIN_MEANINGFUL_CHARS = 10      # OCR 결과 의미 문자 수 최소값
 
 
 @dataclass
@@ -44,7 +44,7 @@ def check(image: Image.Image, fast: bool = False) -> BlankResult:
 
     Args:
         image : PIL 이미지
-        fast  : True면 단계 1·2만 확인 (Tesseract 미실행, 더 빠름)
+        fast  : True면 단계 1·2만 확인 (OCR 미실행, 더 빠름)
 
     Returns:
         BlankResult
@@ -86,8 +86,8 @@ def check(image: Image.Image, fast: bool = False) -> BlankResult:
     if fast:
         return BlankResult(is_blank=False, reason="", white_ratio=white_ratio, stage=0)
 
-    # ── 단계 3: Tesseract 빠른 스캔 ──────────────────────────────────────────
-    char_count = _quick_tesseract_count(image)
+    # ── 단계 3: RapidOCR 빠른 스캔 ───────────────────────────────────────────
+    char_count = _quick_text_count(image)
 
     if char_count < MIN_MEANINGFUL_CHARS:
         return BlankResult(
@@ -117,16 +117,14 @@ def _edge_density(gray: np.ndarray) -> float:
     return float(np.sum(edges > 0) / edges.size)
 
 
-def _quick_tesseract_count(image: Image.Image) -> int:
+def _quick_text_count(image: Image.Image) -> int:
     """
-    Tesseract 최소 설정으로 의미 있는 문자 수 반환.
-    psm 11: 텍스트 행 없이 개별 문자 탐지 → 빠름.
+    RapidOCR 한글 v5 로 의미 있는 문자 수 반환 (본문 OCR 과 같은 엔진).
 
     '문자 수'만 필요하므로 장변 1500px로 다운스케일 후 실행한다.
-    (300 DPI 풀해상도 psm 11 은 페이지당 수 초 소요 — 빈페이지 판정엔 과함)
     """
     try:
-        import pytesseract
+        from core import rapidocr_engine
         small = image.convert("RGB")
         longest = max(small.size)
         if longest > 1500:
@@ -134,10 +132,7 @@ def _quick_tesseract_count(image: Image.Image) -> int:
             small = small.resize(
                 (max(1, round(small.width * scale)), max(1, round(small.height * scale)))
             )
-        text = pytesseract.image_to_string(
-            small, lang="kor+eng",
-            config="--psm 11 --oem 1",
-        )
+        text = " ".join(t for t, _score, _box in rapidocr_engine.read_boxes(small))
         meaningful = sum(
             1 for c in text
             if c.isalpha() or "가" <= c <= "힣"

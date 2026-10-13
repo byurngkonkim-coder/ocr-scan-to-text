@@ -17,7 +17,7 @@ def _table(tmp_path, monkeypatch, entry):
 
 
 def test_engine_cell_shows_vision_share(tmp_path, monkeypatch):
-    row = _table(tmp_path, monkeypatch, {"engine_mode": "tesseract_first",
+    row = _table(tmp_path, monkeypatch, {"engine_mode": "rapidocr_first",
                                          "pages_total": 233, "vision_pages": 10})[0]
     assert len(row) == 9 and "Vision 10/233" in row[4]
 
