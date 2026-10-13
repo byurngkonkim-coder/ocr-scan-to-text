@@ -22,7 +22,7 @@ target: 04_처리엔진
 
 - **디지털 PDF**(글자 정보가 들어 있는 PDF)는 OCR 없이 **무료로 바로** 추출합니다. 파일을 올리면 화면이 자동으로 알려 줍니다.
 - **스캔 PDF·이미지**는 OCR 엔진 두 가지를 함께 씁니다.
-  - **Tesseract** — 이 PC에서 도는 **무료** 엔진
+  - **RapidOCR 한글 v5** — 이 PC에서 도는 **무료** 엔진 (별도 프로그램 설치 없음)
   - **Vision 엔진** — 레이아웃을 이해하는 **고정확** 엔진. 화면에서 셋 중 하나를 고릅니다.
     **Google Gemini**(기본·가장 빠름) / **Anthropic Claude** / **로컬 Ollama**(무료·느림)
 - 한국어·영어·혼합 문서를 지원합니다.
@@ -51,13 +51,12 @@ target: 04_처리엔진
 | 프로그램 | 용도 | 비고 |
 |---|---|---|
 | **Python 3.10+** | 도구 실행 | [python.org](https://www.python.org) — 설치 시 **"Add Python to PATH" 체크** |
-| **Tesseract OCR** | 무료 OCR 엔진 | [UB-Mannheim 빌드](https://github.com/UB-Mannheim/tesseract/wiki) — 설치 시 **Korean(kor) 언어팩 선택** |
 | **Poppler** (PDF만) | PDF→이미지 변환 | [poppler-windows](https://github.com/oschwartz10612/poppler-windows/releases) → `C:\poppler\Library\bin`. 이미지만 쓰면 불필요 |
 | **Ollama** (선택) | 로컬 Vision 엔진 | 로컬 Ollama 엔진을 쓸 때만. [ollama.com](https://ollama.com) |
 
 ### 3-2. 프로그램 설치
 
-맨 위 폴더의 **`INSTALL.bat` 을 더블클릭**합니다. 전용 가상환경(`04_처리엔진\venv`)을 만들고 필요한 패키지를 설치합니다.
+**`engine\install.bat` 을 더블클릭**합니다. 전용 가상환경(`engine\venv`)을 만들고 OCR 엔진(RapidOCR)을 포함한 필요한 패키지를 설치합니다.
 
 > `START_OCR.bat` 은 이 전용 환경의 Python을 자동으로 씁니다. PC에 Python이 여러 개 있어도 섞이지 않습니다.
 
@@ -66,7 +65,7 @@ target: 04_처리엔진
 ## 4. API 키 등록 (환경변수)
 
 **키는 화면에 입력하지 않습니다.** Windows 환경변수에 한 번 등록하면 프로그램이 시작할 때 자동으로 읽습니다.
-키가 없어도 Tesseract로 동작하지만, 정확도와 **문장 정제**를 쓰려면 Gemini 키가 필요합니다.
+키가 없어도 RapidOCR로 동작하지만, 정확도와 **문장 정제**를 쓰려면 Gemini 키가 필요합니다.
 
 1. **키 발급** — [Google AI Studio](https://aistudio.google.com/app/apikey) 에서 API 키를 만듭니다.
 2. Windows 검색창에 **환경 변수** 입력 → **계정의 환경 변수 편집** 을 엽니다.
@@ -111,8 +110,8 @@ target: 04_처리엔진
 **2 처리 방식 자세히**
 
 - **읽는 방식**
-  - **정확도 우선** — Vision 엔진이 먼저 읽고, 실패하면 Tesseract. 최고 품질, 쪽마다 API 요금.
-  - **비용 우선** — Tesseract(무료)가 먼저 읽고, 흐린 쪽만 Vision 엔진. 요금 절약.
+  - **정확도 우선** — Vision 엔진이 먼저 읽고, 실패하면 RapidOCR. 최고 품질, 쪽마다 API 요금.
+  - **비용 우선** — RapidOCR(무료)가 먼저 읽고, 흐린 쪽만 Vision 엔진. 요금 절약.
 - **문장 정제** — OCR 후 문서 전체를 Google Gemini로 한 번 더 교정해 **바로 읽을 수 있는 깨끗한 본문**으로 저장합니다.
   - 없애 주는 것: `[페이지 N]` 표시·구분선, **쪽번호·반복되는 머리말(러닝헤더)**, 스캔 잡음
   - 고쳐 주는 것: **쪽이 넘어가며 잘린 단어** 이어붙이기, **띄어쓰기·맞춤법**, 깨진 괄호쌍
@@ -157,7 +156,7 @@ target: 04_처리엔진
 |---|---|---|
 | 디지털 PDF (1단계에 "디지털 PDF"로 표시) | 그대로 **전체 처리** | OCR 없이 무료·즉시 추출 |
 | 흐릿하거나 어려운 스캔, 정확도 최우선 | **정확도 우선** | 모든 쪽을 Vision 엔진으로 |
-| 쪽수가 많음 / 요금 절약 | **비용 우선** | 무료 Tesseract + 흐린 쪽만 Vision |
+| 쪽수가 많음 / 요금 절약 | **비용 우선** | 무료 RapidOCR + 흐린 쪽만 Vision |
 | 인터넷·키 없음 | 엔진 **로컬 Ollama** 또는 **비용 우선**(키 없이) | 완전 로컬·무료 (Ollama는 쪽당 수 분) |
 
 > **명언 모음집을 "명언_저자" 형식으로 추출·중복 제거**하는 가공은 다음 단계 도구
