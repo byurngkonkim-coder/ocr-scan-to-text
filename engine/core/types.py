@@ -6,8 +6,7 @@ from typing import Optional
 
 
 class OCREngine(str, Enum):
-    RAPIDOCR = "rapidocr"      # 로컬 고성능 ONNX 엔진 (기본 로컬 엔진)
-    TESSERACT = "tesseract"
+    RAPIDOCR = "rapidocr"      # 로컬 OCR — RapidOCR 한글 v5 (유일한 로컬 엔진)
     CLAUDE_VISION = "claude_vision"
     GEMINI = "gemini"
     OLLAMA = "ollama"          # 로컬 Ollama 비전 모델 (core.ollama_vision)

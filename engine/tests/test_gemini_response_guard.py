@@ -3,7 +3,7 @@
 실측 사고(2026-07-07): 저작권 출판물(메시지성경 신약) 스캔에서 Gemini가
 finish_reason=RECITATION 으로 예외 없이 빈 텍스트를 반환 → 신뢰도 95%로
 수용되어 842p 중 167p가 통째로 소실. STOP 이외의 종료는 수용하지 않고
-예외를 올려 Tesseract 폴백(비전)·원문 보존 강등(정제)이 작동해야 한다.
+예외를 올려 RapidOCR 폴백(비전)·원문 보존 강등(정제)이 작동해야 한다.
 """
 from types import SimpleNamespace
 

@@ -138,7 +138,7 @@ class TestBatchIsolation:
         good = FileResult(source_path=Path("good.png"), output_path=None)
         good.pages.append(PageResult(
             page_num=1, raw_text="hello", corrected_text="hello",
-            engine=OCREngine.TESSERACT, confidence=90.0,
+            engine=OCREngine.RAPIDOCR, confidence=90.0,
         ))
         writer.write(good, tmp_path, OutputFormat.TXT)
 

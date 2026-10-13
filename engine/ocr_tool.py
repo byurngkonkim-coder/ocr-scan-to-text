@@ -10,7 +10,7 @@ from rich.table import Table
 from rich.prompt import Prompt, Confirm
 
 from core import detector, pdf_splitter, quality_diagnoser, preprocessor
-from core import rapidocr_engine, tesseract_engine, char_normalizer, writer, postprocessor
+from core import rapidocr_engine, char_normalizer, writer, postprocessor
 # vision 파사드 — config.json 의 vision_provider 에 따라 Gemini/Claude 라우팅.
 # 기존 호출부 호환을 위해 claude_vision 이름으로 import 한다.
 from core import vision as claude_vision
@@ -406,7 +406,7 @@ def _process_page(
             ocr_result = claude_vision.run(image, lang_hint=lang)
         except Exception as e:
             vision_err = str(e)
-            console.print(f"  [yellow]⚠ p.{page_num} 폴백 실패 → Tesseract로 계속 ({e})[/yellow]")
+            console.print(f"  [yellow]⚠ p.{page_num} 폴백 실패 → RapidOCR로 계속 ({e})[/yellow]")
         else:
             return _finalize_page(ocr_result, page_num, placeholders,
                                    no_spellcheck, llm_correct, llm_budget)
@@ -415,18 +415,14 @@ def _process_page(
     if no_preprocess:
         processed = ocr_image
     else:
-        if rapidocr_engine.is_available():
-            processed = preprocessor.preprocess_for_rapidocr(ocr_image, report)
-        else:
-            processed = preprocessor.preprocess(ocr_image, report)
+        processed = preprocessor.preprocess_for_rapidocr(ocr_image, report)
 
-    # 로컬 OCR (tesseract_engine 내부에서 RapidOCR ONNX 우선 위임)
-    ocr_result = tesseract_engine.smart_run(processed, default_lang=lang)
+    # 로컬 OCR — RapidOCR 한글 v5 (실패하면 신뢰도 0 결과 → 아래 저신뢰 흐름)
+    ocr_result = rapidocr_engine.smart_run(processed, default_lang=lang)
 
     if verbose:
-        engine_display = "rapidocr(v5)" if rapidocr_engine.is_available() else ocr_result.engine.value
         console.print(
-            f"  [dim]엔진: {engine_display} / 신뢰도: {ocr_result.confidence:.1f}% "
+            f"  [dim]엔진: rapidocr(v5) / 신뢰도: {ocr_result.confidence:.1f}% "
             f"/ 자모분리: {'감지' if ocr_result.has_jamo_split else '없음'}[/dim]"
         )
 
@@ -463,7 +459,7 @@ def _process_page(
             needs_review=True, review_reason=reason,
         )
 
-    # 품질 불량 진단 쪽은 Tesseract 신뢰도가 높아도 폴백 실패를 결과에 남긴다
+    # 품질 불량 진단 쪽은 RapidOCR 신뢰도가 높아도 폴백 실패를 결과에 남긴다
     return _finalize_page(ocr_result, page_num, placeholders,
                            no_spellcheck, llm_correct, llm_budget,
                            needs_review=bool(vision_err),
@@ -480,7 +476,7 @@ def _finalize_page(
     OCR 결과 전체 처리 체인 (CLI용).
       L1 → L2 → process_full(엔진별) → L3
     """
-    engine_str = ocr_result.engine.value  # 'tesseract' or 'claude_vision'
+    engine_str = ocr_result.engine.value  # 'rapidocr' 또는 Vision 엔진
 
     # L1 — 규칙 기반 보정
     text = char_normalizer.normalize_all(ocr_result.text)
@@ -496,7 +492,7 @@ def _finalize_page(
     if not no_spellcheck and spellcheck.is_available():
         text = spellcheck.correct_safe(text)
 
-    # 후처리 — 엔진별 분기 (Vision: 단락복원만 / Tesseract: 마진제거+단락복원)
+    # 후처리 — 엔진별 분기 (Vision: 단락복원만 / RapidOCR: 쪽번호·마진제거+단락복원)
     text = postprocessor.process_full(text, engine=engine_str)
 
     # L3 — LLM 문맥 교정

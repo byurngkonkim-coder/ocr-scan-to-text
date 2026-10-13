@@ -21,7 +21,7 @@ def _fake_full(order):
 def _run(files):
     br.direct_running.clear()
     return list(ocr_gradio.process_full_or_queue(files, "kor", "txt", False, False, False,
-                                                 False, 0, "", "Tesseract 우선",
+                                                 False, 0, "", "RapidOCR 우선",
                                                  progress=lambda *a, **k: None))
 
 

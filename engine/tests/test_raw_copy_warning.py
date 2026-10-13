@@ -29,13 +29,13 @@ def digital_pdf(tmp_path):
 
 @pytest.fixture
 def scanned_image(monkeypatch):
-    """OCR 경로: PNG 입력 + 페이지 판독만 고정 문장으로 대체(Tesseract 불필요).
+    """OCR 경로: PNG 입력 + 페이지 판독만 고정 문장으로 대체(OCR 엔진 불필요).
     정제·원문 사본 작성·보관은 실제 코드를 탄다."""
     text = "스캔본 본문입니다. " * 60 + "끝."
 
     def fake_page(image, page_num, *args, **kwargs):
         return PageResult(page_num=page_num, raw_text=text, corrected_text=text,
-                          engine=OCREngine.TESSERACT, confidence=95.0), []
+                          engine=OCREngine.RAPIDOCR, confidence=95.0), []
 
     monkeypatch.setattr(ocr_gradio, "_process_page", fake_page)
     return Path(__file__).parent / "sample_docs" / "sample_kor_eng.png"
@@ -64,7 +64,7 @@ def _final_status(pdf) -> str:
     last = None
     for last in ocr_gradio.process_full(
         SimpleNamespace(name=str(pdf)), "kor+eng", "txt",
-        False, False, True, False, 0, "", "Tesseract 우선",
+        False, False, True, False, 0, "", "RapidOCR 우선",
         cleanup=True, front_matter=False, progress=lambda *a, **k: None,
     ):
         pass

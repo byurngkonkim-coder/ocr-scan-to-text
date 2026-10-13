@@ -1,4 +1,4 @@
-"""비용 우선(Tesseract 우선) 모드의 Vision 폴백 신뢰도 기준.
+"""비용 우선(RapidOCR 우선) 모드의 Vision 폴백 신뢰도 기준.
 
 Regression: ISSUE-F — 깨진 쪽(짧은 캡션·그림 쪽)의 Tesseract 신뢰도가 63~84 로 기준 70 을
 넘어 Gemini 로 넘어가지 않고 쓰레기 텍스트가 결과에 남았다(FocalPoint p39·92·116).
@@ -16,7 +16,7 @@ from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from core import blank_detector, config, quality_diagnoser, spellcheck, tesseract_engine, vision
+from core import blank_detector, config, quality_diagnoser, spellcheck, rapidocr_engine, vision
 from core.types import OCREngine, OCRResult, QualityReport
 
 IMG = Image.new("RGB", (800, 1000), "white")
@@ -33,8 +33,8 @@ def _setup(monkeypatch, conf, tmp_path, threshold=None):
     monkeypatch.setattr(spellcheck, "is_available", lambda: False)
     monkeypatch.setattr(blank_detector, "check",
                         lambda *a, **k: SimpleNamespace(is_blank=False, reason=""))
-    monkeypatch.setattr(tesseract_engine, "smart_run", lambda *a, **k: OCRResult(
-        text="깨진 캡션 rr 00", confidence=conf, engine=OCREngine.TESSERACT))
+    monkeypatch.setattr(rapidocr_engine, "smart_run", lambda *a, **k: OCRResult(
+        text="깨진 캡션 rr 00", confidence=conf, engine=OCREngine.RAPIDOCR))
     monkeypatch.setattr(quality_diagnoser, "diagnose", lambda img: QualityReport(
         blur_score=500, avg_brightness=128, skew_angle=0,
         is_vertical_text=False, width_px=800, height_px=1000))
@@ -63,10 +63,10 @@ def test_default_threshold_escalates_conf_80(monkeypatch, tmp_path, run):
 @pytest.mark.parametrize("run", [_gui, _cli])
 def test_threshold_read_from_config(monkeypatch, tmp_path, run):
     _setup(monkeypatch, 80.0, tmp_path, threshold=70.0)
-    assert run().engine == OCREngine.TESSERACT
+    assert run().engine == OCREngine.RAPIDOCR
 
 
 @pytest.mark.parametrize("run", [_gui, _cli])
-def test_body_page_conf_90_stays_tesseract(monkeypatch, tmp_path, run):
+def test_body_page_conf_90_stays_rapidocr(monkeypatch, tmp_path, run):
     _setup(monkeypatch, 90.0, tmp_path)
-    assert run().engine == OCREngine.TESSERACT
+    assert run().engine == OCREngine.RAPIDOCR

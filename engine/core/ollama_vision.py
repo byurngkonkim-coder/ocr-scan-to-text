@@ -21,7 +21,7 @@ from core.gemini_vision import _prepare_jpeg_bytes
 from core.types import OCREngine, OCRResult
 
 OLLAMA_VISION_PROMPT = "이 이미지의 모든 텍스트를 읽는 순서대로 그대로 추출하세요. 설명 없이 텍스트만 출력."
-# 한 쪽 ≈ 1,500~2,000토큰. 반복 루프 시 이 상한에서 끊겨 length 예외 → Tesseract 폴백 (CPU 약 9분 상한)
+# 한 쪽 ≈ 1,500~2,000토큰. 반복 루프 시 이 상한에서 끊겨 length 예외 → RapidOCR 폴백 (CPU 약 9분 상한)
 VISION_NUM_PREDICT = 3072
 
 _client = None  # 파사드 reset_client() 호환용 — HTTP 무상태라 캐시할 클라이언트가 없다
@@ -81,7 +81,7 @@ def _vision_prompt(model: str, lang_hint: str) -> str:
 def run(image: Image.Image, lang_hint: str = "kor+eng") -> OCRResult:
     """로컬 Ollama 비전 모델로 이미지에서 텍스트 추출.
 
-    비정상 종료·빈 응답·연결 실패는 예외 — 호출부(_process_page)가 Tesseract 폴백으로 전환한다.
+    비정상 종료·빈 응답·연결 실패는 예외 — 호출부(_process_page)가 RapidOCR 폴백으로 전환한다.
     """
     model = config.get_ollama_vision_model()
     jpeg = _prepare_jpeg_bytes(image, max_edge=config.get_ollama_max_edge())

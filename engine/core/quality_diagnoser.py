@@ -110,6 +110,6 @@ def describe(report: QualityReport) -> str:
            else "OK"),
         f"  기울기    : {report.skew_angle:.1f}°  {'⚠ 심함' if abs(report.skew_angle) > 45 else 'OK'}",
         f"  세로쓰기  : {'⚠ 감지' if report.is_vertical_text else 'OK'}",
-        f"  → {'폴백 권장' if report.needs_fallback else '전처리 후 Tesseract 처리'}",
+        f"  → {'폴백 권장' if report.needs_fallback else '전처리 후 RapidOCR 처리'}",
     ]
     return "\n".join(lines)

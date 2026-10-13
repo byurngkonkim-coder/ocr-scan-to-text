@@ -91,13 +91,13 @@ def test_ocr_pages_saved_in_page_order(monkeypatch, tmp_path):
         time.sleep(random.uniform(0, 0.05))
         text = f"{n}쪽 본문입니다."
         return PageResult(page_num=n, raw_text=text, corrected_text=text,
-                          engine=OCREngine.TESSERACT, confidence=95.0), []
+                          engine=OCREngine.RAPIDOCR, confidence=95.0), []
     monkeypatch.setattr(ocr_gradio, "_process_page", process_page)
     png = Path(__file__).parent / "sample_docs" / "sample_kor_eng.png"
     last = None
     for last in ocr_gradio.process_full(
             SimpleNamespace(name=str(png)), "kor+eng", "txt", False, False, True, False, 0, "",
-            "Tesseract 우선", cleanup=False, front_matter=False, progress=lambda *a, **k: None):
+            "RapidOCR 우선", cleanup=False, front_matter=False, progress=lambda *a, **k: None):
         pass
     text = Path(last[3]).read_text(encoding="utf-8")
     nums = [int(x) for x in re.findall(r"(\d+)쪽 본문", text)]

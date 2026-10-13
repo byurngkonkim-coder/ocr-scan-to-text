@@ -167,7 +167,7 @@ def run(image: Image.Image, lang_hint: str = "kor+eng") -> OCRResult:
 
     Raises:
         비정상 종료(RECITATION·SAFETY·MAX_TOKENS 등)가 재시도에도 반복되면
-        예외를 던진다 — 호출부(_process_page)가 Tesseract 폴백으로 전환해
+        예외를 던진다 — 호출부(_process_page)가 RapidOCR 폴백으로 전환해
         페이지 소실을 막는다.
     """
     from google.genai import types
@@ -222,7 +222,7 @@ def run(image: Image.Image, lang_hint: str = "kor+eng") -> OCRResult:
                 engine=OCREngine.GEMINI,
                 has_jamo_split=False,
             )
-        except Exception as e:  # noqa: BLE001 — 호출부에서 Tesseract 폴백 처리
+        except Exception as e:  # noqa: BLE001 — 호출부에서 RapidOCR 폴백 처리
             last_err = e
             disable_thinking = False  # 2차 시도는 thinking 옵션 없이
 

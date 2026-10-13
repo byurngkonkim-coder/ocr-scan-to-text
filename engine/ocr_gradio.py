@@ -16,7 +16,7 @@ except ImportError:
     sys.exit(1)
 
 from core import detector, pdf_splitter, quality_diagnoser, preprocessor
-from core import rapidocr_engine, tesseract_engine, char_normalizer, postprocessor, writer
+from core import rapidocr_engine, char_normalizer, postprocessor, writer
 # vision 파사드 — config.json 의 vision_provider 에 따라 Gemini/Claude 라우팅.
 # 기존 호출부 호환을 위해 claude_vision 이름으로 import 한다.
 from core import vision as claude_vision
@@ -29,6 +29,9 @@ from core.types import FileResult, OutputFormat, PageResult, OCREngine
 
 PREVIEW_PAGES = 3      # 빠른 미리보기 처리 페이지 수
 WARN_SIZE_MB = 20
+
+# 진행 기록에 쓰는 로컬 OCR 엔진 이름 (로컬 엔진은 RapidOCR 하나뿐)
+LOCAL_OCR_NAME = "RapidOCR 한글 v5"
 
 # 사용자가 결과를 바로 찾는 고정 폴더(프로그램 루트/02_결과).
 # storage/ 는 이력 관리용 보관소이고, 이쪽은 '작업 산출물' 자리다.
@@ -360,25 +363,23 @@ def _process_page(image, page_num: int, lang: str,
                   quick: bool = False,
                   vision_first: bool = False) -> tuple[PageResult, list[str]]:
     """
-    vision_first=True : Claude Vision 우선 모드 (API 키 있을 때)
-      1순위: Claude Vision  — 레이아웃 이해, 마진 무시, 한국어 고정확도
-      2순위: Tesseract       — Vision 실패/미설정 시 자동 전환
+    vision_first=True : Vision 우선 모드 (API 키 있을 때)
+      1순위: Vision 엔진     — 레이아웃 이해, 마진 무시, 한국어 고정확도
+      2순위: RapidOCR 한글 v5 — Vision 실패/미설정 시 자동 전환
 
-    vision_first=False (기본): Tesseract 우선 모드
-      1순위: Tesseract       — 로컬·무료·빠름
-      2순위: Claude Vision   — 저신뢰도·자모분리 시 폴백
+    vision_first=False (기본): RapidOCR 우선 모드 (비용 우선)
+      1순위: RapidOCR 한글 v5 — 로컬·무료·빠름
+      2순위: Vision 엔진     — 저신뢰도·자모분리 시 폴백
 
     quick=True : 미리보기 전용 경량 모드
     """
     logs: list[str] = []
     placeholders: list[str] = []
-    # 로컬 엔진 이름 — tesseract_engine 은 RapidOCR 이 있으면 그쪽으로 넘긴다(진행 기록에 실제 엔진을 쓴다)
-    local_name = "RapidOCR 한글 v5" if rapidocr_engine.is_available() else "Tesseract"
 
     # ══════════════════════════════════════════════════════════════════════════
     # 0단계: 빈 페이지 감지 (OCR 전 차단 — API 크레딧 절약)
-    # Vision 우선 모드에서는 fast 모드(픽셀·엣지만, Tesseract 생략)로 실행 —
-    # 어차피 Gemini가 본문을 읽으므로 느린 Tesseract 빈페이지 확정은 불필요.
+    # Vision 우선 모드에서는 fast 모드(픽셀·엣지만, OCR 생략)로 실행 —
+    # 어차피 Vision 이 본문을 읽으므로 로컬 OCR 로 빈 쪽을 확정할 필요가 없다.
     # ══════════════════════════════════════════════════════════════════════════
     blank = blank_detector.check(image, fast=(quick or vision_first))
     if blank.is_blank:
@@ -389,7 +390,7 @@ def _process_page(image, page_num: int, lang: str,
             page_num=page_num,
             raw_text="",
             corrected_text="",
-            engine=OCREngine.TESSERACT,
+            engine=OCREngine.RAPIDOCR,
             confidence=0.0,
             is_blank=True,
             blank_reason=blank.reason,
@@ -406,14 +407,14 @@ def _process_page(image, page_num: int, lang: str,
             logs.append(f"  p.{page_num}: ✅ Vision 완료 ({time.time() - _t:.1f}s)")
             return _finalize(ocr_result, page_num, placeholders, llm_correct, llm_budget), logs
         except Exception as e:
-            logs.append(f"  p.{page_num}: Vision 오류 {time.time() - _t:.1f}s → {local_name} 폴백 ({e})")
-            # Vision 실패 시 Tesseract로 전환
+            logs.append(f"  p.{page_num}: Vision 오류 {time.time() - _t:.1f}s → {LOCAL_OCR_NAME} 폴백 ({e})")
+            # Vision 실패 시 RapidOCR 로 전환
 
     elif vision_first and not claude_vision.is_available():
-        logs.append(f"  p.{page_num}: ⚠ API 키 미설정 → {local_name}(으)로 처리")
+        logs.append(f"  p.{page_num}: ⚠ API 키 미설정 → {LOCAL_OCR_NAME}(으)로 처리")
 
     # ══════════════════════════════════════════════════════════════════════════
-    # Tesseract 처리 (우선 or Vision 실패 폴백)
+    # RapidOCR 처리 (우선 or Vision 실패 폴백)
     # ══════════════════════════════════════════════════════════════════════════
     report    = quality_diagnoser.diagnose(image)
     ocr_image = image
@@ -426,7 +427,7 @@ def _process_page(image, page_num: int, lang: str,
             ocr_image = det.masked_image or image
             logs.append(f"  p.{page_num} 감지 영역: {len(det.regions)}개")
 
-    # 품질 불량 즉시 Vision 폴백 (Tesseract 우선 모드일 때)
+    # 품질 불량 즉시 Vision 폴백 (RapidOCR 우선 모드일 때)
     # Vision 엔진은 실패 시 예외를 던진다 — 받지 않으면 한 쪽 실패로 파일 전체가 중단된다
     vision_err = ""
     if not vision_first and not no_fallback and report.needs_fallback and claude_vision.is_available():
@@ -435,7 +436,7 @@ def _process_page(image, page_num: int, lang: str,
             ocr_result = claude_vision.run(image, lang_hint=lang)
         except Exception as e:
             vision_err = str(e)
-            logs.append(f"  p.{page_num}: 폴백 실패 → {local_name}(으)로 계속 ({e})")
+            logs.append(f"  p.{page_num}: 폴백 실패 → {LOCAL_OCR_NAME}(으)로 계속 ({e})")
         else:
             return _finalize(ocr_result, page_num, placeholders, llm_correct, llm_budget), logs
 
@@ -445,16 +446,14 @@ def _process_page(image, page_num: int, lang: str,
     elif quick:
         processed = preprocessor.quick_preprocess(ocr_image)
     else:
-        # RapidOCR 사용 가능 시 딥러닝 피처(RGB 컬러/그라데이션) 보존 경량 전처리 적용
-        if rapidocr_engine.is_available():
-            processed = preprocessor.preprocess_for_rapidocr(ocr_image, report)
-        else:
-            processed = preprocessor.preprocess(ocr_image, report)
+        # 딥러닝 피처(RGB 컬러/그라데이션) 보존 경량 전처리
+        processed = preprocessor.preprocess_for_rapidocr(ocr_image, report)
 
-    ocr_result  = tesseract_engine.smart_run(processed, default_lang=lang, fast=quick)
+    # RapidOCR 이 실패하면 신뢰도 0 결과가 와서 아래 저신뢰 흐름(Vision 폴백·검토 필요)을 탄다
+    ocr_result  = rapidocr_engine.smart_run(processed, default_lang=lang, fast=quick)
     low_quality = ocr_result.confidence < config.get_confidence_threshold() or ocr_result.has_jamo_split
 
-    # Tesseract/RapidOCR 저신뢰도 → Vision 폴백 (비용 우선 모드일 때만)
+    # RapidOCR 저신뢰도 → Vision 폴백 (비용 우선 모드일 때만)
     if not vision_first and not no_fallback and low_quality:
         if claude_vision.is_available() and not vision_err:  # 이미 실패했으면 재시도 안 함 (Ollama 쪽당 최대 9분)
             reason = "자모분리" if ocr_result.has_jamo_split else f"신뢰도 {ocr_result.confidence:.1f}%"
@@ -474,8 +473,8 @@ def _process_page(image, page_num: int, lang: str,
         return _finalize(ocr_result, page_num, placeholders, llm_correct, llm_budget,
                          needs_review=True, review_reason=reason), logs
 
-    logs.append(f"  p.{page_num}: {local_name} 신뢰도 {ocr_result.confidence:.1f}%")
-    # 품질 불량 진단 쪽은 Tesseract 신뢰도가 높아도 폴백 실패를 결과에 남긴다
+    logs.append(f"  p.{page_num}: {LOCAL_OCR_NAME} 신뢰도 {ocr_result.confidence:.1f}%")
+    # 품질 불량 진단 쪽은 RapidOCR 신뢰도가 높아도 폴백 실패를 결과에 남긴다
     return _finalize(ocr_result, page_num, placeholders, llm_correct, llm_budget,
                      needs_review=bool(vision_err),
                      review_reason="품질 불량 · Vision 폴백 실패" if vision_err else ""), logs
@@ -491,11 +490,11 @@ def _finalize(ocr_result, page_num: int, placeholders: list[str],
       1. L1  — char_normalizer  (Unicode·합자·특수기호·한글분절·영문혼동)
       2. L2  — spellcheck       (한국어 맞춤법, 설치 시 자동)
       3. 후처리 — postprocessor.process_full()
-              Tesseract: 마진노이즈제거 → 단락복원 → 공백정규화
-              Vision:    단락복원 → 공백정규화
+              RapidOCR: 쪽번호·마진노이즈제거 → 단락복원 → 공백정규화
+              Vision:   단락복원 → 공백정규화
       4. L3  — llm_corrector    (Claude Haiku 문맥 교정, 활성화 시)
     """
-    engine_str = ocr_result.engine.value  # 'tesseract' or 'claude_vision'
+    engine_str = ocr_result.engine.value  # 'rapidocr' 또는 Vision 엔진('gemini'·'claude_vision'·'ollama')
 
     # L1 — 규칙 기반 보정 (합자·특수기호·한글분절·영문혼동)
     text = char_normalizer.normalize_all(ocr_result.text)
@@ -1196,7 +1195,7 @@ def _run_ocr(
         except Exception as page_err:   # 한 쪽의 예외가 파일 전체를 죽이지 않게 — 검토 필요로 남김
             reason = f"처리 오류: {page_err}"
             return (PageResult(page_num=page_num, raw_text="", corrected_text="",
-                               engine=OCREngine.TESSERACT, confidence=0.0,
+                               engine=OCREngine.RAPIDOCR, confidence=0.0,
                                needs_review=True, review_reason=reason),
                     [f"  p.{page_num}: ⚠ {reason} — 이 쪽은 비워 두고 계속"])
 
@@ -1377,7 +1376,7 @@ def _run_ocr(
             pages_ocr       = ocr_count,
             pages_blank     = blank_count,
             vision_pages    = vision_count,
-            engine_mode     = "vision_first" if vision_first else "tesseract_first",
+            engine_mode     = "vision_first" if vision_first else "rapidocr_first",
             file_size_bytes = file_path.stat().st_size,
             output_path     = results_path,
         )
@@ -1466,10 +1465,10 @@ def build_ui() -> gr.Blocks:
                             vision_first = gr.Radio(
                                 label="읽는 방식",
                                 choices=_vision_choices(),
-                                value="Vision 우선" if has_key else "Tesseract 우선",
+                                value="Vision 우선" if has_key else "RapidOCR 우선",
                             )
                             vision_first_note = gr.HTML(
-                                _vision_mode_note("Vision 우선" if has_key else "Tesseract 우선"))
+                                _vision_mode_note("Vision 우선" if has_key else "RapidOCR 우선"))
                             cleanup_chk = gr.Checkbox(
                                 label="문장 정제 — 쪽번호·머리글 제거, 띄어쓰기·맞춤법 교정, 문단 복원",
                                 value=bool(cfg.get("enable_cleanup", True)) and text_cleaner.is_available(),
@@ -1677,9 +1676,9 @@ def build_ui() -> gr.Blocks:
                         batch_vision_first = gr.Radio(
                             label="읽는 방식",
                             choices=_vision_choices(),
-                            value="Tesseract 우선",  # 기본값: 비용 우선 (RapidOCR 한글 v5)
+                            value="RapidOCR 우선",  # 기본값: 비용 우선 (RapidOCR 한글 v5)
                         )
-                    batch_vision_note = gr.HTML(_vision_mode_note("Tesseract 우선"))
+                    batch_vision_note = gr.HTML(_vision_mode_note("RapidOCR 우선"))
                     with gr.Row():
                         batch_cleanup_chk = gr.Checkbox(
                             label="문장 정제 — 쪽번호·머리글 제거, 띄어쓰기·맞춤법 교정, 문단 복원",
@@ -1830,7 +1829,7 @@ def build_ui() -> gr.Blocks:
 
         # 엔진 변경 — config.json 의 vision_provider 에 저장하고 관련 화면을 갱신
         def _engine_views():
-            mode = "Vision 우선" if _engine_ok(fresh=True) else "Tesseract 우선"
+            mode = "Vision 우선" if _engine_ok(fresh=True) else "RapidOCR 우선"
             return (_header_html(), _engine_guide_html(),
                     gr.update(choices=_vision_choices(), value=mode),
                     _vision_mode_note(mode),
@@ -2067,11 +2066,11 @@ def _header_html() -> str:
 
 
 def _vision_choices() -> list[tuple[str, str]]:
-    """값("Vision 우선"/"Tesseract 우선")은 처리 함수가 판별에 쓰므로 고정, 표시 문구만 엔진명 반영."""
+    """값("Vision 우선"/"RapidOCR 우선")은 처리 함수가 판별에 쓰므로 고정, 표시 문구만 엔진명 반영."""
     label = claude_vision.provider_label()
     return [
         (f"정확도 우선 — {label}가 먼저 읽고, 실패하면 로컬 엔진(RapidOCR)", "Vision 우선"),
-        (f"비용 우선 — 로컬 고성능 엔진(RapidOCR 한글 v5)이 무료로 읽고, 흐린 쪽만 {label}", "Tesseract 우선"),
+        (f"비용 우선 — 로컬 고성능 엔진(RapidOCR 한글 v5)이 무료로 읽고, 흐린 쪽만 {label}", "RapidOCR 우선"),
     ]
 
 

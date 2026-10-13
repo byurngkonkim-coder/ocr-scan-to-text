@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from PIL import Image, ImageDraw, ImageFont
 from core import detector, pdf_splitter, quality_diagnoser, preprocessor
-from core import tesseract_engine, char_normalizer, writer
+from core import rapidocr_engine, char_normalizer, writer
 from core.types import OutputFormat, FileResult, PageResult, OCREngine
 
 
@@ -161,25 +161,25 @@ class TestPreprocessor:
         assert set(arr.flatten()).issubset({0, 255})
 
 
-# ── V-03: Tesseract OCR ───────────────────────────────────────────────────────
+# ── V-03: RapidOCR 한글 v5 ────────────────────────────────────────────────────
 
-class TestTesseractEngine:
+class TestRapidOCREngine:
     def test_english_recognized(self):
         img = _make_image(["Hello World Test"])
-        result = tesseract_engine.run(img, lang="eng")
+        result = rapidocr_engine.run(img, lang="eng")
         assert "Hello" in result.text or "hello" in result.text.lower()
-        assert result.engine == OCREngine.TESSERACT
+        assert result.engine == OCREngine.RAPIDOCR
 
     def test_korean_recognized(self):
         img = _make_image(["안녕하세요 테스트입니다"])
-        result = tesseract_engine.run(img, lang="kor")
+        result = rapidocr_engine.run(img, lang="kor")
         # 일부 글자라도 인식되면 통과
         kor_chars = sum(1 for c in result.text if "가" <= c <= "힣")
         assert kor_chars > 0
 
     def test_confidence_range(self):
         img = _make_image(["test"])
-        result = tesseract_engine.run(img, lang="eng")
+        result = rapidocr_engine.run(img, lang="eng")
         assert 0.0 <= result.confidence <= 100.0
 
 
@@ -221,7 +221,7 @@ class TestWriter:
         result = FileResult(source_path=Path("test.png"), output_path=None)
         result.pages.append(PageResult(
             page_num=1, raw_text=text, corrected_text=text,
-            engine=OCREngine.TESSERACT, confidence=85.0,
+            engine=OCREngine.RAPIDOCR, confidence=85.0,
         ))
         return result
 

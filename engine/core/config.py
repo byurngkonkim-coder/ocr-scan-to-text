@@ -231,7 +231,7 @@ def get_enable_cleanup() -> bool:
 
 
 def get_confidence_threshold() -> float:
-    """Tesseract 우선 모드에서 이 신뢰도 미만이면 Vision 폴백. 기본 85."""
+    """RapidOCR 우선 모드에서 이 신뢰도 미만이면 Vision 폴백. 기본 85."""
     try:
         return float(load().get("confidence_threshold", 85.0))
     except (TypeError, ValueError):

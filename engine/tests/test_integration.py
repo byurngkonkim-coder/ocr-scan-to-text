@@ -102,7 +102,7 @@ class TestBlankDetectorIntegration:
 
         page = PageResult(
             page_num=1, raw_text="", corrected_text="",
-            engine=OCREngine.TESSERACT, confidence=0.0,
+            engine=OCREngine.RAPIDOCR, confidence=0.0,
             is_blank=True, blank_reason=blank.reason,
         )
         assert page.is_blank is True
@@ -115,14 +115,14 @@ class TestBlankDetectorIntegration:
 
 class TestPostprocessorChainIntegration:
 
-    def test_tesseract_chain_removes_margin_noise(self):
+    def test_rapidocr_chain_removes_margin_noise(self):
         from core.postprocessor import process_full
         raw = (
             "00 10: *인간은 얼마나 뛰어난 작품인가!\n"
             "21200 2 0 그러나 하나님을 버리고 성경을 멀리함으로써\n"
             "| 0 00000 진정으로 인간다운 삶이 무엇인지\n"
         )
-        result = process_full(raw, engine="tesseract")
+        result = process_full(raw, engine="rapidocr")
         # 마진 노이즈 제거됨
         assert "00 10" not in result
         assert "21200" not in result
@@ -163,14 +163,14 @@ class TestPostprocessorChainIntegration:
             "인간은 얼마나 뛰어난 작품인가!\n"
             "[그림 1: 이미지 감지됨]\n"
         )
-        clean = process_full(raw, engine="tesseract")
+        clean = process_full(raw, engine="rapidocr")
         preview = for_preview(clean)
         assert "[페이지 1]" not in preview
         assert "[그림 1" not in preview
         assert "─" not in preview
         assert "인간은" in preview
 
-    def test_l1_applied_in_tesseract_chain(self):
+    def test_l1_applied_in_rapidocr_chain(self):
         """L1 보정(char_normalizer)이 한국어 본문에 올바르게 적용되는지 확인."""
         from core.char_normalizer import normalize_all
         from core.postprocessor import process_full
@@ -181,24 +181,24 @@ class TestPostprocessorChainIntegration:
         assert "®" in normed
         assert "→" in normed
         # process_full은 L1 이후에 적용 (한국어 줄로 인식되어 보존됨)
-        result = process_full(normed, engine="tesseract")
+        result = process_full(normed, engine="rapidocr")
         assert "인간은" in result     # 한국어 본문 보존
         assert "©" in result or "저작권자" in result  # 내용 보존
 
-    def test_tesseract_chain_preserves_non_korean_content(self):
+    def test_rapidocr_chain_preserves_non_korean_content(self):
         """마진 완화 후: 영어·숫자·표·짧은 제목이 삭제되지 않아야 한다."""
         from core.postprocessor import process_full
         # 영어 본문
-        eng = process_full("This is an English document line.", engine="tesseract")
+        eng = process_full("This is an English document line.", engine="rapidocr")
         assert "English document" in eng
         # 표·숫자 데이터
-        tbl = process_full("표: 매출 1,250만원 / 비용 480만원", engine="tesseract")
+        tbl = process_full("표: 매출 1,250만원 / 비용 480만원", engine="rapidocr")
         assert "1,250만원" in tbl and "480만원" in tbl
         # 연도가 붙은 숫자 토큰 보존
-        yr = process_full("2026년 3분기 실적", engine="tesseract")
+        yr = process_full("2026년 3분기 실적", engine="rapidocr")
         assert "2026년" in yr
         # 마진 노이즈는 여전히 제거 (회귀 방지)
-        mg = process_full("00 10: *인간은 얼마나 뛰어난 작품인가!", engine="tesseract")
+        mg = process_full("00 10: *인간은 얼마나 뛰어난 작품인가!", engine="rapidocr")
         assert "00 10" not in mg and "인간은" in mg
 
 
@@ -259,7 +259,7 @@ class TestStorageManagerIntegration:
         result_file.write_text("결과", encoding="utf-8")
         entry_id = sm.record(
             "파일.pdf", result_file, None,
-            5, 5, 0, 2, "tesseract_first", 1024
+            5, 5, 0, 2, "rapidocr_first", 1024
         )
         assert len(sm.load_history()) == 1
         sm.delete_entry(entry_id, delete_files=False)
@@ -273,7 +273,7 @@ class TestStorageManagerIntegration:
         result_file.write_text("결과", encoding="utf-8")
         entry_id = sm.record(
             "파일.pdf", result_file, None,
-            3, 3, 0, 0, "tesseract_first", 512
+            3, 3, 0, 0, "rapidocr_first", 512
         )
         assert result_file.exists()
         sm.delete_entry(entry_id, delete_files=True)
@@ -376,7 +376,7 @@ class TestWriterBlankPageIntegration:
                 page_num=spec["num"],
                 raw_text=spec.get("text", ""),
                 corrected_text=spec.get("text", ""),
-                engine=OCREngine.TESSERACT,
+                engine=OCREngine.RAPIDOCR,
                 confidence=spec.get("conf", 85.0),
                 is_blank=spec.get("blank", False),
                 blank_reason=spec.get("reason", ""),
@@ -435,21 +435,21 @@ class TestWriterBlankPageIntegration:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 5. 전체 파이프라인 E2E (API 키 없이 Tesseract만)
+# 5. 전체 파이프라인 E2E (API 키 없이 RapidOCR만)
 # ══════════════════════════════════════════════════════════════════════════════
 
 class TestFullPipelineE2E:
 
     def test_image_to_file_pipeline(self, tmp_path, monkeypatch):
         """
-        이미지 → 품질진단 → 전처리 → Tesseract → L1보정 → 후처리 → 파일저장
-        API 키 없이 Tesseract 전용으로 전체 파이프라인 테스트.
+        이미지 → 품질진단 → 전처리 → RapidOCR → L1보정 → 후처리 → 파일저장
+        API 키 없이 RapidOCR 전용으로 전체 파이프라인 테스트.
         """
         import core.config as cfg
         monkeypatch.setattr(cfg, "_CONFIG_FILE", tmp_path / "cfg.json")
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
-        from core import quality_diagnoser, preprocessor, tesseract_engine
+        from core import quality_diagnoser, preprocessor, rapidocr_engine
         from core import char_normalizer, postprocessor
         from core.types import OCREngine
 
@@ -465,17 +465,17 @@ class TestFullPipelineE2E:
         assert report.height_px == 600
 
         # 전처리
-        processed = preprocessor.preprocess(img, report)
+        processed = preprocessor.preprocess_for_rapidocr(img, report)
         assert isinstance(processed, Image.Image)
 
-        # Tesseract OCR
-        ocr_result = tesseract_engine.smart_run(processed, default_lang="kor+eng")
-        assert ocr_result.engine == OCREngine.TESSERACT
+        # RapidOCR 한글 v5
+        ocr_result = rapidocr_engine.smart_run(processed, default_lang="kor+eng")
+        assert ocr_result.engine == OCREngine.RAPIDOCR
         assert 0.0 <= ocr_result.confidence <= 100.0
 
         # L1 + 후처리
         text = char_normalizer.normalize_all(ocr_result.text)
-        text = postprocessor.process_full(text, engine="tesseract")
+        text = postprocessor.process_full(text, engine="rapidocr")
         assert isinstance(text, str)
 
     def test_blank_page_skipped_e2e(self, tmp_path, monkeypatch):
@@ -490,7 +490,7 @@ class TestFullPipelineE2E:
         # 빈 페이지 PageResult 생성 (ocr_gradio._process_page 동작 시뮬레이션)
         page = PageResult(
             page_num=3, raw_text="", corrected_text="",
-            engine=OCREngine.TESSERACT, confidence=0.0,
+            engine=OCREngine.RAPIDOCR, confidence=0.0,
             is_blank=True, blank_reason=r.reason,
         )
         assert page.is_blank is True
@@ -504,11 +504,11 @@ class TestFullPipelineE2E:
         result = FileResult(source_path=Path("mixed.pdf"), output_path=None)
         result.pages = [
             PageResult(1, "텍스트 내용", "텍스트 내용",
-                       OCREngine.TESSERACT, 85.0),
-            PageResult(2, "", "", OCREngine.TESSERACT, 0.0,
+                       OCREngine.RAPIDOCR, 85.0),
+            PageResult(2, "", "", OCREngine.RAPIDOCR, 0.0,
                        is_blank=True, blank_reason="공백 100%"),
             PageResult(3, "다른 텍스트", "다른 텍스트",
-                       OCREngine.TESSERACT, 80.0),
+                       OCREngine.RAPIDOCR, 80.0),
         ]
 
         out = writer.write(result, tmp_path, OutputFormat.TXT)

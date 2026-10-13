@@ -31,7 +31,7 @@ def _make_text_image(texts: list[str], size=(800, 400)) -> Image.Image:
 def _make_page(text: str, figures: list[str] | None = None) -> PageResult:
     return PageResult(
         page_num=1, raw_text=text, corrected_text=text,
-        engine=OCREngine.TESSERACT, confidence=85.0,
+        engine=OCREngine.RAPIDOCR, confidence=85.0,
         figures=figures or [],
     )
 

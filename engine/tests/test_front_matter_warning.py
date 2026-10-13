@@ -36,13 +36,13 @@ def test_warning_reaches_screen(tmp_path, monkeypatch):
     body = "본문 문장이 아주 길게 이어집니다. " * 40
     monkeypatch.setattr(ocr_gradio, "_process_page", lambda img, n, *a, **k: (PageResult(
         page_num=n, raw_text=body, corrected_text=body,
-        engine=OCREngine.TESSERACT, confidence=95.0), []))
+        engine=OCREngine.RAPIDOCR, confidence=95.0), []))
     monkeypatch.setattr(text_cleaner, "is_available", lambda: True)
     monkeypatch.setattr(text_cleaner._gemini, "run_text", lambda p: "요약된 한 줄." * 10)
     png = Path(__file__).parent / "sample_docs" / "sample_kor_eng.png"
     last = None
     for last in ocr_gradio.process_full(
             SimpleNamespace(name=str(png)), "kor+eng", "txt", False, False, True, False, 0, "",
-            "Tesseract 우선", cleanup=True, front_matter=True, progress=lambda *a, **k: None):
+            "RapidOCR 우선", cleanup=True, front_matter=True, progress=lambda *a, **k: None):
         pass
     assert "앞부속" in str(last[1])

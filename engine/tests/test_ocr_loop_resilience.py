@@ -39,17 +39,17 @@ def sandbox(tmp_path, monkeypatch):
 def _fake_page(fail_on=None):
     def fake(image, page_num, *a, **k):
         if page_num == fail_on:
-            raise RuntimeError("Tesseract 폭발")
+            raise RuntimeError("OCR 폭발")
         t = f"{page_num}쪽 본문입니다."
         return PageResult(page_num=page_num, raw_text=t, corrected_text=t,
-                          engine=OCREngine.TESSERACT, confidence=95.0), []
+                          engine=OCREngine.RAPIDOCR, confidence=95.0), []
     return fake
 
 
 def _run(src):
     return ocr_gradio.process_full(
         SimpleNamespace(name=str(src)), "kor+eng", "txt",
-        False, False, True, False, 0, "", "Tesseract 우선",
+        False, False, True, False, 0, "", "RapidOCR 우선",
         cleanup=False, front_matter=False, progress=lambda *a, **k: None)
 
 

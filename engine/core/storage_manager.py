@@ -120,7 +120,7 @@ def record(
         "pages_ocr":     pages_ocr,
         "pages_blank":   pages_blank,
         "vision_pages":  vision_pages,
-        "engine_mode":   engine_mode,       # 'vision_first' or 'tesseract_first'
+        "engine_mode":   engine_mode,       # 'vision_first' or 'rapidocr_first'
         "file_size_kb":  round(file_size_bytes / 1024, 1),
         "result_size_kb": round(Path(result_path).stat().st_size / 1024, 1)
                           if result_path and Path(result_path).exists() else 0,
@@ -197,9 +197,11 @@ def get_stats() -> dict:
 
 
 def _engine_cell(e: dict) -> str:
-    """엔진 모드 + OCR 경로면 Vision 처리 쪽 수 — Tesseract 로 대거 강등된 실행을 드러낸다."""
+    """엔진 모드 + OCR 경로면 Vision 처리 쪽 수 — 로컬 OCR 로 대거 강등된 실행을 드러낸다."""
     mode = e.get("engine_mode", "")
-    if mode in ("vision_first", "tesseract_first") and e.get("pages_total"):
+    if mode == "tesseract_first":   # 2026-10-13 이전 기록의 같은 모드(로컬 엔진 우선) 이름
+        mode = "rapidocr_first"
+    if mode in ("vision_first", "rapidocr_first") and e.get("pages_total"):
         return f"{mode} · Vision {e.get('vision_pages', 0)}/{e['pages_total']}쪽"
     return mode
 

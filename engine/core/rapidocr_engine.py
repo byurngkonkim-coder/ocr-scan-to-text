@@ -1,7 +1,7 @@
-"""RapidOCR (ONNX Runtime) 엔진 — 초경량·고속 로컬 OCR (기본 권장 엔진).
+"""RapidOCR (ONNX Runtime) 엔진 — 이 도구의 유일한 로컬 OCR (한글 v5 모델).
 
-Tesseract와 달리 C++ 바이너리 시스템 설치가 필요 없으며,
-순수 Python 및 ONNX Runtime만으로 CPU에서 고속·고정확도 텍스트 인식을 수행합니다.
+별도 프로그램 설치 없이 순수 Python 및 ONNX Runtime만으로 CPU에서 고속·고정확도 텍스트 인식을 수행합니다.
+본문 판독(smart_run)·그림 감지·빈 쪽 판정(read_boxes)이 모두 이 엔진을 쓴다.
 """
 from __future__ import annotations
 
@@ -151,8 +151,25 @@ def run(image: Image.Image, lang: str = "kor+eng", fast: bool = False, refine: b
 
 def smart_run(image: Image.Image, default_lang: str = "kor+eng", fast: bool = False, refine: bool = True) -> OCRResult:
     """
-    스마트 실행: RapidOCR을 사용하여 최적 인식 수행.
-    (tesseract_engine.smart_run과 동일한 시그니처 제공)
+    로컬 OCR 진입점 — 한 번 읽고, 거의 영문인 쪽만 영문 모델로 다시 읽는다.
+
+    한국어 모델은 'kor'·'kor+eng' 가 같은 모델이라 한국어 쪽은 다시 읽지 않는다.
+    RapidOCR 이 없거나 실패하면 빈 결과(신뢰도 0)를 돌려준다 — 처리를 멈추지 않고,
+    호출부가 저신뢰 쪽처럼 Vision 폴백하거나 '검토 필요'로 남긴다.
     """
-    return run(image, lang=default_lang, fast=fast, refine=refine)
+    try:
+        res = run(image, lang=default_lang, fast=fast, refine=refine)
+        if default_lang != "eng" and _mostly_english(res.text):
+            res = run(image, lang="eng", fast=fast, refine=refine)
+        return res
+    except Exception as e:
+        logger.warning(f"RapidOCR 판독 실패 — 신뢰도 0 으로 넘김: {e}")
+        return OCRResult(text="", confidence=0.0, engine=OCREngine.RAPIDOCR, has_jamo_split=False)
+
+
+def _mostly_english(text: str) -> bool:
+    """영문 글자가 영문+한글의 85% 를 넘는 쪽."""
+    eng = sum(1 for c in text if ord(c) < 128 and c.isalpha())
+    kor = sum(1 for c in text if "가" <= c <= "힣")
+    return eng + kor > 0 and eng / (eng + kor) > 0.85
 

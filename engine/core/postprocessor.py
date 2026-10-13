@@ -2,10 +2,10 @@
 후처리 — OCR 엔진별 전체 처리 체인
 
 처리 순서 (엔진별 분기):
-  ┌─ Tesseract ─────────────────────────────────────────────────┐
-  │  L1(char_normalizer) → 마진노이즈제거 → 단락복원 → 공백정규화 │
+  ┌─ RapidOCR ──────────────────────────────────────────────────┐
+  │  L1 → 쪽번호·마진노이즈제거 → 단락복원 → 공백정규화         │
   └─────────────────────────────────────────────────────────────┘
-  ┌─ Claude Vision ──────────────────────────────────────────────┐
+  ┌─ Vision (Gemini·Claude·Ollama) ─────────────────────────────┐
   │  L1(char_normalizer) → 단락복원 → 공백정규화                 │
   │  (Vision은 이미 깨끗한 텍스트 → 마진제거 생략)               │
   └─────────────────────────────────────────────────────────────┘
@@ -65,14 +65,14 @@ def apply(text: str, regions: list[Region] | None = None) -> str:
     return text.strip()
 
 
-def process_full(text: str, engine: str = "tesseract") -> str:
+def process_full(text: str, engine: str = "rapidocr") -> str:
     """
     OCR 결과 전체 처리 체인 — 저장 파일·미리보기 공통 사용.
 
-    engine='tesseract':
-      마진노이즈제거(extract_korean_text) → 단락복원 → 공백정규화
-    engine='claude_vision':
-      단락복원 → 공백정규화  (Vision 결과는 이미 깨끗)
+    engine='rapidocr':
+      쪽번호·마진노이즈제거(extract_korean_text) → 단락복원 → 공백정규화
+    Vision 엔진('gemini'·'claude_vision'·'ollama')·'pdf_text':
+      단락복원 → 공백정규화  (이미 깨끗한 텍스트)
 
     L1(char_normalizer)·L2(spellcheck)·L3(llm_corrector)는
     _finalize()에서 이미 적용되므로 여기서는 호출하지 않음.
@@ -80,7 +80,7 @@ def process_full(text: str, engine: str = "tesseract") -> str:
     if not text.strip():
         return text
 
-    if engine in ("tesseract", "rapidocr"):
+    if engine == "rapidocr":
         # 로컬 OCR: 쪽 번호·마진 숫자·스캔 잡음·노이즈 줄 제거
         text = _strip_page_number_lines(text)
         text = extract_korean_text(text)
