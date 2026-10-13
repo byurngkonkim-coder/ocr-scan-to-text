@@ -31,6 +31,15 @@ if not exist "%PYDIR%\python.exe" (
     exit /b 1
 )
 
+rem A venv copied from another PC points to a Python that does not exist here.
+"%PYDIR%\python.exe" --version >nul 2>&1
+if errorlevel 1 (
+    echo  [ERROR] Python venv is broken on this PC - copied from another PC?
+    echo  Please run install.bat to rebuild it.
+    pause
+    exit /b 1
+)
+
 echo  [OK] Local Engine: RapidOCR (PP-OCRv5 Korean ONNX) Ready.
 
 rem Server runs with no console window. Output goes to ocr_server.log / ocr_server_err.log.
