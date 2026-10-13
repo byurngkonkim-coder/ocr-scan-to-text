@@ -35,6 +35,10 @@ class DetectionResult:
 _MIN_FIGURE_AREA = 5_000
 _MIN_TABLE_AREA = 3_000
 _MIN_FORMULA_AREA = 1_000
+# 그림 후보의 최소 높이·너비 (쪽 크기 대비) — 높이가 작으면 글자 줄 조각, 너비가 작으면
+# 쪽 가장자리 그림자 띠다(예측기계 실측: 띠 너비 10~11.5%, 진짜 그림 21~60%)
+_MIN_FIGURE_H = 0.08
+_MIN_FIGURE_W = 0.15
 
 # 수식 판단용 수학 기호 패턴
 _MATH_PATTERN = re.compile(r"[∑∫∂√±×÷≤≥≠∞∈∉⊂⊃∪∩αβγδεζηθλμπρστφχψω]|"
@@ -208,6 +212,10 @@ def _detect_figures(gray: np.ndarray, orig: Image.Image) -> list[tuple[int, int,
             continue
         # 텍스트 행처럼 넓고 얇은 영역 제외
         if bh < 20 or (bw / bh > 15):
+            continue
+        # 예측기계 스캔본 실측: 본문 쪽마다 한 줄 높이(쪽 높이의 2~5%) 조각이 40~70개 그림 후보가 돼
+        # 줄이 지워졌고, 가장자리 띠는 줄 끝 글자를 지웠다. 진짜 그림은 높이 13~34%·너비 21~60%였다
+        if bh < h_img * _MIN_FIGURE_H or bw < w_img * _MIN_FIGURE_W:
             continue
         boxes.append((x, y, bw, bh))
 

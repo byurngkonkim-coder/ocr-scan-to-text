@@ -372,6 +372,8 @@ def _process_page(image, page_num: int, lang: str,
     """
     logs: list[str] = []
     placeholders: list[str] = []
+    # 로컬 엔진 이름 — tesseract_engine 은 RapidOCR 이 있으면 그쪽으로 넘긴다(진행 기록에 실제 엔진을 쓴다)
+    local_name = "RapidOCR 한글 v5" if rapidocr_engine.is_available() else "Tesseract"
 
     # ══════════════════════════════════════════════════════════════════════════
     # 0단계: 빈 페이지 감지 (OCR 전 차단 — API 크레딧 절약)
@@ -404,11 +406,11 @@ def _process_page(image, page_num: int, lang: str,
             logs.append(f"  p.{page_num}: ✅ Vision 완료 ({time.time() - _t:.1f}s)")
             return _finalize(ocr_result, page_num, placeholders, llm_correct, llm_budget), logs
         except Exception as e:
-            logs.append(f"  p.{page_num}: Vision 오류 {time.time() - _t:.1f}s → Tesseract 폴백 ({e})")
+            logs.append(f"  p.{page_num}: Vision 오류 {time.time() - _t:.1f}s → {local_name} 폴백 ({e})")
             # Vision 실패 시 Tesseract로 전환
 
     elif vision_first and not claude_vision.is_available():
-        logs.append(f"  p.{page_num}: ⚠ API 키 미설정 → Tesseract로 처리")
+        logs.append(f"  p.{page_num}: ⚠ API 키 미설정 → {local_name}(으)로 처리")
 
     # ══════════════════════════════════════════════════════════════════════════
     # Tesseract 처리 (우선 or Vision 실패 폴백)
@@ -433,7 +435,7 @@ def _process_page(image, page_num: int, lang: str,
             ocr_result = claude_vision.run(image, lang_hint=lang)
         except Exception as e:
             vision_err = str(e)
-            logs.append(f"  p.{page_num}: 폴백 실패 → Tesseract로 계속 ({e})")
+            logs.append(f"  p.{page_num}: 폴백 실패 → {local_name}(으)로 계속 ({e})")
         else:
             return _finalize(ocr_result, page_num, placeholders, llm_correct, llm_budget), logs
 
@@ -472,8 +474,7 @@ def _process_page(image, page_num: int, lang: str,
         return _finalize(ocr_result, page_num, placeholders, llm_correct, llm_budget,
                          needs_review=True, review_reason=reason), logs
 
-    engine_name = "RapidOCR 한글 v5" if rapidocr_engine.is_available() else "Tesseract"
-    logs.append(f"  p.{page_num}: {engine_name} 신뢰도 {ocr_result.confidence:.1f}%")
+    logs.append(f"  p.{page_num}: {local_name} 신뢰도 {ocr_result.confidence:.1f}%")
     # 품질 불량 진단 쪽은 Tesseract 신뢰도가 높아도 폴백 실패를 결과에 남긴다
     return _finalize(ocr_result, page_num, placeholders, llm_correct, llm_budget,
                      needs_review=bool(vision_err),

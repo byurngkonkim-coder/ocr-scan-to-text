@@ -102,6 +102,26 @@ def test_heading_and_list_not_joined_to_body():
     assert "국내 극장 4,928,000" in out and "국외 극장 1,228,000" in out
 
 
+def test_line_wrap_inside_word_joined_without_space():
+    # 예측기계 30쪽 실측: 줄 끝에서 잘린 낱말을 띄워 이었다('운용되었 다', '일 반적인')
+    body = "".join(f"본문 {k}번째 줄은 쪽의 오른쪽 끝까지 꽉 차 있다.\n" for k in range(6))
+    page = (body +
+            "그런 차량은 공장이나 창고 등 세부 평면도가 확보된 장소에서만 운용되었\n"
+            "다. 그러나 일반 도로에서는 이런 차량을 사용할 수 없었고 모든 데이터를\n"
+            "꼼꼼히 살피는 동시에 운전자의 행동을 유심히 관찰했다고 한다.")
+    out = pp.join_broken_lines(page)
+    assert "운용되었다." in out and "운용되었 다" not in out
+    assert "데이터를 꼼꼼히" in out          # 낱말 경계는 그대로 띄운다
+
+
+def test_page_number_lines_dropped_at_page_edges():
+    # 예측기계 30쪽: 쪽 번호 줄이 본문 끝에 붙었다('어떤 환경데 30')
+    text = "31\n본문 첫 줄은 이렇게 시작한다.\n2017년에 11까지 돌려 보라\n30"
+    out = pp.process_full(text, engine="rapidocr")
+    assert out.splitlines()[0] == "본문 첫 줄은 이렇게 시작한다."
+    assert not out.rstrip().endswith("30") and "11까지" in out
+
+
 def test_punctuation_after_initials_kept():
     assert pp._fix_spacing("C.의 주장과 U.S.의 정책") == "C.의 주장과 U.S.의 정책"
     assert pp._fix_spacing("했다.그리고") == "했다. 그리고"

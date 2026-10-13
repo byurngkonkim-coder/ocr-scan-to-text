@@ -94,6 +94,19 @@ class TestFigureDetectorUnit:
         result = figure_detector.detect(img)
         assert [r for r in result.regions if r.kind == "figure"] == []
 
+    def test_line_height_blobs_are_not_figure_candidates(self):
+        # 회귀: 스캔 본문 쪽에서 글자 줄 조각(한 줄 높이)이 쪽마다 40~70개 그림 후보가 되고,
+        # Tesseract 가 한글 조각을 못 읽어 그대로 마스킹 → 줄 누락·깨진 글자 (예측기계 30쪽)
+        gray = np.full((1750, 1240), 255, np.uint8)
+        for i in range(8):                                   # 본문 줄 조각 (높이 30px)
+            gray[200 + i * 60:230 + i * 60, 150:450] = 0
+        gray[900:1400, 300:900] = 80                         # 진짜 그림 (500x600)
+        gray[100:1650, 1120:1220] = 120                      # 쪽 가장자리 그림자 띠 (너비 8%)
+        boxes = figure_detector._detect_figures(gray, Image.fromarray(gray).convert("RGB"))
+        assert len(boxes) == 1
+        x, y, w, h = boxes[0]
+        assert y <= 900 and y + h >= 1400 and w >= 600
+
     def test_text_on_picture_survives_masking(self):
         # 회귀: 그림(색 영역) 위에 얹힌 글자가 영역째 흰색으로 지워지던 문제
         from core import tesseract_engine  # noqa: F401 — tesseract 경로 설정
