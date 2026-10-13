@@ -24,8 +24,9 @@ _WRAP_TABLE = Path(__file__).parent / "data" / "wrap_nospace.txt"
 # 쪽 머리·끝의 쪽 번호 줄 ('30', '- 30 -')
 _PAGE_NUM_LINE = re.compile(r'^[\s\-–—]*\d{1,3}[\s\-–—]*$')
 # 쪽 꼬리 '장·부 제목+쪽번호' ('4장왜지능이라고 하는가?55', '13 1부 예측') — 쪽 마지막 줄이면 앞 줄에 잇지 않는다.
-# 따로 남아야 문서 단위 머리글 제거(text_cleaner.strip_running_headers)가 반복으로 알아본다(예측기계 141곳)
-_PAGE_FOOTER_LINE = re.compile(r'^(?:\d{1,3}\s*)?\d{1,2}\s?[장부]\s?\S.{0,35}?\s?\d{1,3}$|^\d{1,3}\s+\d{1,2}\s?[장부]\s?\S.{0,35}$')
+# 따로 남아야 문서 단위 머리글 제거(text_cleaner.strip_running_headers)가 모양으로 알아보고 지운다(예측기계 141곳)
+# 짝수 쪽 꼬리는 OCR 이 쪽번호와 부 번호를 붙여 읽는다('1582부의사결정' = 158쪽 2부) → 사이 공백은 없어도 된다
+_PAGE_FOOTER_LINE = re.compile(r'^(?:\d{1,3}\s*)?\d{1,2}\s?[장부]\s?\S.{0,35}?\s?\d{1,3}$|^\d{1,3}\s*\d{1,2}\s?[장부]\s?\S.{0,35}$')
 
 # 단락 끝 판단 (이 문자로 끝나면 새 단락 시작 가능)
 _SENT_END = re.compile(r'[.!?。！？…\"\'\)\]》」』]\s*$')
@@ -90,6 +91,8 @@ def process_full(text: str, engine: str = "rapidocr") -> str:
 
     # 공통: 단락 복원 + 공백 정규화
     text = join_broken_lines(text)
+    if engine == "rapidocr":
+        text = re.sub(r'^[ \t]+', '', text, flags=re.M)   # 문단 첫 줄 표시는 줄 잇기에서 다 썼다
     text = _fix_spacing(text)
     text = remove_noise_lines(text)
     text = _normalize_whitespace(text)
@@ -128,7 +131,8 @@ def extract_korean_text(text: str) -> str:
         if re.sub(r'[^\w가-힣]', '', proc) == '':
             continue
 
-        cleaned.append(proc)
+        # 문단 첫 줄 표시(rapidocr_engine._mark_paragraph_starts 의 공백 2칸)는 남긴다 — join_broken_lines 가 본다
+        cleaned.append('  ' + proc if line.startswith('  ') else proc)
 
     return _normalize_whitespace('\n'.join(cleaned))
 

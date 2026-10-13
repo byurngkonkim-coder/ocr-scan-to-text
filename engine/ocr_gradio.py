@@ -1346,6 +1346,11 @@ def _run_ocr(
                 raw_path = None
                 step_logs.append(f"  ⚠ 정제 전 원문 사본을 만들지 못했습니다(복구용 원문 없음): {e}")
         else:
+            # 정제 없이 저장하는 결과물에도 쪽 머리·꼬리('2장 …19'·'1582부의사결정')를 뗀다 —
+            # 예전엔 정제 경로에서만 떼어 RapidOCR 결과물은 표본 40쪽 중 28쪽에 남았다(2026-10-14)
+            for page, text in zip(content_pages, text_cleaner.strip_running_headers(
+                    [p.corrected_text for p in content_pages])):
+                page.corrected_text = text
             out_path = writer.write(result, tmp_dir, out_fmt)
     except Exception as e:
         if ckpt is not None:

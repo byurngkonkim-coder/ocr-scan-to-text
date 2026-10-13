@@ -141,9 +141,21 @@ def test_page_footer_not_joined_into_last_body_line():
     # 예측기계 54쪽 실측: 쪽 꼬리('장 제목+쪽번호')가 앞 줄 끝에 붙어('…된다.회 4장왜지능이라고 하는가?55')
     # 문서 단위 머리글 제거가 놓쳤고, 각주 줄에 붙은 것은 정제 LLM 이 각주째 지웠다
     body = "".join(f"본문 {k}번째 줄은 쪽의 오른쪽 끝까지 꽉 차 있다.\n" for k in range(6))
-    for footer in ("4장왜지능이라고 하는가?55", "12장워크플로해체179", "2장 값이 싸지면 모든 것이 바뀐다 19"):
+    # 짝수 쪽 꼬리('쪽번호+부 제목')는 OCR 이 숫자를 붙여 읽는다 — '1582부의사결정'(158쪽 2부, 예측기계 실측 4건)
+    for footer in ("4장왜지능이라고 하는가?55", "12장워크플로해체179", "2장 값이 싸지면 모든 것이 바뀐다 19",
+                   "1582부의사결정", "172 3부툴"):
         page = body + "평균적으로 정확하다는것은사실 번번이 틀린다는뜻도 된다.회\n" + footer
         assert pp.join_broken_lines(page).splitlines()[-1] == footer, footer
     # 쪽 끝 본문 줄이 숫자로 끝나는 보통 문장이면 그대로 잇는다
     page = body + "그 회사의 매출은 꾸준히 늘어 2019년에는 역대 최고인\n1,250억 원에 이르렀다 2019"
     assert pp.join_broken_lines(page).splitlines()[-1].startswith("그 회사의 매출은")
+
+
+def test_paragraph_start_mark_survives_without_period():
+    # 예측기계 158쪽 실측: OCR 이 마침표를 빠뜨려('…따라달라진다') 다음 문단이 앞 문장 끝에 붙었다.
+    # rapidocr_engine 이 들여 쓴 줄 앞에 붙인 공백 2칸을 잡음 제거가 지워 줄 잇기가 몰랐다
+    body = "".join(f"본문 {k}번째 줄은 쪽의 오른쪽 끝까지 꽉 차 있는 줄이다\n" for k in range(4))
+    page = body + "된기능도할 때그상대적 이득이어느정도인지에 따라달라진다\n  인간과 기계는데이터의유형에 따라 입력이나 훈련이나\n위한데이터를축적한다."
+    out = pp.process_full(page).splitlines()
+    assert out[-1] == "인간과 기계는데이터의유형에 따라 입력이나 훈련이나 위한데이터를축적한다.", out
+    assert out[-2].endswith("따라달라진다"), out

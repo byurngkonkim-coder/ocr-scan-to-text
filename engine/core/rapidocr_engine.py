@@ -77,6 +77,36 @@ def read_boxes(image: Image.Image, lang: str = "kor+eng") -> list[tuple[str, flo
     return out
 
 
+def _mark_paragraph_starts(lines: list[str], boxes) -> list[str]:
+    """들여 쓴 줄(문단 첫 줄) 앞에 공백 2칸을 붙인다 — postprocessor.join_broken_lines 가 앞 줄과 잇지 않는다.
+
+    OCR 이 문단 끝 마침표를 빠뜨리면('…따라 달라진다') 줄 잇기 규칙이 다음 문단을 앞 문장 끝에 붙였다
+    (예측기계 158쪽, 2026-10-14). 글자만으로는 문단 시작을 알 수 없어 상자 좌표의 들여쓰기를 쓴다.
+    문단 첫 줄 = 왼쪽 여백보다 0.6~3.5줄높이 들어가 있고, 오른쪽 끝까지 차 있고, 앞·뒤 줄은 여백에 붙은 줄.
+    여러 줄이 모두 들여 쓴 인용 단락과 크게 들여 쓴 가운데 제목은 표시하지 않는다.
+    오른쪽까지 차야 하는 까닭: 각주 둘째 줄('온다.')이 내어쓰기로 들어가 있는데 OCR 이 글머리 '•' 를
+    읽지 않아 문단 첫 줄로 잘못 표시됐다(예측기계 28·34쪽).
+    """
+    if len(lines) != len(boxes) or len(lines) < 3:
+        return lines
+    x0 = [min(p[0] for p in b) for b in boxes]
+    x1 = [max(p[0] for p in b) for b in boxes]
+    h = float(np.median([max(p[1] for p in b) - min(p[1] for p in b) for b in boxes]))
+    full = max(x1[i] - x0[i] for i in range(len(lines))) * 0.8
+    wide = [i for i in range(len(lines)) if x1[i] - x0[i] >= full]
+    margin = float(np.median([x0[i] for i in wide]))
+    right = float(np.median([x1[i] for i in wide]))
+    at_margin = [abs(x - margin) < 0.4 * h for x in x0]
+    out = []
+    for i, line in enumerate(lines):
+        indent = x0[i] - margin
+        if (0.6 * h <= indent <= 3.5 * h and x1[i] >= right - h and (i == 0 or at_margin[i - 1])
+                and i + 1 < len(lines) and at_margin[i + 1]):
+            line = "  " + line
+        out.append(line)
+    return out
+
+
 def run(image: Image.Image, lang: str = "kor+eng", fast: bool = False, refine: bool = True) -> OCRResult:
     """
     이미지에 RapidOCR(ONNX)을 실행하고 OCRResult 반환.
@@ -117,16 +147,20 @@ def run(image: Image.Image, lang: str = "kor+eng", fast: bool = False, refine: b
     # 개별 라인 텍스트 및 신뢰도 수집
     lines: list[str] = []
     confs: list[float] = []
+    line_boxes = []
+    boxes = getattr(result, "boxes", None)
 
     for idx, text in enumerate(txts):
         line_str = str(text).strip()
         if line_str:
             lines.append(line_str)
+            if boxes is not None and idx < len(boxes):
+                line_boxes.append(boxes[idx])
             score = float(scores[idx]) if idx < len(scores) else 1.0
             # 0.0~1.0 score -> 0.0~100.0 스케일
             confs.append(score * 100.0)
 
-    full_text = "\n".join(lines)
+    full_text = "\n".join(_mark_paragraph_starts(lines, line_boxes))
     avg_conf = sum(confs) / len(confs) if confs else 0.0
 
     # MyOCR의 고도화된 한국어 정제기 적용

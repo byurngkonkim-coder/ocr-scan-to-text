@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 
 from core import config
 from core import gemini_vision as _gemini
+from core.postprocessor import _PAGE_FOOTER_LINE
 
 # 페이지 경계 센티넬 — 입력에 실제로 등장할 가능성이 없는 문자열
 PAGEBREAK = "⟨PAGEBREAK⟩"
@@ -673,7 +674,11 @@ def _edge_indices(lines: list[str]) -> list[int]:
 
 
 def strip_running_headers(pages: list[str]) -> list[str]:
-    """페이지 맨 첫/끝 줄에 _HEADER_MIN_PAGES쪽 이상 반복되는 줄(러닝헤더)과 '제목 | 쪽' 꼬리말을 제거."""
+    """페이지 맨 첫/끝 줄에 _HEADER_MIN_PAGES쪽 이상 반복되는 줄(러닝헤더)과 '제목 | 쪽' 꼬리말을 제거.
+
+    '장·부 제목+쪽번호' 쪽 꼬리(postprocessor._PAGE_FOOTER_LINE)도 모양만으로 뗀다 — 짧은 장은 5번 미만이라
+    반복 규칙에 안 걸리고, 짝수 쪽 꼬리('1582부의사결정')는 쪽마다 달라 묶이지 않았다(예측기계 표본 40쪽 중
+    28쪽에 남음, 2026-10-14). 쪽번호가 붙어 있어 장 제목(번호 없음)과 헷갈리지 않으므로 첫 등장도 뗀다."""
     split = [p.splitlines() for p in pages]
     seen: dict[str, set[int]] = {}
     for n, lines in enumerate(split):
@@ -686,7 +691,7 @@ def strip_running_headers(pages: list[str]) -> list[str]:
     for n, lines in enumerate(split):
         drop = {i for i in _edge_indices(lines)
                 if ((k := _header_key(lines[i])) in headers and headers[k] != n)
-                or _FOOTER_RE.match(lines[i].strip())}
+                or _FOOTER_RE.match(lines[i].strip()) or _PAGE_FOOTER_LINE.match(lines[i].strip())}
         out.append("\n".join(l for i, l in enumerate(lines) if i not in drop)
                    if drop else pages[n])
     return out
