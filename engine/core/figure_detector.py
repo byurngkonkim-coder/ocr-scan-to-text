@@ -48,6 +48,15 @@ _TEXT_BOX_PAD = 4   # 되살릴 단어 상자 여유 (획 끝 잘림 방지)
 _OCR_MARGIN = 20    # 영역 OCR 시 둘러 줄 흰 여백
 
 
+def _tesseract_ready() -> bool:
+    from core import tesseract_engine  # noqa: F401 — Windows 기본 설치 경로 설정
+    try:
+        pytesseract.get_tesseract_version()
+    except (pytesseract.TesseractNotFoundError, OSError):
+        return False
+    return True
+
+
 def _to_gray_cv(image: Image.Image) -> np.ndarray:
     arr = np.array(image.convert("RGB"))
     return cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
@@ -61,7 +70,13 @@ def detect(image: Image.Image, lang: str = "kor+eng") -> DetectionResult:
       1. 표 감지 (수평·수직 선분 격자 패턴)
       2. 그림 감지 (연속 윤곽선 + 면적)
       3. 수식 감지 (수학 기호 밀집 영역)
+
+    Tesseract 가 없으면 감지를 건너뛴다 — 후보 안의 글자를 확인할 수 없어 마스킹하면
+    본문이 지워질 수 있고, 예외를 올리면 쪽 전체가 처리 오류가 된다(로컬 엔진은 RapidOCR).
     """
+    if not _tesseract_ready():
+        return DetectionResult(masked_image=image)
+
     img_cv = _to_gray_cv(image)
     h, w = img_cv.shape
 
