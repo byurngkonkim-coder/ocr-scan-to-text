@@ -24,6 +24,7 @@ from core import spellcheck, figure_detector, llm_corrector
 from core import config, usage_tracker, blank_detector, storage_manager
 from core import text_cleaner
 from core import pdf_text_layer
+from core import margin_detector
 import batch_runner
 from core.types import FileResult, OutputFormat, PageResult, OCREngine
 
@@ -333,13 +334,17 @@ def _status_text(page_num: int, total: int, pct: int,
 # 공통: 페이지 계획 (지연 렌더링)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _page_plan(file_path: Path, start_page: int = 1, max_pages: int | None = None):
+def _page_plan(file_path: Path, start_page: int = 1, max_pages: int | None = None,
+               notes: list[str] | None = None):
     """
     (총페이지수, 이터레이터[(page_num, image)]) 반환.
 
     대용량(책 스캔) 대응: PDF는 전 페이지를 한꺼번에 메모리에 올리지 않고
     `pdf_splitter.iter_pdf_pages`로 batch 단위 지연 렌더링한다. DPI는 config의
     default_dpi(기본 200)를 따른다 → 네트워크 전송량·메모리 동시 감소.
+
+    PDF(이 경로는 텍스트 레이어 없는 스캔본)는 먼저 본문 쪽에서 머리글·바닥글 여백을 재고
+    (margin_detector), 모든 쪽의 그 띠를 흰색으로 가린 뒤 넘긴다. 측정 결과는 notes 에 적는다.
     """
     dpi = config.get_default_dpi()
     fmt_type = detector.detect(file_path)
@@ -348,12 +353,25 @@ def _page_plan(file_path: Path, start_page: int = 1, max_pages: int | None = Non
         total = pdf_splitter.count_pages(file_path)
         last = total if max_pages is None else min(total, start_page + max_pages - 1)
 
+        margins = None
+        if config.get_auto_margin():
+            try:
+                margins = margin_detector.measure(file_path, total)
+            except Exception as e:      # 측정 실패는 여백 그대로 처리 — 파일 전체를 막지 않는다
+                if notes is not None:
+                    notes.append(f"  ⚠ 여백 자동 측정 실패 → 여백 그대로 인식 ({e})")
+            if notes is not None and margins is not None:
+                notes.append(f"  📐 {margins.describe()}")
+            if margins is not None and not margins.active:
+                margins = None
+
         def _gen():
             k = 0
             for img in pdf_splitter.iter_pdf_pages(
                 file_path, dpi=dpi, first_page=start_page, last_page=last
             ):
-                yield start_page + k, img
+                n = start_page + k
+                yield n, (margin_detector.apply(img, margins, n) if margins else img)
                 k += 1
 
         return total, _gen()
@@ -868,6 +886,7 @@ def process_preview(
 
     # 사전 경고 구성 (렌더링 없이 페이지 수만 조회 — 즉시)
     pre_warnings: list[str] = []
+    plan_notes: list[str] = []
     if file_mb >= WARN_SIZE_MB:
         pre_warnings.append(f"⚠ 대용량 파일 ({file_mb:.1f} MB)")
 
@@ -879,7 +898,7 @@ def process_preview(
 
     # 페이지 계획 — 미리보기는 앞 PREVIEW_PAGES만 지연 렌더(전체 책 변환 안 함)
     try:
-        total, pages = _page_plan(file_path, start_page=1, max_pages=PREVIEW_PAGES)
+        total, pages = _page_plan(file_path, start_page=1, max_pages=PREVIEW_PAGES, notes=plan_notes)
     except Exception as load_err:
         yield (
             _progress_html(0, 0, "오류", elapsed_str=elapsed()),
@@ -889,7 +908,7 @@ def process_preview(
 
     sample_count  = min(PREVIEW_PAGES, total)
     result        = FileResult(source_path=file_path, output_path=None)
-    step_logs: list[str] = []
+    step_logs: list[str] = list(plan_notes)
 
     # 샘플 페이지 OCR (지연 렌더링 이터레이터)
     processed = 0
@@ -1171,6 +1190,7 @@ def _run_ocr(
             return
 
     pre_warnings: list[str] = []
+    plan_notes: list[str] = []
     if file_mb >= WARN_SIZE_MB and not cached_images:
         pre_warnings.append(f"⚠ 대용량 파일 ({file_mb:.1f} MB)")
 
@@ -1190,7 +1210,7 @@ def _run_ocr(
             "", None, gr.update(visible=False), None,
         )
         try:
-            total, pages = _page_plan(file_path, start_page=start_page)
+            total, pages = _page_plan(file_path, start_page=start_page, notes=plan_notes)
         except Exception as load_err:
             yield (
                 _progress_html(0, 0, "오류", elapsed_str=elapsed()),
@@ -1199,7 +1219,7 @@ def _run_ocr(
             return
 
     result      = FileResult(source_path=file_path, output_path=None)
-    step_logs: list[str] = []
+    step_logs: list[str] = list(plan_notes)
 
     processed = 0
     # OCR 원문을 쪽마다 02_결과/{원본명}_OCR중.txt 에 쌓는다 — 중단·크래시에도 이미 읽은

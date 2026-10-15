@@ -41,6 +41,7 @@ _DEFAULTS: dict = {
     "remove_front_matter": False,         # 표제지·판권·차례 등 앞뒤 부속물까지 제거(기본 보존)
     # ── 여백 마진 제거 필터 ──────────────────────────────────────────────────
     "enable_margin_filter": False,        # 머리글·바닥글·쪽번호 영역 물리 필터 활성화 여부
+    "auto_margin": True,                  # 스캔 PDF: 본문 쪽에서 머리글·바닥글 여백을 재서 가리고 인식
     "margin_top_ratio": 0.06,             # 상단 여백 비율 (0.0 ~ 1.0)
     "margin_bottom_ratio": 0.06,          # 하단 여백 비율 (0.0 ~ 1.0)
 }
@@ -273,6 +274,11 @@ def get_remove_front_matter() -> bool:
 def get_enable_margin_filter() -> bool:
     """머리글·바닥글·쪽번호 물리 필터 활성화 여부. 기본 False."""
     return bool(load().get("enable_margin_filter", False))
+
+
+def get_auto_margin() -> bool:
+    """스캔 PDF 여백 자동 측정·가림(core.margin_detector). 기본 True."""
+    return bool(load().get("auto_margin", True))
 
 
 def get_margin_top_ratio() -> float:

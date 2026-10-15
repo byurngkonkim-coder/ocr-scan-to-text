@@ -85,7 +85,7 @@ def test_ocr_pages_saved_in_page_order(monkeypatch, tmp_path):
                       ("_HISTORY", "history.json")):
         monkeypatch.setattr(storage_manager, name, tmp_path / "storage" / sub)
     monkeypatch.setattr(ocr_gradio, "_page_plan",
-                        lambda path, start_page=1: (10, ((n, None) for n in range(1, 11))))
+                        lambda path, start_page=1, **k: (10, ((n, None) for n in range(1, 11))))
 
     def process_page(img, n, *a, **k):
         time.sleep(random.uniform(0, 0.05))
