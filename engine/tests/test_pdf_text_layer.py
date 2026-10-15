@@ -146,6 +146,53 @@ class TestGarbled:
         assert not ptl.is_noisy(self.GOOD)
 
 
+# ── 띄어쓰기를 잃은 텍스트층 — 글자 간격으로 복원 ─────────────────────────────
+
+class TestRespace:
+    WORDS = "일본이 장기 불황으로 고전하는 동안 교토 지역 첨단 기업들이 세계 시장을 개척했다".split()
+
+    def _unspaced_pdf(self, path, words=None):
+        """공백 글자 없이 글자를 한 자씩 찍고 어절 사이만 띄운 PDF — SERI 교토식 경영 PDF 와 같은 구조."""
+        fitz = pytest.importorskip("fitz")
+        doc = fitz.open()
+        page = doc.new_page()
+        for row in range(4):
+            x, y = 50, 100 + row * 30
+            for w in words or self.WORDS:
+                for ch in w:
+                    page.insert_text((x, y), ch, fontname="korea", fontsize=12)
+                    x += 12
+                x += 6
+        doc.save(str(path))
+        return path
+
+    def test_unspaced_page_detected(self):
+        assert ptl.is_unspaced("".join(self.WORDS) * 3)
+        assert not ptl.is_unspaced(" ".join(self.WORDS) * 3)
+
+    def test_respace_inserts_spaces_at_wide_gaps(self):
+        def ch(c, x0):
+            return {"c": c, "bbox": (x0, 0, x0 + 10, 10)}
+        raw = {"blocks": [{"type": 0, "bbox": (0, 0, 100, 10), "lines": [{"spans": [{"size": 10, "chars": [
+            ch("교", 0), ch("토", 10), ch("식", 26), ch("경", 36), ch("영", 46)]}]}]}]}
+        assert ptl.respace_rawdict(raw).strip() == "교토 식경영"
+
+    def test_letter_spaced_title_not_split(self):
+        # 실측: 아메바 경영 석사논문 표지 '지도교수:이경구'·'김찬휴' — 자간을 넓힌 제목은 한 자씩 쪼개지 않는다
+        chars = [{"c": c, "bbox": (i * 20, 0, i * 20 + 10, 10)} for i, c in enumerate("김찬휴")]
+        raw = {"blocks": [{"type": 0, "bbox": (0, 0, 60, 10),
+                           "lines": [{"spans": [{"size": 10, "chars": chars}]}]}]}
+        assert ptl.respace_rawdict(raw).strip() == "김찬휴"
+
+    def test_extract_restores_spaces(self, tmp_path):
+        if ptl.backend() != "fitz":
+            pytest.skip("PyMuPDF 필요")
+        pages = ptl.extract_pages(self._unspaced_pdf(tmp_path / "unspaced.pdf"))
+        assert " ".join(self.WORDS) in pages[0]
+        info = ptl.analyze(tmp_path / "unspaced.pdf")
+        assert info.noisy_pages == []
+
+
 # ── _finalize_digital (ocr_gradio) 통합 — blank/본문 분기 ─────────────────────
 
 class TestFinalizeDigital:

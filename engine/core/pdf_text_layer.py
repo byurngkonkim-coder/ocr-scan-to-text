@@ -81,13 +81,61 @@ NOISY_NOSPACE_RATIO = 0.15  # 8음절 이상 붙은 한글 덩어리가 한글�
 _NOISE_RE = re.compile(r"[■_^|•♦£«»、¤¦◆▲▼●○□◇†‡]")
 
 
-def is_noisy(text: str) -> bool:
+def _nospace_ratio(text: str) -> float | None:
     hangul = re.findall(r"[가-힣]", text or "")
     if len(hangul) < _GARBLE_MIN_HANGUL:
+        return None
+    return sum(len(r) for r in re.findall(r"[가-힣]{8,}", text)) / len(hangul)
+
+
+def is_unspaced(text: str) -> bool:
+    """한글 어절이 띄어쓰기 없이 길게 붙은 쪽인가."""
+    r = _nospace_ratio(text)
+    return r is not None and r >= NOISY_NOSPACE_RATIO
+
+
+def is_noisy(text: str) -> bool:
+    if _nospace_ratio(text) is None:
         return False
-    nospace = sum(len(r) for r in re.findall(r"[가-힣]{8,}", text)) / len(hangul)
     noise = len(_NOISE_RE.findall(text)) / real_chars(text)
-    return noise >= NOISY_SYMBOL_RATIO or nospace >= NOISY_NOSPACE_RATIO
+    return noise >= NOISY_SYMBOL_RATIO or is_unspaced(text)
+
+
+# ── 띄어쓰기를 잃은 텍스트층 (2026-10-15) ──────────────────────────────────────
+# 실측: SERI 「교토식 경영」 PDF(23쪽 중 22쪽)는 글자를 한 자씩 찍고 어절 사이를 간격으로만 띄워,
+# 텍스트층에 공백 글자가 없다('스피드경영을중시하는호리바제작소'). 글자 위치는 정확해서 간격을 재면
+# 글자 사이 ≈0, 어절 사이 ≈0.5×글자 크기로 뚜렷이 갈린다 → 간격이 넓은 곳에 공백을 넣으면 원문 그대로.
+# 정상 디지털 PDF 4종(이나모리 회계학·Kyocera 논문·시간당채산·McKinsey)은 어절 평균 2.7~3.7음절로
+# 감지 기준(8음절 이상 덩어리 15%)에 걸리지 않는다. 이 PDF는 poppler 렌더가 빈 화면이라 OCR 재판독도 못 한다.
+_RESPACE_GAP = 0.25   # 글자 크기 대비 이 이상 벌어지면 어절 사이로 본다
+_LETTER_SPACED = 0.6  # 띄운 줄에서 한 음절 어절이 이 비율 이상이면 자간 넓힌 제목으로 보고 띄우지 않는다
+
+
+def respace_rawdict(raw: dict, keep_block=None) -> str:
+    """page.get_text('rawdict') 결과를 글자 간격으로 공백을 넣어 다시 조립한다.
+    keep_block(block) 이 False 인 블록은 뺀다(머리글·바닥글 필터)."""
+    out = []
+    for b in raw["blocks"]:
+        if b.get("type") != 0 or (keep_block and not keep_block(b)):
+            continue
+        lines = []
+        for ln in b["lines"]:
+            s, prev = [], None
+            for sp in ln["spans"]:
+                for c in sp["chars"]:
+                    if (prev is not None and not c["c"].isspace() and not prev["c"].isspace()
+                            and c["bbox"][0] - prev["bbox"][2] > _RESPACE_GAP * sp["size"]):
+                        s.append(" ")
+                    s.append(c["c"])
+                    prev = c
+            line = "".join(s)
+            # 자간을 넓힌 제목('지 도 교 수')은 글자마다 벌어져 있다 — 한 음절 어절이 대부분이면 띄우지 않는다
+            words = line.split()
+            if len(words) >= 3 and sum(bool(re.fullmatch(r"[가-힣]", w)) for w in words) / len(words) >= _LETTER_SPACED:
+                line = "".join(c["c"] for sp in ln["spans"] for c in sp["chars"])
+            lines.append(line)
+        out.append("\n".join(lines))
+    return "\n".join(out) + "\n"
 
 
 def real_chars(text: str) -> int:
@@ -291,7 +339,10 @@ def _extract_fitz_unlocked(pdf_path: str | Path) -> list[str]:
         for page in doc:
             if not enable_filter:
                 # "text" 모드: 블록 읽기순서 유지 + 어절 공백 보존(다단 편집에 강함).
-                out.append(page.get_text("text") or "")
+                text = page.get_text("text") or ""
+                if is_unspaced(text):
+                    text = _respaced_or(text, respace_rawdict(page.get_text("rawdict")))
+                out.append(text)
                 continue
 
             h = page.rect.height
@@ -311,8 +362,20 @@ def _extract_fitz_unlocked(pdf_path: str | Path) -> list[str]:
             # 블록들을 Y, X 좌표 순으로 정렬하여 텍스트 조립
             body_blocks.sort(key=lambda x: (x[1], x[0]))
             page_text = "\n".join(b[4] for b in body_blocks)
+            if is_unspaced(page_text):
+                raw = page.get_text("rawdict")
+                raw["blocks"].sort(key=lambda b: (b["bbox"][1], b["bbox"][0]))
+                in_body = lambda b: y_top_limit <= (b["bbox"][1] + b["bbox"][3]) / 2.0 <= y_bottom_limit
+                page_text = _respaced_or(page_text, respace_rawdict(raw, in_body))
             out.append(page_text or "")
     return out
+
+
+def _respaced_or(text: str, respaced: str) -> str:
+    """간격으로 다시 조립한 글이 실제로 덜 붙어 있고 글자가 그대로일 때만 쓴다."""
+    if real_chars(respaced) != real_chars(text):
+        return text
+    return respaced if (_nospace_ratio(respaced) or 0) < (_nospace_ratio(text) or 0) else text
 
 
 def _extract_pdftotext(pdf_path: str | Path) -> list[str]:
