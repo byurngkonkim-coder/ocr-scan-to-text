@@ -1719,6 +1719,11 @@ def build_ui() -> gr.Blocks:
                 with gr.Column(elem_classes="step-card"):
                     gr.HTML(_step_head(None, "입력 폴더",
                             "폴더에 넣은 파일을 골라 차례로 처리합니다. 위에서 지정한 처리 방식으로 대기열에서 자동 실행됩니다."))
+                    with gr.Row():
+                        batch_dir = gr.Textbox(show_label=False, scale=5,
+                                               value=config.get("batch_input_dir") or str(batch_runner.INPUT_DIR),
+                                               placeholder="입력 폴더 경로 — 직접 입력 후 Enter")
+                        batch_dir_btn = gr.Button("폴더 선택…", size="sm", scale=1)
                     batch_note = gr.HTML("")
                     batch_list = gr.CheckboxGroup(show_label=False, choices=[], value=[],
                                                   elem_classes="batch-list")
@@ -1803,10 +1808,13 @@ def build_ui() -> gr.Blocks:
         open_folder_btn.click(fn=_open_results_folder, outputs=[folder_msg])
 
         # ④ 일괄 처리
-        def _batch_list(select_new: bool = False):
-            rows = batch_runner.list_inputs(RESULTS_DIR)
-            if not rows:
-                note = (f'<div class="note info">{batch_runner.INPUT_DIR} 폴더에 처리할 파일이 없습니다.'
+        def _batch_list(folder: str, select_new: bool = False):
+            folder = Path((folder or "").strip() or batch_runner.INPUT_DIR)
+            rows = batch_runner.list_inputs(RESULTS_DIR, folder)
+            if not folder.is_dir():
+                note = f'<div class="note info">{folder} 폴더가 없습니다. 경로를 확인하거나 <b>폴더 선택…</b>을 누르세요.</div>'
+            elif not rows:
+                note = (f'<div class="note info">{folder} 폴더에 처리할 파일이 없습니다.'
                         ' PDF·이미지를 넣은 뒤 <b>새로고침</b>을 누르세요.</div>')
             else:
                 todo = sum(r["status"] == "미처리" for r in rows)
@@ -1815,23 +1823,46 @@ def build_ui() -> gr.Blocks:
             return note, gr.update(choices=[(batch_runner.choice_label(r), r["name"]) for r in rows],
                                    value=value)
 
-        def _batch_view(select_new: bool = False):
-            return _batch_list(select_new)
+        def _batch_view(folder: str, select_new: bool = False):
+            return _batch_list(folder, select_new)
 
-        def _batch_submit(names, lang, fmt, no_pre, no_fb, no_fig, llm_c, llm_b, key, vf, cleanup, fm):
+        def _batch_set_dir(folder: str):
+            folder = (folder or "").strip()
+            # 기본 폴더면 빈 값으로 저장 — config.json 은 PC 간에 공유되므로 이 PC의 절대경로를 남기지 않는다
+            is_default = not folder or Path(folder).resolve() == batch_runner.INPUT_DIR.resolve()
+            config.save({"batch_input_dir": "" if is_default else folder})
+            return folder, *_batch_list(folder)
+
+        def _batch_pick_dir(current: str):
+            # 이 PC에서 도는 로컬 서버라 Windows 폴더 선택 창을 서버 쪽에서 띄운다.
+            import tkinter as tk
+            from tkinter import filedialog
+            root = tk.Tk()
+            root.withdraw()
+            root.attributes("-topmost", True)   # 브라우저 뒤에 숨지 않게
+            chosen = filedialog.askdirectory(parent=root, title="입력 폴더 선택",
+                                             initialdir=current if current and Path(current).is_dir() else None)
+            root.destroy()
+            return _batch_set_dir(str(Path(chosen)) if chosen else current)
+
+        def _batch_submit(names, lang, fmt, no_pre, no_fb, no_fig, llm_c, llm_b, key, vf, cleanup, fm, folder):
             if not names:
-                return "<div class='note info'>처리할 파일을 먼저 고르세요.</div>", *_batch_list()[1:]
+                return "<div class='note info'>처리할 파일을 먼저 고르세요.</div>", *_batch_list(folder)[1:]
             if key and key.strip():
                 claude_vision.set_session_key(key)
-            batch_runner.submit([batch_runner.INPUT_DIR / n for n in names],
+            base = Path((folder or "").strip() or batch_runner.INPUT_DIR)
+            batch_runner.submit([base / n for n in names],
                                 (lang, fmt, no_pre, no_fb, no_fig, llm_c, llm_b, key, vf),
                                 {"cleanup": cleanup, "front_matter": fm})
-            return batch_runner.status_html(), *_batch_list()[1:]
+            return batch_runner.status_html(), *_batch_list(folder)[1:]
 
-        batch_view_io = {"inputs": [], "outputs": [batch_note, batch_list]}
+        batch_view_io = {"inputs": [batch_dir], "outputs": [batch_note, batch_list]}
         batch_tab.select(fn=_batch_view, **batch_view_io)
         batch_refresh_btn.click(fn=_batch_view, **batch_view_io)
-        batch_pick_btn.click(fn=lambda: _batch_view(select_new=True), **batch_view_io)
+        batch_pick_btn.click(fn=lambda d: _batch_view(d, select_new=True), **batch_view_io)
+        batch_dir_io = {"inputs": [batch_dir], "outputs": [batch_dir, batch_note, batch_list]}
+        batch_dir.submit(fn=_batch_set_dir, **batch_dir_io)
+        batch_dir_btn.click(fn=_batch_pick_dir, **batch_dir_io)
 
         batch_vision_first.change(fn=_vision_mode_note, inputs=[batch_vision_first],
                                   outputs=[batch_vision_note])
@@ -1842,7 +1873,8 @@ def build_ui() -> gr.Blocks:
             llm_correct, llm_budget, api_key_input,
             batch_vision_first,
             batch_cleanup_chk,
-            batch_front_matter_chk
+            batch_front_matter_chk,
+            batch_dir
         ]
         batch_run_btn.click(fn=_batch_submit, inputs=batch_inputs,
                             outputs=[batch_status, batch_list])

@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 
-INPUT_DIR = Path(__file__).resolve().parent.parent / "입력"
+INPUT_DIR = Path(__file__).resolve().parent.parent / "01_입력"   # 기본값 — ④ 탭에서 다른 폴더로 바꿀 수 있다
 _EXTS = {".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".txt"}   # .txt 는 OCR 없이 문장 정제만
 
 
@@ -165,15 +165,16 @@ def _done_names(results_dir: Path) -> tuple[set[str], list[str]]:
     return hist, outs
 
 
-def list_inputs(results_dir: Path) -> list[dict]:
+def list_inputs(results_dir: Path, input_dir: Path | None = None) -> list[dict]:
     """입력 폴더 파일 목록 — 이름순. 처리 여부는 처리 기록 원본명 또는 02_결과 파일명으로 판정."""
-    if not INPUT_DIR.exists():
+    input_dir = input_dir or INPUT_DIR
+    if not input_dir.is_dir():
         return []
     hist, outs = _done_names(results_dir)
     with _lock:
         queued = {j.path.name: j.state for j in _jobs if j.state in ("대기", "처리 중")}
     rows = []
-    for p in sorted(INPUT_DIR.iterdir()):
+    for p in sorted(input_dir.iterdir()):
         if not p.is_file() or p.suffix.lower() not in _EXTS:
             continue
         pages, kind = _file_kind(p)

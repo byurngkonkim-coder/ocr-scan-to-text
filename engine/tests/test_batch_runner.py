@@ -121,6 +121,23 @@ def test_list_inputs_includes_txt_for_cleanup_only(monkeypatch, tmp_path):
     assert [(r["name"], r["kind"]) for r in rows] == [("책C.txt", "텍스트(정제만)")]
 
 
+def test_list_inputs_uses_chosen_folder(monkeypatch, tmp_path):
+    default, chosen = tmp_path / "default", tmp_path / "chosen"
+    default.mkdir()
+    chosen.mkdir()
+    (default / "기본.png").write_bytes(b"x")
+    (chosen / "지정.png").write_bytes(b"x")
+    monkeypatch.setattr(br, "INPUT_DIR", default)
+    monkeypatch.setattr(br, "_done_names", lambda d: (set(), []))
+    assert [r["name"] for r in br.list_inputs(tmp_path, chosen)] == ["지정.png"]
+    assert [r["name"] for r in br.list_inputs(tmp_path)] == ["기본.png"]
+    assert br.list_inputs(tmp_path, tmp_path / "없는폴더") == []
+
+
+def test_default_input_dir_is_01_input():
+    assert br.INPUT_DIR.name == "01_입력"
+
+
 def test_text_pages_split_at_paragraphs():
     from ocr_gradio import _text_pages
     paras = [f"문단{i} " + "가" * 900 + "." for i in range(5)]
