@@ -1835,17 +1835,11 @@ def build_ui() -> gr.Blocks:
             # ══════════════════════════════════════════════════════════════════
             with gr.Tab("④ 일괄 처리") as batch_tab:
                 with gr.Column(elem_classes="step-card"):
-                    gr.HTML(_step_head(None, "일괄 처리 방식 설정",
-                            "일괄 처리는 비용 우선으로 고정입니다. 정확도 우선은 ① 처리하기에서 한 권씩 쓰세요."))
-                    with gr.Row():
-                        # 대량 과금 방지 — 일괄은 비용 우선 고정(사용자 결정 2026-10-15). _batch_submit 도 강제한다
-                        batch_vision_first = gr.Radio(
-                            label="읽는 방식 (일괄 처리는 비용 우선 고정)",
-                            choices=_vision_choices(),
-                            value="RapidOCR 우선",
-                            interactive=False,
-                        )
-                    batch_vision_note = gr.HTML(_vision_mode_note("RapidOCR 우선"))
+                    gr.HTML(_step_head(None, "일괄 처리 방식",
+                            "파일 종류를 보고 자동으로 처리합니다. 일괄 처리는 비용 우선 고정이라 대량 과금이 생기지 않습니다."))
+                    # 대량 과금 방지 — 일괄은 비용 우선 고정(사용자 결정 2026-10-15). _batch_submit 도 강제한다
+                    batch_vision_first = gr.State(BATCH_MODE)
+                    batch_vision_note = gr.HTML(_batch_mode_note())
                     with gr.Row():
                         batch_cleanup_chk = gr.Checkbox(
                             label="문장 정제 — 쪽번호·머리글 제거, 띄어쓰기·맞춤법 교정, 문단 복원",
@@ -1855,12 +1849,12 @@ def build_ui() -> gr.Blocks:
                         batch_front_matter_chk = gr.Checkbox(
                             label="표지·판권·차례 같은 앞뒤 부속물도 삭제",
                             value=bool(config.get("remove_front_matter", False)),
-                            info="문장 정제가 켜져 있을 때만 동작합니다.",
+                            info="문장 정제가 켜져 있을 때만 동작합니다. 차례·판권(간기)을 규칙으로 지웁니다.",
                         )
 
                 with gr.Column(elem_classes="step-card"):
                     gr.HTML(_step_head(None, "입력 폴더",
-                            "폴더에 넣은 파일을 골라 차례로 처리합니다. 위에서 지정한 처리 방식으로 대기열에서 자동 실행됩니다."))
+                            "폴더에 넣은 파일을 골라 차례로 처리합니다. 위 처리 방식(비용 우선)으로 대기열에서 자동 실행됩니다."))
                     with gr.Row():
                         batch_dir = gr.Textbox(show_label=False, scale=5,
                                                value=config.get("batch_input_dir") or str(batch_runner.INPUT_DIR),
@@ -2014,8 +2008,7 @@ def build_ui() -> gr.Blocks:
         batch_dir.submit(fn=_batch_set_dir, **batch_dir_io)
         batch_dir_btn.click(fn=_batch_pick_dir, **batch_dir_io)
 
-        batch_vision_first.change(fn=_vision_mode_note, inputs=[batch_vision_first],
-                                  outputs=[batch_vision_note])
+        batch_tab.select(fn=_batch_mode_note, outputs=[batch_vision_note])   # 엔진·키 상태를 탭 열 때 다시 반영
 
         batch_inputs = [
             batch_list,
@@ -2278,8 +2271,23 @@ def _vision_choices() -> list[tuple[str, str]]:
     label = claude_vision.provider_label()
     return [
         (f"정확도 우선 — {label}가 먼저 읽고, 실패하면 로컬 엔진(RapidOCR)", "Vision 우선"),
-        (f"비용 우선 — 로컬 고성능 엔진(RapidOCR 한글 v5)이 무료로 읽고, 흐린 쪽만 {label}", "RapidOCR 우선"),
+        (f"비용 우선 — 로컬 고성능 엔진(RapidOCR 한글 v5)이 무료로 읽고, 신뢰도 낮은 쪽만 {label}", "RapidOCR 우선"),
     ]
+
+
+def _batch_mode_note() -> str:
+    """④ 일괄 처리 안내 — 소스별 자동 처리와 유료 호출 범위."""
+    label = claude_vision.provider_label()
+    rows = [
+        ("디지털 PDF·txt", "OCR 없이 내장 글자를 그대로 추출 — <b>무료</b>"),
+        ("스캔 PDF·이미지", f"RapidOCR 한글 v5가 무료로 읽고, 신뢰도 85% 미만 쪽만 {label}로 다시 읽기"
+                           " (문서당 쪽수의 10%까지 — 넘으면 <b>검토 필요</b>로 남김)"
+         if _engine_ok() else f"RapidOCR 한글 v5로만 읽기 — {label} 연결이 없어 다시 읽기 없음 (무료)"),
+        ("문장 정제", "켜면 내장 정제규칙으로 — <b>무료</b>, API 호출 없음"),
+    ]
+    body = "".join(f"<li><b>{k}</b> — {v}</li>" for k, v in rows)
+    return (f'<div class="note info"><ul style="margin:0;padding-left:1.1em">{body}</ul>'
+            '정확도 우선이나 <b>검토 필요 쪽만 다시 읽기</b>는 ① 처리하기에서 한 권씩 쓰세요.</div>')
 
 
 def _vision_mode_note(mode) -> str:
@@ -2294,7 +2302,7 @@ def _vision_mode_note(mode) -> str:
         cost = "요금은 없지만 쪽당 수 분 걸립니다." if local else "쪽마다 API 요금이 듭니다."
         return (f'<div class="note info">{label}가 쪽마다 레이아웃을 이해하며 읽습니다. '
                 f'한국어 정확도가 가장 높습니다. {cost}</div>')
-    tail = (f"신뢰도가 낮은 쪽만 {label}에 다시 맡깁니다." if ok
+    tail = (f"신뢰도 85% 미만 쪽만 {label}에 다시 맡깁니다(문서당 쪽수의 10%까지)." if ok
             else f"지금은 {label} 연결이 없어 재인식 없이 {local_name}만 씁니다.")
     return f'<div class="note info">{local_name}이 이 PC에서 무료로 읽고, {tail}</div>'
 
