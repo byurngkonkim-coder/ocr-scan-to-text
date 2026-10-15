@@ -10,8 +10,8 @@
      본문에서 줄 간격 1.5배 넘게 떨어진 줄 = 머리글·바닥글 후보.
   4. 자름선: 여러 본문 쪽(40% 이상)에서 되풀이되는 쪽만 자르고, 모든 표본 쪽의 본문 끝에서
      반 줄 높이 이상 떨어뜨린다 → 표본 쪽의 본문은 잘리지 않는다.
-  5. 가릴 때(apply): 앞부분(표본 앞 쪽) 중 띠에 긴 줄(표지 제목·머리말 본문)이 걸친 쪽은
-     가리지 않고, 자름선이 글줄을 가로지르면 여백 쪽으로 가장 가까운 줄 사이 빈 행까지 옮겨
+  5. 가릴 때(apply): 앞부분(표본 앞 쪽) 중 띠에 머리글·바닥글 같지 않은 줄(긴 줄 또는 본문 쪽
+     머리글과 가로 위치가 다른 줄 — 표지 제목·머리말 본문·저자 이름)이 걸친 쪽은 가리지 않고, 자름선이 글줄을 가로지르면 여백 쪽으로 가장 가까운 줄 사이 빈 행까지 옮겨
      그 줄을 통째로 살린다(반쪽 잘린 줄 = 깨진 글자).
      전 권 실측(2026-10-15): 예측기계·이한줄에서 가로지른 줄 11개, 앞부분 본문 줄이 이 경우였다.
 """
@@ -38,6 +38,9 @@ BAND_SHARE = 0.4           # 머리글·바닥글이 본문 쪽의 이 비율 �
 GAP_PITCH = 1.5            # 본문에서 이 줄 간격 배수보다 떨어지면 본문이 아니다
 BAND_LINE_MAX_W = 0.35     # 띠 안 줄이 쪽 너비의 이 비율 이상이면 머리글·바닥글이 아니다
                            # (실측 2026-10-15: 머리글·쪽 꼬리 0.05~0.17, 표지 제목·머리말 줄 0.5 이상)
+BAND_X_TOL = 0.04          # 앞부분 쪽 띠 줄의 왼쪽·오른쪽 끝·가운데가 모두 본문 쪽 머리글·바닥글 자리에서
+                           # 이보다 벗어나면 머리글 아님 (실측: 이한줄 머리글 왼쪽 끝 0.11~0.24,
+                           # 앞부분 「엮은이 / 김동범」 0.48~0.57 가운데 놓임)
 MEASURE_DPI = 100
 
 Box = tuple[float, float, float, float]   # (위, 아래, 왼쪽, 오른쪽) — 쪽 대비 비율
@@ -50,7 +53,9 @@ class Margins:
     body_pages: int   # 측정에 쓴 본문 쪽 수
     sampled: int      # 고른 표본 쪽 수
     line_h: float = 0.025   # 본문 줄 높이(쪽 높이 비율) — 빈 행을 찾는 범위
-    skip_pages: frozenset[int] = frozenset()   # 가리지 않는 앞부분 쪽(띠 안에 본문 같은 긴 줄이 있음)
+    skip_pages: frozenset[int] = frozenset()   # 가리지 않는 앞부분 쪽(띠 안에 머리글·바닥글 아닌 줄이 있음)
+    top_x: tuple[tuple[float, float], ...] = ()      # 본문 쪽 머리글 줄의 (왼쪽, 오른쪽) — 앞부분 쪽 판별 기준
+    bottom_x: tuple[tuple[float, float], ...] = ()   # 본문 쪽 바닥글 줄의 (왼쪽, 오른쪽)
 
     @property
     def active(self) -> bool:
@@ -128,25 +133,47 @@ def measure_from_boxes(pages: list[list[Box]], sampled: int | None = None) -> Ma
     pad = 0.5 * median(lh for _, _, lh, _ in found)
     need = max(2, BAND_SHARE * len(found))
 
-    heads, foots = [], []
+    heads, foots, top_x, bottom_x = [], [], [], []
     for lines, body, _, _ in found:
-        above = [b[1] for i, b in enumerate(lines) if i not in body and b[1] <= body_top - pad]
-        below = [b[0] for i, b in enumerate(lines) if i not in body and b[0] >= body_bottom + pad]
+        above = [b for i, b in enumerate(lines) if i not in body and b[1] <= body_top - pad]
+        below = [b for i, b in enumerate(lines) if i not in body and b[0] >= body_bottom + pad]
         if above:
-            heads.append(max(above))
+            heads.append(max(b[1] for b in above))
+            top_x += [(b[2], b[3]) for b in above]
         if below:
-            foots.append(min(below))
+            foots.append(min(b[0] for b in below))
+            bottom_x += [(b[2], b[3]) for b in below]
 
     top = min(body_top - pad, _pct(heads, 0.75) + pad) if len(heads) >= need else 0.0
     bottom = max(body_bottom + pad, _pct(foots, 0.25) - pad) if len(foots) >= need else 1.0
     return Margins(top=max(top, 0.0), bottom=min(bottom, 1.0),
-                   body_pages=len(found), sampled=sampled or len(pages), line_h=2 * pad)
+                   body_pages=len(found), sampled=sampled or len(pages), line_h=2 * pad,
+                   top_x=tuple(top_x) if top > 0 else (), bottom_x=tuple(bottom_x) if bottom < 1 else ())
 
 
-def band_has_long_line(boxes: list[Box], m: Margins) -> bool:
-    """띠(가릴 곳)에 걸친 줄 중 머리글·바닥글보다 긴 줄이 있나 — 표지 제목·머리말 본문 등."""
-    return any(r - l >= BAND_LINE_MAX_W for t, b, l, r in boxes
-               if (m.top > 0 and t < m.top) or (m.bottom < 1 and b > m.bottom))
+def front_page_unsafe(boxes: list[Box], m: Margins) -> bool:
+    """앞부분 쪽을 가리면 안 되나 — 띠에 걸친 줄이 머리글·바닥글 같지 않으면 True.
+
+    긴 줄(표지 제목·머리말 본문)이거나, 가로 위치가 본문 쪽 머리글·바닥글 자리와 다른 줄
+    (가운데 놓인 「엮은이 / 김동범」 등)이 하나라도 있으면 그 쪽은 가리지 않는다.
+    위치는 왼쪽 끝·오른쪽 끝·가운데 중 하나만 맞으면 같은 자리로 본다 — 왼쪽 맞춤 머리글,
+    오른쪽 맞춤 쪽 꼬리(장 제목 길이에 따라 가운데가 움직임), 가운데 쪽번호.
+    """
+    def off_position(b: Box, xs: tuple[tuple[float, float], ...]) -> bool:
+        l, r = b[2], b[3]
+        return bool(xs) and all(abs(l - l2) > BAND_X_TOL and abs(r - r2) > BAND_X_TOL
+                                and abs((l + r) - (l2 + r2)) / 2 > BAND_X_TOL for l2, r2 in xs)
+
+    for b in boxes:
+        if m.top > 0 and b[0] < m.top:
+            xs = m.top_x
+        elif m.bottom < 1 and b[1] > m.bottom:
+            xs = m.bottom_x
+        else:
+            continue
+        if b[3] - b[2] >= BAND_LINE_MAX_W or off_position(b, xs):
+            return True
+    return False
 
 
 def _detect_boxes(image: Image.Image) -> list[Box]:
@@ -186,7 +213,7 @@ def measure(pdf_path: str | Path, total: int) -> Margins | None:
     if m is not None and m.active:
         # 앞부분(표지·속표지·머리말·목차)은 쪽마다 본다 — 띠에 긴 줄이 걸치면 그 쪽은 가리지 않는다
         m.skip_pages = frozenset(n for n in range(1, min(pages))
-                                 if band_has_long_line(boxes_of(n), m))
+                                 if front_page_unsafe(boxes_of(n), m))
     with _lock:
         _cache[key] = m
     return m

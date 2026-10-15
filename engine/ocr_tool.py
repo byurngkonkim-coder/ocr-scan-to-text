@@ -16,6 +16,7 @@ from core import rapidocr_engine, char_normalizer, writer, postprocessor
 from core import vision as claude_vision
 from core import spellcheck, figure_detector, llm_corrector
 from core import config
+from core import margin_detector
 from core.types import FileResult, OutputFormat, PageResult, OCREngine
 
 console = Console()
@@ -349,6 +350,8 @@ def _process_file(
             if fmt_type == "pdf"
             else pdf_splitter.load_image(file_path)
         )
+        if fmt_type == "pdf":
+            images = _mask_margins(file_path, images, verbose)
         for page_num, image in enumerate(images, start=1):
             page_result = _process_page(
                 image, page_num, lang,
@@ -365,6 +368,24 @@ def _process_file(
             import traceback
             console.print(f"[red]{traceback.format_exc()}[/red]")
     return result
+
+
+def _mask_margins(file_path: Path, images: list, verbose: bool) -> list:
+    """본문 쪽에서 머리글·바닥글 여백을 재서 모든 쪽의 그 띠를 가린다 (웹 화면과 같은 규칙)."""
+    if not config.get_auto_margin():
+        return images
+    try:
+        margins = margin_detector.measure(file_path, len(images))
+    except Exception as e:      # 측정 실패는 여백 그대로 처리 — 파일 전체를 막지 않는다
+        console.print(f"  [yellow]⚠ 여백 자동 측정 실패 → 여백 그대로 인식 ({e})[/yellow]")
+        return images
+    if margins is None:
+        return images
+    if verbose:
+        console.print(f"  [dim]📐 {margins.describe()}[/dim]")
+    if not margins.active:
+        return images
+    return [margin_detector.apply(img, margins, n) for n, img in enumerate(images, start=1)]
 
 
 def _process_page(

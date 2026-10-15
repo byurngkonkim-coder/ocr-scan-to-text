@@ -107,12 +107,36 @@ def test_skipped_front_page_untouched():
     assert out.getpixel((50, 8)) == BLACK and out.getpixel((50, 189)) == BLACK
 
 
+MS = md.Margins(top=0.1, bottom=0.9, body_pages=5, sampled=8,
+                top_x=((0.21, 0.25), (0.22, 0.30)), bottom_x=((0.69, 0.86),))
+
+
 def test_long_line_in_band_marks_front_page():
     header = [(0.05, 0.07, 0.20, 0.27)]                 # 짧은 머리글 → 가려도 됨
     title = [(0.05, 0.08, 0.15, 0.85)]                  # 표지 제목·머리말 본문 줄 → 그 쪽은 안 가림
-    assert not md.band_has_long_line(header, M)
-    assert md.band_has_long_line(title, M)
-    assert not md.band_has_long_line([(0.4, 0.43, 0.1, 0.9)], M)   # 띠 밖 긴 줄은 상관없음
+    assert not md.front_page_unsafe(header, MS)
+    assert md.front_page_unsafe(title, MS)
+    assert not md.front_page_unsafe([(0.4, 0.43, 0.1, 0.9)], MS)   # 띠 밖 긴 줄은 상관없음
+
+
+def test_short_line_off_header_position_marks_front_page():
+    # 이한줄 실측: 머리글은 왼쪽 끝(가운데 x 0.13~0.28), 4·5쪽 「엮은이 / 김동범」은 가운데(0.52)
+    author = [(0.050, 0.075, 0.48, 0.55), (0.075, 0.100, 0.48, 0.56)]
+    assert md.front_page_unsafe(author, MS)
+    footer_right = [(0.93, 0.95, 0.75, 0.86)]          # 본문 쪽 쪽 꼬리와 같은 자리 → 가려도 됨
+    assert not md.front_page_unsafe(footer_right, MS)
+
+
+def test_header_positions_recorded_from_body_pages():
+    pages = [HEADER + _body() + FOOTER for _ in range(8)]
+    m = md.measure_from_boxes(pages)
+    assert set(m.top_x) == {(0.21, 0.25), (0.22, 0.30)}
+    assert set(m.bottom_x) == {(0.75, 0.86)}
+
+
+def test_footer_with_longer_chapter_title_still_matches():
+    # 오른쪽 맞춤 쪽 꼬리: 장 제목이 길면 왼쪽 끝·가운데는 움직여도 오른쪽 끝은 같다
+    assert not md.front_page_unsafe([(0.93, 0.95, 0.55, 0.86)], MS)
 
 
 def test_gap_inside_a_line_is_not_a_line_break():
@@ -129,3 +153,18 @@ def test_measuring_does_not_switch_off_recognition():
     before = (eng.use_det, eng.use_cls, eng.use_rec)
     md._detect_boxes(_page((40, 60), (80, 100)))
     assert (eng.use_det, eng.use_cls, eng.use_rec) == before
+
+
+def test_cli_masks_pages_with_measured_margins(monkeypatch, tmp_path):
+    # 명령줄 도구(ocr_tool)도 웹 화면과 같은 측정·가림을 쓴다
+    import ocr_tool
+    from core import config
+    monkeypatch.setattr(config, "get_auto_margin", lambda: True)
+    monkeypatch.setattr(md, "measure", lambda path, total: M)
+    pages = [_page((5, 12), (40, 46)) for _ in range(3)]
+    out = ocr_tool._mask_margins(tmp_path / "x.pdf", pages, verbose=False)
+    assert out[1].getpixel((50, 8)) == BLACK      # 2쪽은 skip_pages — 그대로
+    assert out[2].getpixel((50, 8)) == WHITE      # 3쪽 머리글 가림
+    assert out[2].getpixel((50, 43)) == BLACK     # 본문 그대로
+    monkeypatch.setattr(config, "get_auto_margin", lambda: False)
+    assert ocr_tool._mask_margins(tmp_path / "x.pdf", pages, verbose=False) is pages
