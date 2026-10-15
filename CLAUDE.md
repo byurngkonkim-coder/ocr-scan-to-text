@@ -4,7 +4,7 @@
 - **테스트 명령**: `python -m pytest engine/tests`
 - **엔드유저 2계층 폴더 구조**:
   - `START_OCR.bat`, `OCR_대시보드_열기.url`: 사용자 실행 진입점 (User Layer)
-  - `입력/`: 원본 PDF 투입 폴더 — ④ 일괄 처리 목록(`batch_runner.INPUT_DIR`) (User Layer)
+  - `01_입력/`: 원본 PDF 투입 폴더 — ④ 일괄 처리 기본 목록(`batch_runner.INPUT_DIR`). ④ 탭에서 다른 폴더를 지정하면 `engine/config.json` 의 `batch_input_dir` 에 저장 (User Layer, git 제외)
   - `02_결과/`: 텍스트 추출 결과물 저장 폴더 (User Layer)
   - `engine/`: 핵심 처리 엔진 및 가상환경 (`core/`, `storage/`, `tests/`, `venv/` 등 Internal Layer)
   - `docs/`: 사용자 매뉴얼, 설계 가이드, 정제 규칙서 (Internal Layer)
