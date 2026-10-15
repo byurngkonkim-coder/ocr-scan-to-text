@@ -37,8 +37,11 @@ def test_warning_reaches_screen(tmp_path, monkeypatch):
     monkeypatch.setattr(ocr_gradio, "_process_page", lambda img, n, *a, **k: (PageResult(
         page_num=n, raw_text=body, corrected_text=body,
         engine=OCREngine.RAPIDOCR, confidence=95.0), []))
-    monkeypatch.setattr(text_cleaner, "is_available", lambda: True)
+    monkeypatch.setattr(text_cleaner, "is_available", lambda local=False: True)
     monkeypatch.setattr(text_cleaner._gemini, "run_text", lambda p: "요약된 한 줄." * 10)
+    monkeypatch.setattr(text_cleaner._ollama, "run_text", lambda p: "요약된 한 줄." * 10)  # 비용 우선 = 로컬 정제
+    from core import config
+    monkeypatch.setattr(config, "get_local_cleanup_engine", lambda: "ollama")  # LLM 축약 경고 경로
     png = Path(__file__).parent / "sample_docs" / "sample_kor_eng.png"
     last = None
     for last in ocr_gradio.process_full(

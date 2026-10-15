@@ -17,10 +17,24 @@ from core.types import OCREngine, OCRResult
 from core import config
 
 _client = None
+# 결제·인증 오류(401·402·403) 메시지 — 한 번 나면 재시도·후속 호출을 멈춘다.
+# 실측(2026-10-15): 크레딧 소진 402 뒤에도 쪽·구간마다 2회씩 호출을 계속 보냈다.
+_blocked: str | None = None
+_BLOCK_CODES = (401, 402, 403)
+
+
+def _check_block(e: Exception) -> None:
+    """결제·인증 오류면 차단 상태로 바꾸고 즉시 다시 던진다(재시도 무의미)."""
+    global _blocked
+    if getattr(e, "code", None) in _BLOCK_CODES:
+        _blocked = str(e)[:300]
+        raise e
 
 
 def _get_client():
     global _client
+    if _blocked is not None:   # 대기 중이던 쪽·구간도 유료 호출을 보내지 않는다
+        raise RuntimeError(f"Gemini 결제·인증 오류로 호출 중단 — {_blocked}")
     if _client is None:
         try:
             from google import genai
@@ -223,6 +237,7 @@ def run(image: Image.Image, lang_hint: str = "kor+eng") -> OCRResult:
                 has_jamo_split=False,
             )
         except Exception as e:  # noqa: BLE001 — 호출부에서 RapidOCR 폴백 처리
+            _check_block(e)
             last_err = e
             disable_thinking = False  # 2차 시도는 thinking 옵션 없이
 
@@ -265,6 +280,7 @@ def run_text(prompt: str) -> str:
                 continue
             return response.text or ""
         except Exception as e:  # noqa: BLE001
+            _check_block(e)
             last_err = e
             disable_thinking = False  # 2차 시도는 thinking 옵션 없이
 
@@ -272,6 +288,6 @@ def run_text(prompt: str) -> str:
 
 
 def is_available() -> bool:
-    """Gemini 사용 가능 여부 (환경변수 또는 설정 파일에 키가 있으면 True)."""
+    """Gemini 사용 가능 여부 (키가 있고 결제·인증 오류로 차단되지 않았으면 True)."""
     from core.config import has_google_api_key
-    return has_google_api_key()
+    return _blocked is None and has_google_api_key()

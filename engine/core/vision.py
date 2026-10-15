@@ -79,6 +79,7 @@ def run_text(prompt: str) -> str:
 def reset_client() -> None:
     """양쪽 provider 의 캐시된 클라이언트를 초기화 (키 변경 후 호출)."""
     _gemini._client = None
+    _gemini._blocked = None     # 새 키면 결제 차단도 풀어 다시 시도
     _claude._client = None
     _ollama._client = None
 

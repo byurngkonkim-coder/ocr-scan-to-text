@@ -56,8 +56,9 @@ def sandbox(tmp_path, monkeypatch):
     monkeypatch.setattr(storage_manager, "_UPLOADS", base / "uploads")
     monkeypatch.setattr(storage_manager, "_RESULTS", base / "results")
     monkeypatch.setattr(storage_manager, "_HISTORY", base / "history.json")
-    monkeypatch.setattr(text_cleaner, "is_available", lambda: True)
+    monkeypatch.setattr(text_cleaner, "is_available", lambda local=False: True)
     monkeypatch.setattr(text_cleaner._gemini, "run_text", lambda prompt: prompt)
+    monkeypatch.setattr(text_cleaner._ollama, "run_text", lambda prompt: prompt)  # 비용 우선 = 로컬 정제
 
 
 def _final_status(pdf) -> str:

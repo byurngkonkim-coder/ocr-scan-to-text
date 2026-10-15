@@ -29,12 +29,14 @@ _DEFAULTS: dict = {
     "default_format": "txt",
     "confidence_threshold": 85.0,   # 하루명화 보정: 깨진 쪽 63~84, 본문 88+ (QA 2026-10-03)
     "auto_fallback": True,
+    "vision_max_ratio": 0.1,        # 비용 우선: 문서당 Vision 폴백 쪽 상한(비율, 최소 3쪽)
+    "local_cleanup_engine": "rules", # 비용 우선 정제: rules(내장 규칙) | ollama(exaone3.5, 보류)
     "auto_spellcheck": True,
     "save_figures": False,
     # ── 문서 정제(교정) 단계 ────────────────────────────────────────────────
     # OCR(충실 추출) 이후 문서 전체를 LLM(Gemini)으로 교정하여 쪽번호·러닝헤더·
     # 스캔줄 등 레이아웃 노이즈 제거 + 페이지 넘김 단어 복원 + 띄어쓰기·맞춤법.
-    "enable_cleanup": True,               # 정제 단계 기본 활성화(Vision 모드)
+    "enable_cleanup": False,              # 기본 끔 — 전 쪽 Gemini 재전송이라 비용의 94%(2026-10-15 실측). 필요할 때만 체크
     "cleanup_chunk_chars": 4000,          # 정제 1회 호출당 목표 문자 수(페이지 누적)
     "parallel_workers": 4,                # 한 파일 안에서 동시에 보내는 정제 구간·Vision 쪽 수(1=차례대로)
     "batch_workers": 2,                   # ④ 일괄 처리에서 동시에 처리하는 파일 수(1=한 건씩)
@@ -228,8 +230,8 @@ def get_default_dpi() -> int:
 # ── 문서 정제(교정) 단계 게터 ─────────────────────────────────────────────────
 
 def get_enable_cleanup() -> bool:
-    """OCR 후 문서 전체 LLM 정제(교정) 단계 실행 여부. 기본 True."""
-    return bool(load().get("enable_cleanup", True))
+    """OCR 후 문서 전체 LLM 정제(교정) 단계 실행 여부. 기본 False(비용)."""
+    return bool(load().get("enable_cleanup", False))
 
 
 def get_confidence_threshold() -> float:
@@ -238,6 +240,20 @@ def get_confidence_threshold() -> float:
         return float(load().get("confidence_threshold", 85.0))
     except (TypeError, ValueError):
         return 85.0
+
+
+def get_local_cleanup_engine() -> str:
+    """비용 우선 모드 문장 정제 엔진: 'rules'(내장 정제규칙, 기본) | 'ollama'(exaone3.5 — 마지막 수단, 느림)."""
+    return "ollama" if load().get("local_cleanup_engine") == "ollama" else "rules"
+
+
+def get_vision_max_ratio() -> float:
+    """비용 우선 모드에서 한 문서가 Vision 폴백에 쓸 수 있는 쪽 비율 상한. 기본 0.1(최소 3쪽).
+    실측(2026-10-15): B2B영업전략 301쪽 중 131쪽(43%)이 폴백 — 보완이 아니라 주 경로가 됐다."""
+    try:
+        return float(load().get("vision_max_ratio", 0.1))
+    except (TypeError, ValueError):
+        return 0.1
 
 
 def get_parallel_workers() -> int:

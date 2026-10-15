@@ -73,6 +73,20 @@ def test_body_page_conf_90_stays_rapidocr(monkeypatch, tmp_path, run):
 
 
 @pytest.mark.parametrize("run", [_gui, _cli])
+def test_quality_flag_alone_does_not_call_vision(monkeypatch, tmp_path, run):
+    # 품질 진단(흐림)만으로 Vision 에 보내던 것을 없앴다 — B2B 301쪽 실측에서 진단 35쪽 중
+    # 34쪽을 RapidOCR 이 원문과 99~100% 일치하게 읽었다(2026-10-15). 신뢰도로만 판단한다.
+    _setup(monkeypatch, 93.0, tmp_path)
+    monkeypatch.setattr(quality_diagnoser, "diagnose", lambda img: QualityReport(
+        blur_score=50, avg_brightness=128, skew_angle=0,
+        is_vertical_text=False, width_px=800, height_px=1000))
+    calls = []
+    monkeypatch.setattr(vision, "run", lambda *a, **k: calls.append(1))
+    page = run()
+    assert page.engine == OCREngine.RAPIDOCR and not calls
+
+
+@pytest.mark.parametrize("run", [_gui, _cli])
 def test_korean_corrector_applied_once_per_page(monkeypatch, tmp_path, run):
     # 교정기가 판독(rapidocr_engine.run)과 쪽 마무리에서 두 번 돌았다 — 다시 돌리면 결과가 또 바뀌어
     # '경제학 박사학위'→'경제학박사학위' 처럼 띄어쓰기를 붙이기도 했다(2026-10-13 예측기계). 쪽 마무리 1번만.

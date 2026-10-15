@@ -53,8 +53,9 @@ def _cli(monkeypatch, blurry, conf, vision_run):
                                   stem="t", llm_correct=False, llm_budget=0, verbose=False)
 
 
-# (품질불량?, RapidOCR 신뢰도) — 저신뢰 폴백 / 품질불량 즉시폴백+저신뢰 / 품질불량 즉시폴백+고신뢰
-CASES = [(False, 40.0), (True, 40.0), (True, 90.0)]
+# (품질불량?, RapidOCR 신뢰도) — 저신뢰 폴백 / 품질불량+저신뢰
+# 품질불량+고신뢰는 이제 Vision 을 부르지 않는다(2026-10-15) → test_quality_flag_alone_does_not_call_vision
+CASES = [(False, 40.0), (True, 40.0)]
 
 
 @pytest.mark.parametrize("run", [_gui, _cli])
@@ -66,7 +67,7 @@ def test_vision_failure_keeps_rapidocr(monkeypatch, run, blurry, conf):
 
 
 @pytest.mark.parametrize("run", [_gui, _cli])
-@pytest.mark.parametrize("blurry,conf", CASES[:2])
+@pytest.mark.parametrize("blurry,conf", CASES)
 def test_vision_success_is_used(monkeypatch, run, blurry, conf):
     page = run(monkeypatch, blurry, conf, _vision_ok)
     assert page.engine == OCREngine.OLLAMA and "비전" in page.raw_text

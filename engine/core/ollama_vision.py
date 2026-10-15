@@ -101,12 +101,20 @@ def run_text(prompt: str) -> str:
     return _generate(config.get_ollama_text_model(), prompt, num_ctx=num_ctx)
 
 
-def is_available() -> bool:
-    """Ollama 서버가 응답하고 비전 모델이 설치돼 있으면 True."""
+def _has_model(model: str) -> bool:
     try:
         with urllib.request.urlopen(f"{_base_url()}/api/tags", timeout=2) as r:
             names = {m.get("name", "") for m in json.load(r).get("models", [])}
     except Exception:  # noqa: BLE001 — 서버 미기동·주소 오류는 '사용 불가'로 처리
         return False
-    model = config.get_ollama_vision_model()
     return model in names or f"{model}:latest" in names
+
+
+def is_available() -> bool:
+    """Ollama 서버가 응답하고 비전 모델이 설치돼 있으면 True."""
+    return _has_model(config.get_ollama_vision_model())
+
+
+def is_text_available() -> bool:
+    """Ollama 서버가 응답하고 텍스트 모델(문장 정제용)이 설치돼 있으면 True."""
+    return _has_model(config.get_ollama_text_model())

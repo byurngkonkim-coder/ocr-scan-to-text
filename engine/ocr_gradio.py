@@ -1,7 +1,9 @@
 """Gradio 웹 UI — OCR 스캔파일 텍스트추출 도구 (localhost:7860)"""
 from __future__ import annotations
 import html
+import math
 import os
+import threading
 import sys
 import time
 import tempfile
@@ -33,6 +35,11 @@ WARN_SIZE_MB = 20
 
 # 진행 기록에 쓰는 로컬 OCR 엔진 이름 (로컬 엔진은 RapidOCR 하나뿐)
 LOCAL_OCR_NAME = "RapidOCR 한글 v5"
+BATCH_MODE = "RapidOCR 우선"   # ④ 일괄 처리는 비용 우선 고정 — 정확도 우선은 ① 단건만(사용자 결정 2026-10-15)
+VISION_COST_PER_PAGE = 0.0011  # Gemini Vision 쪽당 평균 요금(USD) — usage_stats 2,287회 실측(2026-10-15)
+# 마지막 스캔 처리 결과 — '검토 필요 쪽만 다시 읽기'용. 문서 전체를 정확도 우선으로 다시 돌리는 대신
+# 그 쪽만 Vision 으로 읽어 바꾼다(사용자 결정 2026-10-15).
+_LAST_REVIEW: dict = {}
 
 # 사용자가 결과를 바로 찾는 고정 폴더(프로그램 루트/02_결과).
 # storage/ 는 이력 관리용 보관소이고, 이쪽은 '작업 산출물' 자리다.
@@ -392,11 +399,27 @@ def _page_plan(file_path: Path, start_page: int = 1, max_pages: int | None = Non
 # 단일 페이지 OCR
 # ══════════════════════════════════════════════════════════════════════════════
 
+class _VisionBudget:
+    """비용 우선 모드에서 한 문서의 Vision 폴백 쪽 수 상한. 쪽 읽기 스레드끼리 나눠 쓴다."""
+
+    def __init__(self, total_pages: int):
+        self.left = max(3, math.ceil(total_pages * config.get_vision_max_ratio()))
+        self._lock = threading.Lock()
+
+    def take(self) -> bool:
+        with self._lock:
+            if self.left <= 0:
+                return False
+            self.left -= 1
+            return True
+
+
 def _process_page(image, page_num: int, lang: str,
                   no_preprocess: bool, no_fallback: bool, no_figure: bool,
                   llm_correct: bool, llm_budget: int,
                   quick: bool = False,
-                  vision_first: bool = False) -> tuple[PageResult, list[str]]:
+                  vision_first: bool = False,
+                  vision_budget: _VisionBudget | None = None) -> tuple[PageResult, list[str]]:
     """
     vision_first=True : Vision 우선 모드 (API 키 있을 때)
       1순위: Vision 엔진     — 레이아웃 이해, 마진 무시, 한국어 고정확도
@@ -462,18 +485,18 @@ def _process_page(image, page_num: int, lang: str,
             ocr_image = det.masked_image or image
             logs.append(f"  p.{page_num} 감지 영역: {len(det.regions)}개")
 
-    # 품질 불량 즉시 Vision 폴백 (RapidOCR 우선 모드일 때)
+    # 이미지 품질 진단만으로는 Vision 에 보내지 않는다 — RapidOCR 을 먼저 돌리고 신뢰도로 판단한다.
+    # 실측(2026-10-15, B2B영업전략 301쪽): 품질불량 진단 35쪽 중 34쪽을 RapidOCR 이 원문과
+    # 99~100% 일치하게 읽었다(신뢰도 92+). 진단은 전처리 강도(report)에만 쓴다.
     # Vision 엔진은 실패 시 예외를 던진다 — 받지 않으면 한 쪽 실패로 파일 전체가 중단된다
     vision_err = ""
-    if not vision_first and not no_fallback and report.needs_fallback and claude_vision.is_available():
-        logs.append(f"  p.{page_num}: 품질 불량 → {claude_vision.provider_label()} 폴백")
-        try:
-            ocr_result = claude_vision.run(image, lang_hint=lang)
-        except Exception as e:
-            vision_err = str(e)
-            logs.append(f"  p.{page_num}: 폴백 실패 → {LOCAL_OCR_NAME}(으)로 계속 ({e})")
-        else:
-            return _finalize(ocr_result, page_num, placeholders, llm_correct, llm_budget), logs
+    over_budget = False   # 문서당 Vision 상한 소진 — 유료 호출 없이 로컬 결과로 남긴다
+    def _budget_ok() -> bool:
+        nonlocal over_budget
+        if vision_budget is None or vision_budget.take():
+            return True
+        over_budget = True
+        return False
 
     # 전처리
     if no_preprocess:
@@ -491,7 +514,8 @@ def _process_page(image, page_num: int, lang: str,
 
     # RapidOCR 저신뢰도 → Vision 폴백 (비용 우선 모드일 때만)
     if not vision_first and not no_fallback and low_quality:
-        if claude_vision.is_available() and not vision_err:  # 이미 실패했으면 재시도 안 함 (Ollama 쪽당 최대 9분)
+        # 문서당 상한 넘으면 호출 안 함
+        if claude_vision.is_available() and _budget_ok():
             reason = "자모분리" if ocr_result.has_jamo_split else f"신뢰도 {ocr_result.confidence:.1f}%"
             logs.append(f"  p.{page_num}: {reason} → {claude_vision.provider_label()} 폴백")
             try:
@@ -505,15 +529,14 @@ def _process_page(image, page_num: int, lang: str,
                   else f"신뢰도 낮음 ({ocr_result.confidence:.1f}%)")
         if vision_err:
             reason += " · Vision 폴백 실패"
+        elif over_budget:
+            reason += " · 문서당 Vision 상한 도달(비용 보호)"
         logs.append(f"  p.{page_num}: ⚠ {reason} — 검토 필요")
         return _finalize(ocr_result, page_num, placeholders, llm_correct, llm_budget,
                          needs_review=True, review_reason=reason), logs
 
     logs.append(f"  p.{page_num}: {LOCAL_OCR_NAME} 신뢰도 {ocr_result.confidence:.1f}%")
-    # 품질 불량 진단 쪽은 RapidOCR 신뢰도가 높아도 폴백 실패를 결과에 남긴다
-    return _finalize(ocr_result, page_num, placeholders, llm_correct, llm_budget,
-                     needs_review=bool(vision_err),
-                     review_reason="품질 불량 · Vision 폴백 실패" if vision_err else ""), logs
+    return _finalize(ocr_result, page_num, placeholders, llm_correct, llm_budget), logs
 
 
 def _finalize(ocr_result, page_num: int, placeholders: list[str],
@@ -628,8 +651,12 @@ def _run_digital_pdf(file_path: Path, pages_text: list[str], out_fmt: OutputForm
                      cleanup: bool, front_matter: bool, start_time: float,
                      label: str = "디지털 PDF 추출",
                      garbled_pages=(), read_page=None, noisy_pages=(), repaired_lines=None,
-                     page_fn=_finalize_digital):
+                     page_fn=_finalize_digital, local_clean: bool = True):
     """디지털 PDF(텍스트 레이어 보유) 전용 초고속 경로.
+
+    local_clean=True(기본): 문장 정제를 내장 규칙(설정 시 로컬 exaone3.5)으로 — 유료 API 로 보내지 않는다.
+    디지털 PDF·txt 는 읽는 방식과 상관없이 이 경로다 — 글자가 이미 정확해 유료 정제로 얻는 것이 없다
+    (2026-10-15 디지털 PDF 311개를 Gemini 정제로 보내 크레딧 소진).
 
     이미지 렌더링·OCR·Vision API를 모두 건너뛰고 내장 텍스트를 그대로 읽는다.
     호출부(process_preview/_run_ocr)가 pdf_text_layer.analyze()로 디지털임을
@@ -699,20 +726,26 @@ def _run_digital_pdf(file_path: Path, pages_text: list[str], out_fmt: OutputForm
         )
 
     # ── 문서 전체 정제(교정) — OCR 경로와 동일(선택) ────────────────────────────
-    # cleanup=True 이고 Gemini 키가 있으면 추출 텍스트도 문서 맥락 교정을 적용한다.
-    # (완전 오프라인·무비용을 원하면 '문장 정제' 체크를 끄면 이 단계가 생략된다.)
+    # cleanup=True 면 추출 텍스트도 문서 맥락 교정을 적용한다.
+    # 소스가 디지털·txt 면 모드와 무관하게 내장 규칙(설정 시 exaone3.5).
     cleaned_text = None
     clean_note = ""
     ckpt = None
     content_pages = [p for p in result.pages if not p.is_blank]
-    if cleanup and content_pages and text_cleaner.is_available():
+    if cleanup and content_pages and text_cleaner.is_available(local=local_clean):
         ckpt = _CleanCheckpoint(file_path.stem, out_fmt)
         crep: dict = {}     # 이 실행의 정제 보고서(여러 파일 동시 처리 시 전역 보고서는 섞인다)
+        pages_in = [p.corrected_text for p in content_pages]
+        if local_clean and page_fn is _finalize_digital:   # txt 는 이미 교정된 본문 — 두 번 돌리지 않는다
+            # 내장 글자는 OCR 경로(_finalize)의 한글 교정기를 거치지 않았다 → 여기서 1번만
+            from core.korean_corrector import refine_korean_text
+            pages_in = [refine_korean_text(t) for t in pages_in]
         clean_gen = text_cleaner.iter_clean(
-            [p.corrected_text for p in content_pages],
+            pages_in,
             drop_front_matter=front_matter,
             on_chunk=ckpt.append,
             report_out=crep,
+            local=local_clean,
         )
         try:
             while True:
@@ -1225,11 +1258,13 @@ def _run_ocr(
     # OCR 원문을 쪽마다 02_결과/{원본명}_OCR중.txt 에 쌓는다 — 중단·크래시에도 이미 읽은
     # 쪽(유료 Vision 포함)이 남는다. 정상 확정 후 지운다. (QA ISSUE-B, 2026-10-03)
     ocr_ckpt = _CleanCheckpoint(file_path.stem, OutputFormat.TXT, suffix="OCR중")
+    vision_budget = None if vision_first else _VisionBudget(total)
     def _read(image, page_num):
         try:
             return _process_page(
                 image, page_num, lang, no_preprocess, no_fallback, no_figure,
                 llm_correct, llm_budget, vision_first=vision_first,
+                vision_budget=vision_budget,
             )
         except Exception as page_err:   # 한 쪽의 예외가 파일 전체를 죽이지 않게 — 검토 필요로 남김
             reason = f"처리 오류: {page_err}"
@@ -1310,7 +1345,8 @@ def _run_ocr(
     clean_note = ""
     ckpt = None
     content_pages = [p for p in result.pages if not p.is_blank]
-    if cleanup and content_pages and text_cleaner.is_available():
+    # 정제는 읽는 방식과 상관없이 내장 규칙 — Gemini OCR 결과도 이미 깨끗해 유료 정제 이득이 작다(사용자 결정 2026-10-15)
+    if cleanup and content_pages and text_cleaner.is_available(local=True):
         ckpt = _CleanCheckpoint(file_path.stem, out_fmt)
         crep: dict = {}     # 이 실행의 정제 보고서(여러 파일 동시 처리 시 전역 보고서는 섞인다)
         clean_gen = text_cleaner.iter_clean(
@@ -1318,6 +1354,7 @@ def _run_ocr(
             drop_front_matter=front_matter,
             on_chunk=ckpt.append,
             report_out=crep,
+            local=True,                 # 내장 규칙(유료 API 0)
         )
         try:
             while True:
@@ -1343,8 +1380,8 @@ def _run_ocr(
             step_logs.append(f"  ⚠️ {clean_note}")
         if _crep:   # 부속물 제거·지어낸 문장 등 확인할 경고 — 강등 건은 위 개수 줄로 대신한다
             step_logs.extend(f"  ⚠ {w}" for w in _crep["warnings"] if "강등" not in w)
-    elif cleanup and not text_cleaner.is_available():
-        step_logs.append("  ⚠ 정제 건너뜀 — Gemini 키 필요(현재 Vision=Gemini 모드에서만 정제 지원)")
+    elif cleanup:
+        step_logs.append("  ⚠ 정제 건너뜀 — Ollama 텍스트 모델(exaone3.5) 응답 없음 — Ollama 실행 확인")
 
     # 저장
     yield (
@@ -1429,6 +1466,11 @@ def _run_ocr(
         # 조용히 넘기면 화면엔 '완료'만 뜨고 파일은 없다 — 반드시 표면화한다.
         step_logs.append(f"  ⚠ 이력 보관소 저장 실패: {e}")
 
+    _LAST_REVIEW.clear()
+    if review_count:
+        _LAST_REVIEW.update(file=str(file_path), result=result, cleanup=cleanup,
+                            front_matter=front_matter, out_fmt=out_fmt, lang=lang, total=total)
+
     summary = [
         f"✅ 완료  |  전체 {total}p → OCR 처리 {ocr_count}p  |  총 소요: {total_el}",
         f"   Vision 처리: {vision_count}p",
@@ -1452,6 +1494,83 @@ def _run_ocr(
         None,
     )
     progress(1.0, desc="완료")
+
+
+def _review_pages() -> list[PageResult]:
+    res = _LAST_REVIEW.get("result")
+    return [p for p in res.pages if p.needs_review and not p.is_blank] if res else []
+
+
+def _review_btn_update():
+    """처리 직후 '검토 필요 쪽만 다시 읽기' 버튼 — 쪽 수와 예상 요금을 미리 보여 준다."""
+    n = len(_review_pages())
+    if not n or not claude_vision.is_available():
+        return gr.update(visible=False)
+    return gr.update(visible=True,
+                     value=f"검토 필요 {n}쪽만 {claude_vision.provider_label()}으로 다시 읽기 "
+                           f"(약 ${n * VISION_COST_PER_PAGE:.2f})")
+
+
+def _render_page(file_path: Path, page_num: int):
+    if detector.detect(file_path) == "pdf":
+        return next(pdf_splitter.iter_pdf_pages(
+            file_path, dpi=config.get_default_dpi(), first_page=page_num, last_page=page_num))
+    return pdf_splitter.load_image(file_path)[page_num - 1]
+
+
+def reread_review_pages(file_obj):
+    """마지막 처리에서 '검토 필요'로 남은 쪽만 Vision 으로 다시 읽어 결과 파일을 새로 저장한다.
+    사용자가 쪽 수·예상 요금을 보고 누른 것이라 문서당 상한(_VisionBudget)은 적용하지 않는다."""
+    file_obj = _first_file(file_obj)
+    st = _LAST_REVIEW
+    if not st or file_obj is None or Path(file_obj.name) != Path(st["file"]):
+        return "⚠ 다시 읽을 결과가 없습니다 — 이 파일을 먼저 전체 처리하세요.", gr.update(), None, gr.update(visible=False)
+    if not claude_vision.is_available():
+        return "⚠ Vision 엔진 키가 없거나 결제 오류로 멈춘 상태입니다.", gr.update(), None, gr.update(visible=False)
+
+    file_path, result, lang = Path(st["file"]), st["result"], st["lang"]
+    logs, fixed = [], 0
+    for i, page in enumerate(result.pages):
+        if not page.needs_review or page.is_blank:
+            continue
+        try:
+            ocr = claude_vision.run(_render_page(file_path, page.page_num), lang_hint=lang)
+        except Exception as e:     # 결제 오류 등 — 그 쪽은 그대로 두고 알린다
+            logs.append(f"  p.{page.page_num}: 다시 읽기 실패 ({e})")
+            if not claude_vision.is_available():
+                break
+            continue
+        result.pages[i] = _finalize(ocr, page.page_num, page.figures, False, 0)
+        fixed += 1
+
+    content = [p for p in result.pages if not p.is_blank]
+    tmp_dir = Path(tempfile.mkdtemp(prefix="ocr_review_"))
+    if st["cleanup"]:
+        text = text_cleaner.clean_pages([p.corrected_text for p in content],
+                                        drop_front_matter=st["front_matter"], local=True)
+        out_path = writer.write_plain(file_path, text, tmp_dir, st["out_fmt"])
+    else:
+        out_path = writer.write(result, tmp_dir, st["out_fmt"])
+    results_path = _publish_to_results(out_path, file_path.stem)
+
+    vision_count = sum(1 for p in result.pages
+                       if p.engine in (OCREngine.GEMINI, OCREngine.CLAUDE_VISION, OCREngine.OLLAMA))
+    try:
+        storage_manager.record(
+            original_name=file_path.name, result_path=results_path, upload_path=None,
+            pages_total=st["total"], pages_ocr=len(content),
+            pages_blank=len(result.pages) - len(content), vision_pages=vision_count,
+            engine_mode="rapidocr_first+review", file_size_bytes=file_path.stat().st_size,
+            output_path=results_path, clean_note="")
+    except Exception as e:
+        logs.append(f"  ⚠ 이력 보관소 저장 실패: {e}")
+
+    left = len(_review_pages())
+    if not left:
+        _LAST_REVIEW.clear()
+    status = "\n".join([f"✅ 검토 필요 쪽 다시 읽기: {fixed}쪽 교체 · 남은 검토 필요 {left}쪽",
+                        f"   📁 저장 위치: {results_path}", *logs[-5:]])
+    return status, _build_preview(result), str(results_path), _review_btn_update()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1516,7 +1635,7 @@ def build_ui() -> gr.Blocks:
                                 _vision_mode_note("Vision 우선" if has_key else "RapidOCR 우선"))
                             cleanup_chk = gr.Checkbox(
                                 label="문장 정제 — 쪽번호·머리글 제거, 띄어쓰기·맞춤법 교정, 문단 복원",
-                                value=bool(cfg.get("enable_cleanup", True)) and text_cleaner.is_available(),
+                                value=bool(cfg.get("enable_cleanup", False)),
                                 info=_cleanup_info(),
                             )
                             front_matter_chk = gr.Checkbox(
@@ -1572,6 +1691,7 @@ def build_ui() -> gr.Blocks:
                             with gr.Row(visible=False) as continue_row:
                                 continue_btn  = gr.Button("나머지 쪽 계속 처리", variant="primary")
                                 save_only_btn = gr.Button("미리보기까지만 저장", variant="secondary")
+                            review_btn = gr.Button(visible=False, variant="secondary")
                             preview_out = gr.Textbox(
                                 label="본문 미리보기 (앞 4,000자)",
                                 lines=8, interactive=False,
@@ -1716,18 +1836,20 @@ def build_ui() -> gr.Blocks:
             with gr.Tab("④ 일괄 처리") as batch_tab:
                 with gr.Column(elem_classes="step-card"):
                     gr.HTML(_step_head(None, "일괄 처리 방식 설정",
-                            "④ 탭 일괄 처리에서 독립적으로 적용할 읽는 방식과 정제 옵션을 지정합니다. 기본값은 비용 우선입니다."))
+                            "일괄 처리는 비용 우선으로 고정입니다. 정확도 우선은 ① 처리하기에서 한 권씩 쓰세요."))
                     with gr.Row():
+                        # 대량 과금 방지 — 일괄은 비용 우선 고정(사용자 결정 2026-10-15). _batch_submit 도 강제한다
                         batch_vision_first = gr.Radio(
-                            label="읽는 방식",
+                            label="읽는 방식 (일괄 처리는 비용 우선 고정)",
                             choices=_vision_choices(),
-                            value="RapidOCR 우선",  # 기본값: 비용 우선 (RapidOCR 한글 v5)
+                            value="RapidOCR 우선",
+                            interactive=False,
                         )
                     batch_vision_note = gr.HTML(_vision_mode_note("RapidOCR 우선"))
                     with gr.Row():
                         batch_cleanup_chk = gr.Checkbox(
                             label="문장 정제 — 쪽번호·머리글 제거, 띄어쓰기·맞춤법 교정, 문단 복원",
-                            value=bool(cfg.get("enable_cleanup", True)) and text_cleaner.is_available(),
+                            value=bool(cfg.get("enable_cleanup", False)),
                             info=_cleanup_info(),
                         )
                         batch_front_matter_chk = gr.Checkbox(
@@ -1796,7 +1918,8 @@ def build_ui() -> gr.Blocks:
         ).then(fn=process_full_or_queue, inputs=common_inputs, outputs=common_outputs,
                show_progress="hidden"
         ).then(fn=lambda _: (gr.update(visible=False), gr.update(visible=False)),
-               inputs=[images_state], outputs=[continue_row, stop_btn])
+               inputs=[images_state], outputs=[continue_row, stop_btn]
+        ).then(fn=_review_btn_update, outputs=[review_btn])
 
         cont_event = continue_btn.click(
             fn=lambda: gr.update(visible=True), outputs=[stop_btn]
@@ -1804,7 +1927,14 @@ def build_ui() -> gr.Blocks:
                outputs=common_outputs,  # common_inputs에 이미 vision_first 포함
                show_progress="hidden"
         ).then(fn=lambda _: (gr.update(visible=False), gr.update(visible=False)),
-               inputs=[images_state], outputs=[continue_row, stop_btn])
+               inputs=[images_state], outputs=[continue_row, stop_btn]
+        ).then(fn=_review_btn_update, outputs=[review_btn])
+
+        review_btn.click(fn=lambda: gr.update(interactive=False, value="다시 읽는 중…"),
+                         outputs=[review_btn]
+        ).then(fn=reread_review_pages, inputs=[file_input],
+               outputs=[status_out, preview_out, download_out, review_btn], show_progress="hidden"
+        ).then(fn=lambda: gr.update(interactive=True), outputs=[review_btn])
 
         stop_btn.click(fn=lambda: gr.update(visible=False), outputs=[stop_btn],
                        cancels=[prev_event, run_event, cont_event])
@@ -1817,8 +1947,8 @@ def build_ui() -> gr.Blocks:
                 "", "", None, gr.update(visible=False), None,
             ),
             inputs=[file_input], outputs=common_outputs,
-        ).then(fn=lambda _: (gr.update(visible=False), gr.update(visible=False)),
-               inputs=[images_state], outputs=[continue_row, stop_btn]
+        ).then(fn=lambda _: (gr.update(visible=False), gr.update(visible=False), gr.update(visible=False)),
+               inputs=[images_state], outputs=[continue_row, stop_btn, review_btn]
         ).then(fn=_file_info_html, inputs=[file_input], outputs=[file_info])
 
         # 읽는 방식 변경 시 안내 업데이트
@@ -1872,7 +2002,7 @@ def build_ui() -> gr.Blocks:
                 claude_vision.set_session_key(key)
             base = Path((folder or "").strip() or batch_runner.INPUT_DIR)
             batch_runner.submit([base / n for n in names],
-                                (lang, fmt, no_pre, no_fb, no_fig, llm_c, llm_b, key, vf),
+                                (lang, fmt, no_pre, no_fb, no_fig, llm_c, llm_b, key, BATCH_MODE),
                                 {"cleanup": cleanup, "front_matter": fm})
             return batch_runner.status_html(), *_batch_list(folder)[1:]
 
@@ -1910,7 +2040,8 @@ def build_ui() -> gr.Blocks:
             return (_header_html(), _engine_guide_html(),
                     gr.update(choices=_vision_choices(), value=mode),
                     _vision_mode_note(mode),
-                    gr.update(value=text_cleaner.is_available(), info=_cleanup_info()),
+                    # 키가 있다고 정제를 켜지 않는다 — 설정값만 따른다(키 연결 시 자동 ON → 요금 폭탄, 2026-10-15)
+                    gr.update(value=config.get_enable_cleanup(), info=_cleanup_info()),
                     _billing_html())
 
         engine_outputs = [header_html, engine_guide, vision_first, vision_first_note,
@@ -2169,11 +2300,12 @@ def _vision_mode_note(mode) -> str:
 
 
 def _cleanup_info() -> str:
-    if text_cleaner.is_available():
-        return "Google Gemini 사용 · 책 1권 약 2~4분, 수십 원 · 전체 처리에만 적용됩니다."
-    if claude_vision.provider_name() == "claude":
-        return "Claude 엔진에서는 쓸 수 없습니다(문장 정제는 Gemini 전용)."
-    return "Gemini API 키가 없어 쓸 수 없습니다. ② 엔진 · API 키 탭을 참고하세요."
+    if config.get_local_cleanup_engine() == "rules":
+        local = "내장 정제규칙(무료·API 없음)"
+    else:
+        local = ("로컬 Ollama(exaone3.5) 무료·느림" if text_cleaner.is_available(local=True)
+                 else "Ollama(exaone3.5) 미실행 — 정제 생략")
+    return f"{local} · 읽는 방식·소스와 상관없이 같은 방법 · 전체 처리에만 적용됩니다."
 
 
 def _file_info_html(f) -> str:

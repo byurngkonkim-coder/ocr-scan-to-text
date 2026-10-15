@@ -417,20 +417,10 @@ def _process_page(
                 kinds = [f"{r.kind}({r.index})" for r in det_result.regions]
                 console.print(f"  [dim]감지된 영역: {', '.join(kinds)}[/dim]")
 
-    # 품질 진단 → 즉시 폴백
+    # 이미지 품질 진단만으로는 Vision 에 보내지 않는다 — RapidOCR 신뢰도로 판단(ocr_gradio 와 같음).
+    # 실측(2026-10-15, B2B 301쪽): 품질불량 진단 35쪽 중 34쪽을 RapidOCR 이 99~100% 일치하게 읽었다.
     # Vision 엔진은 실패 시 예외를 던진다 — 받지 않으면 한 쪽 실패로 파일 전체가 중단된다
     vision_err = ""
-    if not no_fallback and report.needs_fallback and claude_vision.is_available():
-        if verbose:
-            console.print(f"  [yellow]→ 품질 진단 폴백[/yellow]")
-        try:
-            ocr_result = claude_vision.run(image, lang_hint=lang)
-        except Exception as e:
-            vision_err = str(e)
-            console.print(f"  [yellow]⚠ p.{page_num} 폴백 실패 → RapidOCR로 계속 ({e})[/yellow]")
-        else:
-            return _finalize_page(ocr_result, page_num, placeholders,
-                                   no_spellcheck, llm_correct, llm_budget)
 
     # 전처리
     if no_preprocess:

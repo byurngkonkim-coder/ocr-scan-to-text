@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 
 from core import config
 from core import gemini_vision as _gemini
+from core import ollama_vision as _ollama
 from core.postprocessor import _PAGE_FOOTER_LINE
 
 # 페이지 경계 센티넬 — 입력에 실제로 등장할 가능성이 없는 문자열
@@ -132,21 +133,24 @@ def _output_ok(cand: str, joined: str, want_front: bool, want_colophon: bool) ->
 
 # ── 공개 API ──────────────────────────────────────────────────────────────────
 
-def is_available() -> bool:
-    """정제 사용 가능 여부. 현재는 Gemini 텍스트 호출 전용."""
+def is_available(local: bool = False) -> bool:
+    """정제 사용 가능 여부. local=True(비용 우선)는 내장 규칙(항상 가능) 또는 설정 시 Ollama, 아니면 Gemini."""
+    if local:
+        return config.get_local_cleanup_engine() == "rules" or _ollama.is_text_available()
     if config.get_vision_provider() == "claude":
         return False  # 정제 경로는 아직 Gemini만 구현
     return _gemini.is_available()
 
 
-def clean_pages(pages: list[str], progress_cb=None, drop_front_matter: bool = False) -> str:
+def clean_pages(pages: list[str], progress_cb=None, drop_front_matter: bool = False,
+                local: bool = False) -> str:
     """
     페이지 텍스트 리스트 → 정제된 전체 본문(문자열).
 
     progress_cb(done_chunks, total_chunks) 가 주어지면 청크 단위로 호출한다.
     drop_front_matter=True 면 표제지·판권·차례 등 앞뒤 부속물까지 제거한다.
     """
-    gen = iter_clean(pages, drop_front_matter=drop_front_matter)
+    gen = iter_clean(pages, drop_front_matter=drop_front_matter, local=local)
     try:
         while True:
             done, total = next(gen)
@@ -157,10 +161,13 @@ def clean_pages(pages: list[str], progress_cb=None, drop_front_matter: bool = Fa
 
 
 def iter_clean(pages: list[str], drop_front_matter: bool = False, on_chunk=None,
-               report_out: dict | None = None):
+               report_out: dict | None = None, local: bool = False):
     """
     제너레이터: 청크 처리마다 (done_chunks, total_chunks) 를 yield 하고,
     마지막에 정제된 전체 본문을 return(StopIteration.value)한다.
+
+    local=True: 비용 우선 모드 — 유료 API 호출 0. 기본은 내장 정제규칙(_rules_clean)만,
+    local_cleanup_engine='ollama' 면 로컬 exaone3.5 (무결성 가드·강등은 Gemini 경로와 같다).
 
     drop_front_matter=True: 앞부속(표제지·판권·차례·헌사·시리즈 광고)은 본문이
     나올 때까지 앞 청크에서 제거하고, 마지막 청크의 뒤부속(판권/간기/CIP)도 제거한다.
@@ -222,7 +229,7 @@ def iter_clean(pages: list[str], drop_front_matter: bool = False, on_chunk=None,
     while drop_front_matter and i < min(total, _FRONT_MATTER_MAX_CHUNKS):
         yield i, total
         res = _clean_chunk(chunks[i], i, total, front_chunk=True,
-                           want_colophon=(i == total - 1))
+                           want_colophon=(i == total - 1), local=local)
         merge(res)
         i += 1
         if len(res.cleaned) >= 100:     # 실질 본문이 나오면 이후 구간은 그대로 둔다
@@ -235,7 +242,8 @@ def iter_clean(pages: list[str], drop_front_matter: bool = False, on_chunk=None,
         ex = ThreadPoolExecutor(max_workers=config.get_parallel_workers())
         try:
             futs = {ex.submit(_clean_chunk, chunks[k], k, total, front_chunk=False,
-                              want_colophon=drop_front_matter and k == total - 1): k
+                              want_colophon=drop_front_matter and k == total - 1,
+                              local=local): k
                     for k in range(i, total)}
             ready: dict[int, _ChunkResult] = {}
             next_k, done = i, i
@@ -404,11 +412,11 @@ class _ChunkResult:
 
 
 def _clean_chunk(chunk: list[str], i: int, total: int, *, front_chunk: bool,
-                 want_colophon: bool) -> _ChunkResult:
+                 want_colophon: bool, local: bool = False) -> _ChunkResult:
     """구간 하나를 정제한다. 공유 상태를 건드리지 않아 여러 구간을 동시에 돌릴 수 있다."""
     res = _ChunkResult()
     want_front = front_chunk
-    if front_chunk:
+    if front_chunk and not local:   # 문단 분류는 Gemini 호출 — 비용 우선에선 쓰지 않는다
         # 문단 분류로 먼저 걷어낸다 — 실패하면 기존 규칙 7(정제 중 삭제)로 돌아간다
         cls = drop_front_paragraphs(chunk)
         if cls is not None:
@@ -421,6 +429,10 @@ def _clean_chunk(chunk: list[str], i: int, total: int, *, front_chunk: bool,
     if not chunk:                   # 구간 전체가 앞부속
         return res
     joined = ("\n" + PAGEBREAK + "\n").join(chunk)
+    if local and config.get_local_cleanup_engine() == "rules":
+        res.cleaned = _rules_clean(joined)   # 비용 우선 기본 — LLM 없이 정제규칙만
+        return res
+    run_text = _ollama.run_text if local else _gemini.run_text   # 비용 우선(ollama 설정) → 로컬 exaone
     prompt = _build_prompt(joined, drop_front=want_front, drop_colophon=want_colophon)
     # 무결성 가드: 빈/과소 응답(안전필터 차단·조기 종료 — 예외 없이 옴)은
     # 수용하지 않고 1회 재시도, 그래도 미달이면 원문 보존 강등.
@@ -428,7 +440,7 @@ def _clean_chunk(chunk: list[str], i: int, total: int, *, front_chunk: bool,
     api_failed = False
     for _attempt in range(2):
         try:
-            cand = _strip_output(_gemini.run_text(prompt))
+            cand = _strip_output(run_text(prompt))
         except Exception:
             api_failed = True
             break
@@ -598,6 +610,22 @@ def _strip_output(text: str) -> str:
     text = re.sub(r'[ \t]{2,}', ' ', text)
     text = "\n".join(line.rstrip() for line in text.splitlines())
     return text.strip()
+
+
+_SCAN_LINE_RE = re.compile(r'[─━═]{5,}')                  # C-01·C-07 스캔·구분선
+_LONE_JAMO_RE = re.compile(r'^[ \t]*[ㄱ-ㅎㅏ-ㅣ][ \t]*$\n?', re.M)  # C-07 단독 자모 줄
+
+
+def _rules_clean(joined: str) -> str:
+    """비용 우선 정제(LLM 없음): 구분선·단독 자모 제거(C-01·C-07) + 쪽 경계 잘린 어절 결합(C-03)
+    + 단락 복원(C-08). C-02·C-10/11 은 iter_clean 앞단, C-04·C-05(사전 범위)는 korean_corrector 가 맡는다.
+    실측(2026-10-15, DBR 디지털 PDF): 구분선 제거가 없으면 '────' 195개가 결과에 남았다."""
+    from core import postprocessor
+    text = _SCAN_LINE_RE.sub("\n", joined)
+    text = _LONE_JAMO_RE.sub("", text)
+    text = post_process_pagebreaks(text)
+    text = postprocessor.join_broken_lines(text)
+    return _strip_output(text)
 
 
 def _fallback_clean(joined: str) -> str:
