@@ -10,6 +10,8 @@ set "PYREL=venv\Scripts"
 if exist "%~dp0python\python.exe" set "PYREL=python"
 set "PYDIR=%~dp0%PYREL%"
 set "PATH=%PYDIR%;%PATH%"
+rem Server output goes to a log file; without this Python writes it in cp949 and crashes on emoji.
+set "PYTHONUTF8=1"
 
 netstat -an 2>nul | findstr ":7860 " | findstr "LISTENING" > nul
 if %errorlevel% == 0 (
