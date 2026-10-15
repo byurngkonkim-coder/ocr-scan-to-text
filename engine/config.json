@@ -7,7 +7,7 @@
   "ollama_text_model": "exaone3.5:7.8b",
   "ollama_max_edge": 1600,
   "ollama_timeout_s": 900,
-  "gemini_model": "gemini-2.5-flash",
+  "gemini_model": "gemini-3.8-flash",
   "gemini_max_edge": 2560,
   "gemini_jpeg_quality": 85,
   "gemini_timeout_s": 45,
