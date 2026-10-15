@@ -25,6 +25,8 @@ engine/ocr_server.log
 !입력/.gitkeep
 02_결과/*
 !02_결과/.gitkeep
+01_입력/
+_보관/
 
 # Runtime storage & stats
 engine/storage/results/*
