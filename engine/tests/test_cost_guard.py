@@ -1,7 +1,7 @@
 """비용 우선 모드 비용 보호 (2026-10-15 요금 폭탄 회귀 방지).
 
-- 비용 우선 정제는 로컬 Ollama(exaone3.5) — Gemini 호출 0
-- 문서당 Vision 폴백 상한
+- 비용 우선 정제는 내장 규칙(기본) 또는 로컬 Ollama — Gemini 호출 0
+- 문서당 Vision 폴백 상한 (GUI·CLI)
 - Gemini 결제·인증 오류(402 등) 뒤에는 재시도·후속 호출 없음
 """
 import sys
@@ -42,6 +42,26 @@ def test_vision_budget_caps_pages(monkeypatch):
     b = ocr_gradio._VisionBudget(40)          # 40쪽 × 10% = 4쪽
     assert [b.take() for _ in range(6)] == [True] * 4 + [False] * 2
     assert ocr_gradio._VisionBudget(5).left == 3   # 짧은 문서도 최소 3쪽
+
+
+def test_cli_vision_budget_caps_pages(monkeypatch):
+    """CLI(ocr_tool)도 GUI 와 같은 문서당 Vision 상한을 지킨다."""
+    ocr_tool = pytest.importorskip("ocr_tool")
+    calls = []
+    low = SimpleNamespace(confidence=10.0, has_jamo_split=False)
+    monkeypatch.setattr(config, "get_vision_max_ratio", lambda: 0.1)
+    monkeypatch.setattr(ocr_tool.detector, "detect", lambda _p: "image")
+    monkeypatch.setattr(ocr_tool.pdf_splitter, "load_image", lambda _p: [object()] * 40)
+    monkeypatch.setattr(ocr_tool.quality_diagnoser, "diagnose", lambda _i: None)
+    monkeypatch.setattr(ocr_tool.rapidocr_engine, "smart_run", lambda *_a, **_k: low)
+    monkeypatch.setattr(ocr_tool.claude_vision, "is_available", lambda: True)
+    monkeypatch.setattr(ocr_tool.claude_vision, "run", lambda *_a, **_k: calls.append(1) or low)
+    monkeypatch.setattr(ocr_tool, "_finalize_page", lambda *a, **k: k)
+    monkeypatch.setattr(ocr_tool.writer, "write", lambda *_a: None)
+    res = ocr_tool._process_file(Path("x.png"), "out", None, "kor", 300,
+                                 True, False, True, True, False, False, 0, False)
+    assert len(calls) == 4                      # 40쪽 × 10%
+    assert sum("상한" in p.get("review_reason", "") for p in res.pages) == 36
 
 
 class _Err(Exception):

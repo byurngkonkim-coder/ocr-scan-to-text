@@ -7,7 +7,9 @@
     "vision_provider": "claude"  → Anthropic Claude (core.claude_vision)
     "vision_provider": "ollama"  → 로컬 Ollama (core.ollama_vision) — API 키 불필요
 """
+import math
 import os
+import threading
 from PIL import Image
 
 from core import config
@@ -26,6 +28,21 @@ def _impl():
         return _ollama
     # 기본값 및 알 수 없는 값 → gemini
     return _gemini
+
+
+class VisionBudget:
+    """한 문서의 Vision 폴백 쪽 수 상한(GUI·CLI 공통). 쪽 읽기 스레드끼리 나눠 쓴다."""
+
+    def __init__(self, total_pages: int):
+        self.left = max(3, math.ceil(total_pages * config.get_vision_max_ratio()))
+        self._lock = threading.Lock()
+
+    def take(self) -> bool:
+        with self._lock:
+            if self.left <= 0:
+                return False
+            self.left -= 1
+            return True
 
 
 def provider_name() -> str:

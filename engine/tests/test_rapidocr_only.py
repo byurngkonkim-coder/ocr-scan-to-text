@@ -119,3 +119,38 @@ def test_last_line_kept_when_close_long_or_no_digit():
                           ("예측", 400, 2.3)):                 # 쪽번호 없음
         lines, boxes = _page(text, x1, gap)
         assert rapidocr_engine._drop_page_footer(lines, boxes)[0] == lines, text
+
+
+def test_two_column_index_read_left_then_right():
+    # 세일즈왕 343~346쪽 실측(2026-10-15): 2단 인명 색인을 같은 높이끼리 좌·우 번갈아 읽어
+    # 텍스트층 대비 순서 일치 0.57. 맨 위 쪽번호처럼 한쪽에만 있는 줄도 왼쪽 단에 붙는다
+    left = [(f"왼쪽{k}", _box(100, 100 + 50 * k, 400)) for k in range(6)]
+    right = [(f"오른쪽{k}", _box(600, 100 + 50 * k, 950)) for k in range(6)]
+    mixed = [("340", _box(100, 0, 160))] + [x for pair in zip(left, right) for x in pair]
+    lines, boxes = rapidocr_engine._order_columns([t for t, _ in mixed], [b for _, b in mixed])
+    assert lines == ["340"] + [t for t, _ in left] + [t for t, _ in right]
+    assert len(boxes) == len(lines)
+
+
+def test_full_width_heading_splits_column_blocks():
+    # 단 위·아래의 넓은 줄(제목·본문)은 그 자리를 지키고, 그 사이 블록만 단 순서로 읽는다
+    left = [(f"L{k}", _box(100, 100 + 50 * k, 400)) for k in range(4)]
+    right = [(f"R{k}", _box(600, 100 + 50 * k, 950)) for k in range(4)]
+    mixed = ([("찾아보기", _box(100, 0, 950))] + [x for pair in zip(left, right) for x in pair]
+             + [("본문 마지막 넓은 줄", _box(100, 400, 950))])
+    lines, _ = rapidocr_engine._order_columns([t for t, _ in mixed], [b for _, b in mixed])
+    assert lines == ["찾아보기"] + [t for t, _ in left] + [t for t, _ in right] + ["본문 마지막 넓은 줄"]
+
+
+def test_single_column_and_two_cell_table_untouched():
+    # 본문 쪽: 대부분 줄이 가운데를 가로지른다 → 단 없음
+    lines = [f"본문 {k}" for k in range(6)] + ["짧은 끝줄", "오른쪽 쪽번호", "또 짧은", "오른 끝"]
+    boxes = ([_box(100, 50 * k, 950) for k in range(6)]
+             + [_box(100, 300, 300), _box(800, 300, 950), _box(100, 350, 250), _box(800, 350, 950)])
+    assert rapidocr_engine._order_columns(lines, boxes)[0] == lines
+    # 표: 좁은 항목 칸 + 넓은 내용 칸 → 행 순서 유지(칸 너비가 크게 다르면 단으로 보지 않는다)
+    rows = [(f"항목{k}", _box(100, 50 * k, 200)) for k in range(5)]
+    vals = [(f"내용 설명 {k}", _box(300, 50 * k, 950)) for k in range(5)]
+    mixed = [x for pair in zip(rows, vals) for x in pair]
+    t = [s for s, _ in mixed]
+    assert rapidocr_engine._order_columns(t, [b for _, b in mixed])[0] == t

@@ -111,6 +111,67 @@ def _drop_page_footer(lines: list[str], boxes) -> tuple[list[str], list]:
     return lines, boxes
 
 
+def _order_columns(lines: list[str], boxes) -> tuple[list[str], list]:
+    """2단으로 짠 쪽(색인 등)을 왼쪽 단 → 오른쪽 단 순서로 다시 늘어놓는다.
+
+    RapidOCR 은 위에서 아래로, 같은 높이면 왼쪽→오른쪽으로 내보내 두 단의 줄이 번갈아 섞인다
+    (세일즈왕 343~346쪽 2단 인명 색인: 글자는 99% 맞는데 텍스트층 대비 순서 일치 0.57, 2026-10-15).
+    단 사이 여백 = 쪽 가운데 30~70% 에서 상자가 가장 적게 가로지르는 세로 띠.
+    단으로 보는 조건: 여백을 가로지르는 줄이 20% 이하 · 양쪽 3줄 이상 · 양쪽이 같은 높이대에 나란히 ·
+    두 단 너비 비 0.6 이상(좁은 항목 칸 + 넓은 내용 칸 표는 행 순서를 지킨다).
+    여백을 가로지르는 넓은 줄(제목·본문)은 제자리를 지키고, 그 사이 블록마다 왼쪽 단 → 오른쪽 단.
+    단 안의 순서는 RapidOCR 순서를 그대로 쓴다.
+    """
+    n = len(lines)
+    if n != len(boxes) or n < 8:
+        return lines, boxes
+    x0 = [min(p[0] for p in b) for b in boxes]
+    x1 = [max(p[0] for p in b) for b in boxes]
+    yc = [(min(p[1] for p in b) + max(p[1] for p in b)) / 2 for b in boxes]
+    lo, hi = min(x0), max(x1)
+    span = hi - lo
+    if span <= 0:
+        return lines, boxes
+    xs = np.linspace(lo + 0.3 * span, lo + 0.7 * span, 81)
+    cross_n = [sum(1 for i in range(n) if x0[i] < x < x1[i]) for x in xs]
+    best = min(cross_n)
+    # 가장 덜 가로지르는 x 들 중 가장 긴 연속 구간의 가운데를 여백으로 본다
+    runs, start = [], None
+    for k, c in enumerate(cross_n + [best + 1]):
+        if c == best and start is None:
+            start = k
+        elif c != best and start is not None:
+            runs.append((k - start, start, k - 1))
+            start = None
+    _, a, b = max(runs)
+    g = (xs[a] + xs[b]) / 2
+
+    cross = [i for i in range(n) if x0[i] < g < x1[i]]
+    left = [i for i in range(n) if x1[i] <= g]
+    right = [i for i in range(n) if x0[i] >= g]
+    if len(cross) > 0.2 * n or len(left) < 3 or len(right) < 3:
+        return lines, boxes
+    lw = max(x1[i] for i in left) - min(x0[i] for i in left)
+    rw = max(x1[i] for i in right) - min(x0[i] for i in right)
+    if min(lw, rw) < 0.6 * max(lw, rw):
+        return lines, boxes
+    ly = (min(yc[i] for i in left), max(yc[i] for i in left))
+    ry = (min(yc[i] for i in right), max(yc[i] for i in right))
+    overlap = min(ly[1], ry[1]) - max(ly[0], ry[0])
+    if overlap < 0.5 * min(ly[1] - ly[0], ry[1] - ry[0]):
+        return lines, boxes
+
+    seps = sorted(cross, key=lambda i: yc[i])
+    def block(i):   # 이 줄 위에 있는 넓은 줄 수 = 블록 번호
+        return sum(1 for s in seps if yc[s] < yc[i])
+    order = []
+    for k in range(len(seps) + 1):
+        order += [i for i in left if block(i) == k] + [i for i in right if block(i) == k]
+        if k < len(seps):
+            order.append(seps[k])
+    return [lines[i] for i in order], [boxes[i] for i in order]
+
+
 def _mark_paragraph_starts(lines: list[str], boxes) -> list[str]:
     """들여 쓴 줄(문단 첫 줄) 앞에 공백 2칸을 붙인다 — postprocessor.join_broken_lines 가 앞 줄과 잇지 않는다.
 
@@ -195,6 +256,7 @@ def run(image: Image.Image, lang: str = "kor+eng", fast: bool = False, refine: b
             confs.append(score * 100.0)
 
     if len(line_boxes) == len(lines):
+        lines, line_boxes = _order_columns(lines, line_boxes)
         lines, line_boxes = _drop_page_footer(lines, line_boxes)
     full_text = "\n".join(_mark_paragraph_starts(lines, line_boxes))
     avg_conf = sum(confs) / len(confs) if confs else 0.0

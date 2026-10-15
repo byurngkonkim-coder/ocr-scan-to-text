@@ -352,12 +352,14 @@ def _process_file(
         )
         if fmt_type == "pdf":
             images = _mask_margins(file_path, images, verbose)
+        vision_budget = claude_vision.VisionBudget(len(images))   # 문서당 Vision 상한(GUI 와 같음)
         for page_num, image in enumerate(images, start=1):
             page_result = _process_page(
                 image, page_num, lang,
                 no_preprocess, no_fallback, no_spellcheck,
                 no_figure, save_figures, output_dir,
                 file_path.stem, llm_correct, llm_budget, verbose,
+                vision_budget=vision_budget,
             )
             result.pages.append(page_result)
         writer.write(result, output_dir, fmt)
@@ -393,6 +395,7 @@ def _process_page(
     no_preprocess: bool, no_fallback: bool, no_spellcheck: bool,
     no_figure: bool, save_figures: bool, output_dir: str, stem: str,
     llm_correct: bool, llm_budget: int, verbose: bool,
+    vision_budget: claude_vision.VisionBudget | None = None,
 ) -> PageResult:
 
     report = quality_diagnoser.diagnose(image)
@@ -442,7 +445,10 @@ def _process_page(
 
     # 신뢰도 폴백 시도
     if not no_fallback and low_quality:
-        if claude_vision.is_available() and not vision_err:  # 이미 실패했으면 재시도 안 함 (Ollama 쪽당 최대 9분)
+        # 문서당 상한 소진 — 유료 호출 없이 로컬 결과로 남긴다
+        over_budget = (claude_vision.is_available() and vision_budget is not None
+                       and not vision_budget.take())
+        if claude_vision.is_available() and not vision_err and not over_budget:  # 이미 실패했으면 재시도 안 함 (Ollama 쪽당 최대 9분)
             reason = "자모분리" if ocr_result.has_jamo_split else f"신뢰도 {ocr_result.confidence:.1f}%"
             if verbose:
                 console.print(f"  [yellow]→ {claude_vision.provider_label()} 폴백 ({reason})[/yellow]")
@@ -462,6 +468,8 @@ def _process_page(
         )
         if vision_err:
             reason += " · Vision 폴백 실패"
+        elif over_budget:
+            reason += " · 문서당 Vision 상한 도달(비용 보호)"
         console.print(
             f"  [yellow]⚠ p.{page_num} 검토 필요 — {reason}[/yellow]"
         )

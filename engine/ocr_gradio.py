@@ -1,9 +1,7 @@
 """Gradio 웹 UI — OCR 스캔파일 텍스트추출 도구 (localhost:7860)"""
 from __future__ import annotations
 import html
-import math
 import os
-import threading
 import sys
 import time
 import tempfile
@@ -399,19 +397,8 @@ def _page_plan(file_path: Path, start_page: int = 1, max_pages: int | None = Non
 # 단일 페이지 OCR
 # ══════════════════════════════════════════════════════════════════════════════
 
-class _VisionBudget:
-    """비용 우선 모드에서 한 문서의 Vision 폴백 쪽 수 상한. 쪽 읽기 스레드끼리 나눠 쓴다."""
-
-    def __init__(self, total_pages: int):
-        self.left = max(3, math.ceil(total_pages * config.get_vision_max_ratio()))
-        self._lock = threading.Lock()
-
-    def take(self) -> bool:
-        with self._lock:
-            if self.left <= 0:
-                return False
-            self.left -= 1
-            return True
+# 비용 우선 모드에서 한 문서의 Vision 폴백 쪽 수 상한 — CLI(ocr_tool)와 같은 클래스
+_VisionBudget = claude_vision.VisionBudget
 
 
 def _process_page(image, page_num: int, lang: str,
