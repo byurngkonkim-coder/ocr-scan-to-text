@@ -221,12 +221,11 @@ def _has_fitz() -> bool:
 
 
 def _find_pdftotext() -> str | None:
-    """poppler pdftotext 실행파일 경로. Windows 기본 설치 경로 우선, 없으면 PATH."""
-    import platform
-    if platform.system() == "Windows":
-        cand = Path("C:/poppler/Library/bin/pdftotext.exe")
-        if cand.exists():
-            return str(cand)
+    """poppler pdftotext 실행파일 경로. 프로그램 폴더 안·Windows 기본 설치 경로 우선, 없으면 PATH."""
+    from core.pdf_splitter import poppler_dir
+    d = poppler_dir()
+    if d and (d / "pdftotext.exe").exists():
+        return str(d / "pdftotext.exe")
     return shutil.which("pdftotext")
 
 

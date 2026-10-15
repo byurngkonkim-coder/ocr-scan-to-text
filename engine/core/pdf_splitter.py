@@ -20,17 +20,27 @@ except ImportError:
 
 DEFAULT_DPI = 200
 
+# 프로그램 폴더에 같이 들어 있는 poppler — USB 로 옮긴 PC 에서도 쓴다 (make_portable.bat 가 채움)
+BUNDLED_POPPLER = Path(__file__).parent.parent / "poppler"
+
+
+def poppler_dir() -> Path | None:
+    """poppler 실행파일 폴더: 프로그램 폴더 안 → C:\\poppler 순. 없으면 None(PATH 에 맡김)."""
+    import platform
+    if platform.system() != "Windows":
+        return None
+    for d in (BUNDLED_POPPLER, Path("C:/poppler/Library/bin")):
+        if (d / "pdftoppm.exe").exists():
+            return d
+    return None
+
 
 def _poppler_kwargs(poppler_path: str | None) -> dict:
-    """Poppler 경로 kwargs 구성 (Windows 기본 경로 자동 탐색)."""
+    """Poppler 경로 kwargs 구성 (프로그램 폴더 안·Windows 기본 경로 자동 탐색)."""
     if poppler_path:
         return {"poppler_path": poppler_path}
-    import platform
-    if platform.system() == "Windows":
-        candidate = Path("C:/poppler/Library/bin")
-        if candidate.exists():
-            return {"poppler_path": str(candidate)}
-    return {}
+    d = poppler_dir()
+    return {"poppler_path": str(d)} if d else {}
 
 
 def _require_pdf2image(pdf_path: Path) -> None:

@@ -20,6 +20,8 @@ _BASE = Path(__file__).parent.parent / "storage"
 _UPLOADS = _BASE / "uploads"
 _RESULTS = _BASE / "results"
 _HISTORY = _BASE / "history.json"
+_ROOT = Path(__file__).parent.parent.parent   # 프로그램 폴더(START_OCR.bat 위치) — 이력 경로의 기준
+_PATH_KEYS = ("result_path", "upload_path", "output_path")
 
 MAX_HISTORY = 500   # 이력 최대 보관 건수
 
@@ -140,7 +142,12 @@ def load_history() -> list[dict]:
     if not _HISTORY.exists():
         return []
     try:
-        return json.loads(_HISTORY.read_text(encoding="utf-8"))
+        history = json.loads(_HISTORY.read_text(encoding="utf-8"))
+        for e in history:
+            for k in _PATH_KEYS:
+                if e.get(k):
+                    e[k] = _to_abs(e[k])
+        return history
     except json.JSONDecodeError:
         from core.config import backup_corrupt
         backup_corrupt(_HISTORY)   # 다음 저장이 깨진 이력을 빈 목록으로 덮어쓰지 않게 보존
@@ -256,7 +263,49 @@ def _safe_stem(name: str) -> str:
     return re.sub(r'[\\/:*?"<>|]', "_", stem)[:50]
 
 
+def _to_stored(p: str) -> str:
+    """이력에 적을 경로 — 프로그램 폴더 안이면 그 기준 상대경로(폴더를 USB 로 옮겨도 유지).
+
+    프로그램 폴더 밖에 실제로 있는 파일은 그대로 두고, 지금 없는 옛 기록의 절대경로만
+    '02_결과'·'storage' 폴더 이름으로 현재 위치에 다시 맞춘다
+    (다른 PC·옛 폴더 이름 04_처리엔진\\storage → engine/storage).
+    """
+    if not p:
+        return ""
+    path = Path(p)
+    if not path.is_absolute():
+        return path.as_posix()
+    try:
+        return path.relative_to(_ROOT).as_posix()
+    except ValueError:
+        pass
+    if path.exists():
+        return p
+    parts = path.parts
+    if "02_결과" in parts:
+        i = len(parts) - 1 - parts[::-1].index("02_결과")
+        return Path(*parts[i:]).as_posix()
+    if "storage" in parts:
+        i = len(parts) - 1 - parts[::-1].index("storage")
+        rebased = _BASE / Path(*parts[i + 1:])
+        try:
+            return rebased.relative_to(_ROOT).as_posix()
+        except ValueError:
+            return str(rebased)
+    return p
+
+
+def _to_abs(p: str) -> str:
+    """이력의 경로를 지금 PC·폴더 위치의 실제 경로로."""
+    path = Path(p)
+    if path.is_absolute() and path.exists():
+        return p
+    stored = _to_stored(p)
+    return str(_ROOT / stored) if not Path(stored).is_absolute() else p
+
+
 def _save_history(history: list[dict]) -> None:
     from core.config import atomic_write_json
     init()
+    history = [{**e, **{k: _to_stored(e[k]) for k in _PATH_KEYS if e.get(k)}} for e in history]
     atomic_write_json(_HISTORY, history)

@@ -2,8 +2,13 @@
 title OCR Text Extraction Tool
 cd /d "%~dp0"
 
-set "PATH=%PATH%;C:\poppler\Library\bin"
-set "PYDIR=%~dp0venv\Scripts"
+rem Portable copy (made by make_portable.bat) first: python\ and poppler\ inside this folder,
+rem so the tool runs from a USB copy on a PC without Python or poppler installed.
+rem Otherwise the venv of this PC (install.bat).
+if exist "%~dp0poppler\pdftoppm.exe" set "PATH=%~dp0poppler;%PATH%"
+set "PYREL=venv\Scripts"
+if exist "%~dp0python\python.exe" set "PYREL=python"
+set "PYDIR=%~dp0%PYREL%"
 set "PATH=%PYDIR%;%PATH%"
 
 netstat -an 2>nul | findstr ":7860 " | findstr "LISTENING" > nul
@@ -35,7 +40,8 @@ rem A venv copied from another PC points to a Python that does not exist here.
 "%PYDIR%\python.exe" --version >nul 2>&1
 if errorlevel 1 (
     echo  [ERROR] Python venv is broken on this PC - copied from another PC?
-    echo  Please run install.bat to rebuild it.
+    echo  For a USB copy: run engine\make_portable.bat on the original PC, then copy again.
+    echo  Or run install.bat here to rebuild it.
     pause
     exit /b 1
 )
@@ -46,7 +52,7 @@ rem Server runs with no console window. Output goes to ocr_server.log / ocr_serv
 rem Relative paths only: the current folder is inherited, so no non-ASCII path is passed to PowerShell.
 rem The server PID is saved so the wait loop can tell "still loading" from "crashed".
 if exist "ocr_server.pid" del "ocr_server.pid"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$p = Start-Process -FilePath 'venv\Scripts\python.exe' -ArgumentList '-u','ocr_gradio.py' -WorkingDirectory (Get-Location).Path -WindowStyle Hidden -RedirectStandardOutput 'ocr_server.log' -RedirectStandardError 'ocr_server_err.log' -PassThru; Set-Content -Path 'ocr_server.pid' -Value $p.Id -Encoding Ascii"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$p = Start-Process -FilePath '%PYREL%\python.exe' -ArgumentList '-u','ocr_gradio.py' -WorkingDirectory (Get-Location).Path -WindowStyle Hidden -RedirectStandardOutput 'ocr_server.log' -RedirectStandardError 'ocr_server_err.log' -PassThru; Set-Content -Path 'ocr_server.pid' -Value $p.Id -Encoding Ascii"
 
 set "_pid="
 if exist "ocr_server.pid" set /p _pid=<"ocr_server.pid"

@@ -27,6 +27,7 @@
 │   ├── ocr_gradio.py       # Gradio 웹 대시보드 애플리케이션
 │   ├── ocr_tool.py         # 단일 파일/배치 처리 CLI 도구
 │   ├── install.bat         # 가상환경 구성 및 패키지 설치
+│   ├── make_portable.bat   # USB 복사용 준비 — python\ · poppler\ 를 폴더 안에 만듦
 │   └── requirements.txt    # 파이썬 의존성 목록
 │
 ├── docs/                   # 상세 기술 문서 및 사용자 가이드 (Internal Layer)
@@ -50,6 +51,21 @@
    - `입력` 폴더의 파일 선택(④ 일괄 처리) 또는 웹 UI로 직접 업로드
    - 추출 모드(기본 RapidOCR / Vision) 선택 후 실행
    - `02_결과` 폴더에서 추출된 텍스트 확인
+
+---
+
+## USB 로 다른 PC 에 옮겨 쓰기
+
+설치가 끝난 PC 에서 한 번만 준비하면, 받는 PC 에는 Python·poppler 를 설치하지 않아도 됩니다.
+
+1. 설치된 PC 에서 `engine\make_portable.bat` 실행 → `engine\python\`(Python + 패키지)·`engine\poppler\` 가 생김 (약 1GB)
+2. 프로그램 폴더 전체를 USB 로 복사
+3. 받는 PC 에서 `START_OCR.bat` 더블클릭
+
+- `engine\venv\` 는 복사하지 않아도 됩니다(원래 PC 전용). `python\` 이 있으면 그쪽을 먼저 씁니다.
+- 폴더는 **드라이브 바로 아래처럼 짧은 경로**에 두세요(예: `E:\OCR\`). 경로가 너무 길면 Windows 260자 제한에 걸려 OCR 이 시작되지 않습니다.
+- 처리 기록(`engine\storage\history.json`)은 프로그램 폴더 기준 경로로 저장돼, 옮긴 뒤에도 결과 받기가 됩니다.
+- 패키지를 새로 설치·업데이트했으면 `make_portable.bat` 를 다시 실행하세요.
 
 ---
 
