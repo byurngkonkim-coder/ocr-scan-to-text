@@ -201,6 +201,8 @@ def iter_clean(pages: list[str], drop_front_matter: bool = False, on_chunk=None,
     pages = strip_running_headers(pages)
     if rules_mode:
         pages, n_hdr = noise_rules.strip_fuzzy_headers(pages)
+        # 출처 표기 명언집: 줄 잇기 전에 '명언 → 저자 출처' 그룹 경계를 단락으로 고정(번호를 못 읽은 항목 포함)
+        pages, _ = noise_rules.group_attributed_quotes(pages)
         if n_hdr:
             header_notes.append(f"깨져 읽힌 머리글 {n_hdr}곳 자동 제거 (정제 전 원문 사본에서 확인 가능)")
     matter_notes: list[str] = []
@@ -282,6 +284,11 @@ def iter_clean(pages: list[str], drop_front_matter: bool = False, on_chunk=None,
     if config.get_enable_margin_filter():
         text = post_process_pagebreaks(text)
     text, _ = rejoin_split_sentences(text)
+    if rules_mode:
+        text = noise_rules.finish_groups(text)   # 출처 명언 그룹 경계 표지 → 빈 줄(줄 잇기가 끝난 뒤)
+        text, _ = noise_rules.repair_quote_brackets(text)   # 출처 인용 괄호 〈〉「」『』 짝 복원
+        # 한 줄에 붙은 한글 문장과 영어 문장을 줄바꿈으로 가른다(가독성 — 단락은 유지)
+        text, _ = noise_rules.split_language_lines(text)
     # 번호 붙은 항목(명언집 등)마다 단락 복원 — 연속 번호 항목 책일 때만(일반 문서의 표·목록 보호)
     if rules_mode and noise_rules.is_numbered_book(text):
         text, _ = noise_rules.redistribute_number_stacks(text)   # 여백 번호가 몰려 읽힌 것부터 제자리로

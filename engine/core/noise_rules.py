@@ -63,28 +63,85 @@ def is_garbage_line(line: str) -> bool:
     ns = re.sub(r"\s", "", s)
     if re.fullmatch(r"[\d\-.,:/()|]+", ns):
         return False
-    if not re.search(r"[가-힣]{2}|[A-Za-z]{3}", s):
+    # 의미 있는 토큰: 한글 2자·영문 3자, 숫자+단위('5월 9일'), 띄어 쓴 표 머리('합 계')
+    if not (re.search(r"[가-힣]{2}|[A-Za-z]{3}", s) or _NUM_UNIT_RE.search(s) or _SPACED_HEADER_RE.match(s)):
         return True
-    bad = sum(1 for c in ns if not (re.match(r"[가-힣A-Za-z0-9]", c) or c in _ALLOWED_PUNCT))
+    classical = bool(re.search(r"[一-鿿]{4,}", s))     # 한문 인용 줄 — 한자를 잡음 문자로 세지 않는다
+    bad = sum(1 for c in ns if not (re.match(r"[가-힣A-Za-z0-9]", c) or c in _ALLOWED_PUNCT
+                                     or (classical and _HANJA_RE.match(c))))
     return len(ns) <= 60 and bad / len(ns) >= 0.3
 
 
 _KEEP_HANGUL = 6           # 한글이 이만큼 있는 줄은 본문 — 통째로 지우지 않고 양끝 잡음 토큰만 뗀다
 
 
+# 토큰 판정에서 정상으로 보는 문자 — 디지털 문서의 표기('[표1]'·'1%만'·'㎝도'·'③PT가'·'것:'·'쿨∼한')를
+# 잡음으로 지우던 것 보호(평가 도구 실측: DBR 기사 45개에서 0.1~0.6%p 손실)
+_OK_CHAR_RE = re.compile(r"[가-힣A-Za-z0-9\s“”‘’\"'().,!?…:;<>〈〉《》「」『』\[\]{}~∼%㎝㎞㎏㎎℃·\-–—/&+①-⑳]")
+# 숫자 뒤 단위어 — '5월 9일'·'2016년'·'제 4장'은 본문, '7혓'·'5못'·'2야' 같은 OCR 잡음은 아님
+_UNIT = r"(?:년|월|일|시|분|초|명|개|원|장|권|호|쪽|면|층|등|위|번|차|세|배|대|회|주|만|억|천|백|가지|퍼센트|살|건|곳|종|점|단계|부|편|절)"
+_NUM_UNIT_RE = re.compile(rf"\d[%㎝㎞㎏㎎℃]?{_UNIT}(?![가-힣])|\d{_UNIT}[이가은는을를의에도과와로]")
+# 띄어 쓴 표 머리 낱말('합 계'·'의 견') — 이 목록만 본문으로 본다('돈 나' 같은 잡음 조각 제외)
+_SPACED_HEADER_RE = re.compile(r"^(?:합 계|총 계|소 계|의 견|총 평|비 고|구 분|항 목|내 용|평 가|점 수|순 위|합 산)$")
+# 본문 토큰 꼴: 한자 병기 '건(件)', 숫자+한글 '2016년'·'1%만', 동그라미 숫자 '③PT', 한자+조사 '甲이'
+_CONTENT_TOKEN_RE = re.compile(rf"\([一-鿿]+\)|\d[%㎝㎞㎏㎎℃]?{_UNIT}|\d%[가-힣]|[①-⑳]|^[一-鿿]+[가-힣]{{1,2}}[.,:]?$")
+
+
 def _is_junk_token(t: str) -> bool:
-    return not re.search(r"[가-힣]|[A-Za-z]{3}|^\d{1,4}[.,]?$|^[|“”‘’\"'(]$", t)
+    """줄 끝 잡음 토큰: 한글이 없거나, 한글 한 글자에 잡기호가 붙은 것('휴^', '■가') — 한 글자 낱말
+    ('그 사람은'의 '그')·정상 표기('[표1]', '것:')는 본문으로 둔다."""
+    if re.search(r"[가-힣]{2}|[A-Za-z]{3}|^\d{1,4}[.,]?$", t) or _CONTENT_TOKEN_RE.search(t):
+        return False
+    if re.search(r"[가-힣]", t):
+        return not all(_OK_CHAR_RE.match(c) for c in t)
+    return True
+
+
+_GOOD_TOKEN_RE = re.compile(r"[가-힣]{2}|[A-Za-z]{3}|^\d+[.,]?$")
+
+
+def _low_word_quality(line: str) -> bool:
+    """짧은 줄의 낱말 품질: 토큰 3개↑인데 제대로 된 낱말(한글 2자↑·영단어 3자↑·숫자)이 절반 미만
+    ('- 네’ 기직포*. 드’,r' — 악당의명언 실측)."""
+    # 구분자('| 우정의 끝'·'I 기본의 힘'의 '|'·'I')는 세지 않고, 기호 없는 한 글자 낱말('끝')은 정상 낱말로 본다
+    toks = [t for t in line.split() if t not in ("|", "I", "l", "•", "·", "-", "—", "–", "/")
+            and not re.fullmatch(r"\d+[.,]?", t)]
+    # 숫자+단위('2016년'·'8월'·'206호(2016년')도 정상 낱말 — 기고자 표시 줄 보호
+    good = sum(1 for t in toks if _GOOD_TOKEN_RE.search(t) or re.fullmatch(r"[가-힣][.,!?]?", t)
+               or _NUM_UNIT_RE.search(t))
+    return len(toks) >= 3 and good / len(toks) < 0.5
+
+
+def _salvage(line: str) -> str:
+    """품질이 낮은 짧은 줄에서 잡음 토큰만 떼고, 문장 종결형 낱말('무시당한다.', '낸거야!”')이 남으면
+    그 줄을 살린다 — 문장 끝이 없는 조각('기직포*.')만 지운다(악당의명언 실측: 통째 삭제로 본문 손실)."""
+    toks = [t for t in line.split() if not re.fullmatch(r"\d+[.,]?", t) and (
+            _GOOD_TOKEN_RE.search(t) or (re.search(r"[가-힣]", t) and not _is_junk_token(t)))]
+    # 문장 종결형 낱말이나 4음절↑ 한글 낱말('현실화되면', '골로가는')이 남으면 본문 조각으로 살린다
+    if any(re.search(r"[가-힣][다요야까죠네라][.!?”\"’']*$", t) or re.search(r"[가-힣]{4,}", t) for t in toks):
+        return " ".join(toks)
+    return ""
+
+
+def _edge_cut(seq: list[str]) -> int:
+    """줄 머리에서 뗄 잡음 토큰 수. 첫 진짜 낱말 앞에 기호만 있는 토큰이 2개↑ 몰려 있으면 그 앞을 통째로
+    ('휴/ ,' : < : : < 성노,…' → '성노,…'), 아니면 하나씩 잡음 판정('㎝도 안 되지만'·'<막 공부를'은 유지)."""
+    strong = lambda t: re.search(r"[가-힣]{2}|[A-Za-z]{3}", t) or _CONTENT_TOKEN_RE.search(t)
+    k = next((i for i, t in enumerate(seq) if strong(t)), len(seq))
+    if sum(1 for t in seq[:k] if not re.search(r"[가-힣A-Za-z0-9]", t)) >= 2:
+        return k
+    n = 0
+    while n < k and _is_junk_token(seq[n]):
+        n += 1
+    return n
 
 
 def _trim_junk_edges(line: str) -> str:
     """'/1 r* xr \\ x - 나항상 선택의…' → '나항상 선택의…' (본문 앞뒤에 붙은 잡음 토큰 제거)."""
     toks = line.split()
-    a, b = 0, len(toks)
-    while a < b and _is_junk_token(toks[a]):
-        a += 1
-    while b > a and _is_junk_token(toks[b - 1]):
-        b -= 1
-    return " ".join(toks[a:b])
+    a = _edge_cut(toks)
+    b = len(toks) - _edge_cut(toks[::-1])
+    return " ".join(toks[a:b]) if a < b else ""
 
 
 _HANJA_RE = re.compile(r"[一-鿿㐀-䶿々]")
@@ -92,13 +149,14 @@ _HANJA_RE = re.compile(r"[一-鿿㐀-䶿々]")
 
 def _is_noise_token(t: str) -> bool:
     """본문 줄 안에 섞인 잡음 토큰('가令:乂■아', '乂', '#법을')인가. 한자 병기('(溫故知新)')는 본문."""
-    if re.fullmatch(r"[(\[]?[一-鿿]{2,}[)\]]?[.,]?", t):
+    # 한문 인용·한자 병기는 본문: '患人之不知己…也).”', '건(件)', '사(意思)’가'
+    if re.fullmatch(r"[(\[“\"‘']?[一-鿿]{2,}[)\]”\"’'.,]*", t) or _CONTENT_TOKEN_RE.search(t):
         return False
     if re.search(r"[가-힣]{2}", t):      # 한글 낱말이 있으면 토큰은 남기고 앞뒤 잡음만 뗀다(_strip_token_edges)
         return False
     hanja = len(_HANJA_RE.findall(t))
-    bad = sum(1 for c in t if not (re.match(r"[가-힣A-Za-z0-9]", c) or c in _ALLOWED_PUNCT)) - hanja
-    good = re.search(r"[A-Za-z]{3}|\d", t)
+    bad = sum(1 for c in t if not _OK_CHAR_RE.match(c)) - hanja
+    good = re.search(r"[A-Za-z]{3}|\d|[가-힣]", t)
     return (not good and bool(bad or hanja)) or (bad + hanja >= 2 and bad + hanja >= len(t) / 2)
 
 
@@ -111,10 +169,21 @@ def _strip_token_edges(t: str) -> str:
 
 def _clean_line(line: str) -> str:
     """잡음 줄이면 '', 본문 줄이면 섞인 잡음 토큰과 양끝 잡음을 뗀 줄."""
-    line = " ".join(_strip_token_edges(t) for t in line.split() if not _is_noise_token(t))
+    # 잡음 토큰과, 낱말 사이에 홀로 떨어진 따옴표 토큰("가, ' 무시당한다."의 "'")을 뗀다
+    line = " ".join(_strip_token_edges(t) for t in line.split()
+                    if not _is_noise_token(t) and not re.fullmatch(r"[‘’'\"“”]", t))
+    # 저자 출처 줄('-J. H. 에번스', '一찰스 스탠리(1932-)')은 이니셜·연도가 많아도 본문
+    if re.match(r"^[-一—–_]\s?(?:[A-Z]\.\s?)*[가-힣A-Z][가-힣A-Za-z.]*(?:\s[가-힣A-Za-z.]+){0,3}\s*(?:\(|,|$)", line):
+        return line
     hangul = len(re.findall(r"[가-힣]", line))
     if hangul >= _KEEP_HANGUL:
-        return _trim_junk_edges(line)
+        line = _trim_junk_edges(line)
+        hangul = len(re.findall(r"[가-힣]", line))
+        if hangul < 10 and _low_word_quality(line):
+            return _salvage(line)
+        return line
+    if _low_word_quality(line):
+        return _salvage(line)
     # 한문 인용 줄('學而時習之 不亦說乎')은 본문 — 한자 4자↑ 연속이고 한자·공백·문장부호만 있을 때
     # (영문·숫자가 섞인 '秘密永近Wteil' 같은 그림 속 글자 오인식은 제외)
     if re.search(r"[一-鿿]{4,}", line) and all(
@@ -122,8 +191,11 @@ def _clean_line(line: str) -> str:
         return line
     # 한글이 적은 짧은 줄: 한자가 섞였거나 한글 낱말·영단어(모음 포함 3자↑)가 없으면 잡음
     if not re.fullmatch(r"[\d\-.,:/()| ]+", line.strip()) and (
-            _HANJA_RE.search(line)
-            or not (re.search(r"[가-힣]{2}", line)
+            (_HANJA_RE.search(line) and not re.search(r"[一-鿿]{4,}", line)
+             and not _CONTENT_TOKEN_RE.search(line))   # 한문 인용 줄·한자 병기·'甲이' 보호
+            # 숫자+한글('5월 9일 - 10일')·띄어 쓴 표 머리('합 계', '의 견')는 본문
+            or not (re.search(r"[가-힣]{2}", line) or _NUM_UNIT_RE.search(line)
+                    or _SPACED_HEADER_RE.match(line.strip())
                     or re.search(r"(?=[A-Za-z]{3})[A-Za-z]*[aeiouyAEIOUY][A-Za-z]*", line))):
         return ""
     return "" if is_garbage_line(line) else line
@@ -142,9 +214,15 @@ def _join_latin_word_lines(lines: list[str]) -> list[str]:
     return out
 
 
+# 한글 사이 쉼표 뒤 공백 — 전각 쉼표('，')는 OCR 이 뒤 공백 없이 읽어, 반각으로 바꾸면
+# '어느 날,첫사랑의'처럼 붙는다(명언집 5권 2,334곳 실측). 숫자 '1,000'·영문은 건드리지 않는다
+_COMMA_SPACE_RE = re.compile(r"(?<=[가-힣]),(?=[가-힣“‘\"'(])")
+
+
 def clean_page(text: str) -> str:
     """쪽 하나의 OCR 잡음을 걷어낸다(순서 중요: 부호 정리 → 번호 복원 → 잡음 줄 판정)."""
     text = text.translate(_FULLWIDTH)
+    text = _COMMA_SPACE_RE.sub(", ", text)
     text = _RULE_RE.sub(" ", text)
     text = _JAMO_TOKEN_RE.sub(" ", text)
     text = _JAMO_CHAR_RE.sub("", text)
@@ -153,7 +231,23 @@ def clean_page(text: str) -> str:
     text = _fix_numbers(text)
     lines = [re.sub(r"[ \t]{2,}", " ", l).strip() for l in text.splitlines()]
     lines = [c for c in (_clean_line(l) for l in lines) if c]
-    return "\n".join(_join_latin_word_lines(lines))
+    return "\n".join(_join_word_per_line(_join_latin_word_lines(lines)))
+
+
+def _join_word_per_line(lines: list[str]) -> list[str]:
+    """큰 글씨 제목이 한 낱말씩 줄바꿈된 것('자다가 / 일어날 / 정도로 / 두근거리는 …')을 한 줄로 —
+    한 낱말(한글 8자 이하)짜리 줄이 3줄 이상 이어질 때만(시·목록의 짧은 줄 보호)."""
+    one = lambda l: bool(re.fullmatch(r"[“\"'‘(]?[가-힣]{1,8}[.,!?”\"'’)…]*", l.strip()))
+    out, run = [], []
+    for l in lines + [None]:
+        if l is not None and one(l):
+            run.append(l.strip())
+            continue
+        out += [" ".join(run)] if len(run) >= 3 else run
+        run = []
+        if l is not None:
+            out.append(l)
+    return out
 
 
 # ── 문서 단위: 깨진 러닝헤더 ─────────────────────────────────────────────────────
@@ -396,6 +490,154 @@ def drop_book_matter_rules(pages: list[str], notes: list[str]) -> list[str]:
     return out
 
 
+# ── 쪽 단위: 출처 표기 명언집의 항목 그룹 경계 ─────────────────────────────────────
+# 실측(기독교명언 43~50): OCR 이 항목 번호 44·47·48·49 를 아예 읽지 못했다. 원문은 줄 구조
+# '명언 줄 → 一저자(생몰년), 직함 → 성경의 진리 상자'가 살아 있으나, 줄 잇기가 저자 줄·상자·다음 명언을
+# 한 줄로 이어 그룹이 사라졌다. 저자 출처 줄 바로 앞 명언 줄(앞의 주제어·번호 포함)에서 단락을 연다.
+_ATTR_LINE_RE = re.compile(r"^\s*[-一—–~_]?\s?[가-힣A-Za-z][가-힣A-Za-z.·' ]{1,30}\(\s?\d{3,4}\s?[-—–]")
+_ATTR_BOOK_MIN = 30        # 출처 줄이 이만큼 있는 책에서만(일반 문서의 '홍길동(1950-2010)' 줄 보호)
+# 그룹 경계 표지 줄 — 빈 줄은 뒤의 '끊긴 문장 잇기'가 건너뛰어 다시 붙인다(앞 그룹 끝 성경 상자가
+# OCR 에서 '…(창'처럼 잘려 미완결 문장으로 보임). 줄 잇기가 끝난 뒤 finish_groups 가 빈 줄로 바꾼다
+GROUP_MARK = "⟨GROUP⟩"
+
+
+def group_attributed_quotes(pages: list[str]) -> tuple[list[str], int]:
+    """출처 표기 명언집: 저자 출처 줄 앞의 명언 줄(앞에 붙은 주제어·번호 줄 포함) 앞에 빈 줄을 넣어
+    항목 그룹 단락을 연다 — 번호를 못 읽은 항목도 그룹으로 나뉜다. (쪽들, 연 단락 수)"""
+    if sum(1 for p in pages for l in p.splitlines() if _ATTR_LINE_RE.match(l)) < _ATTR_BOOK_MIN:
+        return pages, 0
+    out, n = [], 0
+    for p in pages:
+        lines = p.split("\n")
+        res: list[str] = []
+        for i, l in enumerate(lines):
+            nxt = lines[i + 1] if i + 1 < len(lines) else ""
+            if l.strip() and _ATTR_LINE_RE.match(nxt) and not _ATTR_LINE_RE.match(l):
+                j = len(res)
+                # 바로 앞의 항목 번호 줄·짧은 주제어 줄('경건함', '고난')은 이 그룹의 머리
+                while j > 0 and res[j - 1].strip() and (
+                        re.fullmatch(r"\s*\d{1,4}\s*", res[j - 1])
+                        or (len(res[j - 1].strip()) <= 12 and not _SENT_END_RE.search(res[j - 1]))):
+                    j -= 1
+                if j > 0 and res[j - 1].strip():
+                    res.insert(j, GROUP_MARK)
+                    n += 1
+            res.append(l)
+        out.append("\n".join(res))
+    return out, n
+
+
+def finish_groups(text: str) -> str:
+    """그룹 경계 표지 줄을 단락 경계(빈 줄)로 바꾼다 — 줄 잇기 단계가 모두 끝난 뒤에 부른다."""
+    text = re.sub(rf"[ \t]*{re.escape(GROUP_MARK)}[ \t]*", "\n\n", text)
+    return re.sub(r"\n{3,}", "\n\n", text)
+
+
+# ── 줄 단위: 출처 인용 괄호 짝 복원 ─────────────────────────────────────────────
+# 실측(시네마 133줄·베스트셀러 249줄): OCR 이 괄호 모양을 잘못 읽어 짝이 깨진다 —
+#   '〈렛미인(…)>(2008)'(닫는 꺾쇠 → '>'), '〈용서받지 못한 자X2005)'('〉(' → 'X'),
+#   '「소년이온다j'·'『길매기의 꿈J'(닫는 낫표 → j/J), 'r그리스도를 본받아」'(여는 낫표 → r),
+#   '「파리대왕』'(여닫는 종류 불일치). 같은 줄 안에서 짝이 분명할 때만 고친다.
+_CLOSER = {"「": "」", "『": "』", "〈": "〉", "《": "》"}
+_YEAR = r"[\dOolI]{4}"
+_ANGLE_RE = re.compile(rf"[〈<](?=[가-힣])([^〈〉<>\n]{{1,80}}?)(?:[>〉》]|X(?={_YEAR}\)))")
+_YEAR_AFTER_RE = re.compile(rf"〉\(?({_YEAR})\)")
+_R_OPENER_RE = re.compile(r"(?<![A-Za-z0-9])r(?=[가-힣][^\n「『」』]{0,40}?(?:[」』]|[jJ](?![A-Za-z])))")
+_J_CLOSER_RE = re.compile(r"([「『])([^「『」』\n]*?[가-힣][^「『」』\n]*?)[jJ](?![A-Za-z])")
+_MISMATCH_RE = re.compile(r"([「『])([^「『」』\n]*?)([」』])")
+
+
+def repair_quote_brackets(text: str) -> tuple[str, int]:
+    """출처 인용 괄호(〈〉「」『』)의 OCR 오인식을 같은 줄 안의 짝으로 복원한다. (텍스트, 고친 곳 수)"""
+    n = 0
+
+    def angle(m: re.Match) -> str:
+        nonlocal n
+        pair = m.group(0)[0] + m.group(0)[-1]
+        if pair in ("〈〉", "<>"):
+            return m.group(0)               # 이미 짝이 맞음 — 디지털 문서의 '<그림 3>'·'<군주론>'은 표기 그대로
+        n += 1
+        closer = "〉(" if m.group(0).endswith("X") else "〉"
+        return f"〈{m.group(1)}{closer}"
+
+    def year(m: re.Match) -> str:
+        return "〉(" + m.group(1).translate(str.maketrans("OolI", "0011")) + ")"
+
+    def j_close(m: re.Match) -> str:
+        nonlocal n
+        n += 1
+        return m.group(1) + m.group(2) + _CLOSER[m.group(1)]
+
+    def mismatch(m: re.Match) -> str:
+        nonlocal n
+        if _CLOSER[m.group(1)] == m.group(3):
+            return m.group(0)
+        n += 1
+        return m.group(1) + m.group(2) + _CLOSER[m.group(1)]
+
+    out = []
+    for line in text.split("\n"):
+        line, k = _R_OPENER_RE.subn("「", line)
+        n += k
+        line = _J_CLOSER_RE.sub(j_close, line)
+        line = _MISMATCH_RE.sub(mismatch, line)
+        line = _ANGLE_RE.sub(angle, line)
+        line = _YEAR_AFTER_RE.sub(year, line)
+        out.append(line)
+    return "\n".join(out), n
+
+
+# ── 문서 단위: 한글·영어 문장 경계 줄바꿈 ─────────────────────────────────────────
+# 실측(실리콘밸리 정제본 1,919줄 중 402줄): 한글 명언 뒤에 영어 원문이 한 줄로 붙어 읽기 어렵다
+# ('0264 모든 사람에게 … 주어라 Give everyone the power to share …'). 줄 잇기(join_broken_lines)가
+# 문장부호 없는 한글 줄과 다음 영어 줄을 이어 붙인 것. 문장 단위 언어 전환에서만 줄을 바꾼다.
+_KO_EN_GAP_RE = re.compile(r"(?<=[가-힣.!?”\"’'\)\],\-])[ \t]+(?=[“\"'‘]?[A-Z])")
+_EN_KO_GAP_RE = re.compile(r"(?<=[A-Za-z][.!?])[”\"’']?[ \t]+(?=[“\"'‘]?[가-힣]{2})")
+# 영어 인용 뒤에 바로 붙는 조사·인용어 — 본문 속 인용('“Stay hungry.”라고 말했다')은 끊지 않는다
+_QUOTE_TAIL_RE = re.compile(
+    r"^[”\"’']?\s*(?:라고|이라고|라는|이라는|란|이란|라며|이라며|하고|는|은|을|를|의|에|에서|와|과|로|으로|처럼|같은|이다|다)(?![가-힣])"
+    r"|^[”\"’']?(?:라고|이라고|라는|이라는|라며|이라며)")
+_MIN_EN_WORDS = 4
+
+
+def _en_words(s: str) -> int:
+    return len(re.findall(r"[A-Za-z]{2,}", s))
+
+
+def _split_language_line(line: str) -> list[str]:
+    # 한글 → 영어: 앞 한글 8자↑, 뒤 영어 문장(단어 4개↑)이 줄 끝까지 가거나 문장부호로 끝난 뒤 한글이
+    # 이어질 때 — 한글 문장 속 영어 기관명·표 머리('… New Jersey Institute of Technology 교수를 거쳐')는 끊지 않는다
+    for m in _KO_EN_GAP_RE.finditer(line):
+        head, tail = line[:m.start()], line[m.end():]
+        if len(re.findall(r"[가-힣]", head)) < 8:
+            continue
+        en = re.split(r"(?=[가-힣])", tail, maxsplit=1)[0]
+        after = tail[len(en):]
+        if _en_words(en) < _MIN_EN_WORDS or (after and (
+                _QUOTE_TAIL_RE.match(after) or not re.search(r"[.!?][”\"’')]?\s*$", en))):
+            continue
+        return [head.rstrip()] + _split_language_line(tail)
+    # 영어 → 한글: 앞 영어 문장(문장부호로 끝남, 단어 4개↑) 뒤에 한글 문장(6자↑)이 시작될 때
+    for m in _EN_KO_GAP_RE.finditer(line):
+        head, tail = line[:m.start()], line[m.end():]
+        en_head = re.split(r"[가-힣]", head)[-1]
+        if _en_words(en_head) < _MIN_EN_WORDS or len(re.findall(r"[가-힣]", tail)) < 6 \
+                or _QUOTE_TAIL_RE.match(tail):
+            continue
+        quote = line[m.start():m.end()].strip()     # 닫는 따옴표는 영어 쪽에 남긴다
+        return [(head + quote).rstrip()] + _split_language_line(tail)
+    return [line]
+
+
+def split_language_lines(text: str) -> tuple[str, int]:
+    """한 줄에 붙은 한글 문장과 영어 문장을 줄바꿈으로 가른다(단락은 유지). (텍스트, 나눈 곳 수)"""
+    out: list[str] = []
+    for line in text.split("\n"):
+        out.extend(_split_language_line(line))
+    joined = "\n".join(out)
+    return joined, joined.count("\n") - text.count("\n")
+
+
 # ── 문서 단위: 번호 항목 단락 ──────────────────────────────────────────────────
 # 항목 번호 후보: 단독 숫자 토큰(뒤에 단위·구두점이 붙지 않음)
 # (단위는 숫자에 바로 붙은 것만 본다 — '0001 명언' 의 '명'을 단위로 오인하지 않게)
@@ -569,7 +811,8 @@ def paragraph_entries(text: str) -> tuple[str, int]:
         before = before.rstrip(" \t")
         # 번호 바로 앞 줄이 짧은 소제목('습관')이면 앞 항목 꼬리가 아니라 다음 항목의 머리 — 함께 묶는다
         head = ""
-        tm = re.search(r"\n([가-힣][가-힣 ]{0,11})\n?$", before)
+        # 쪽 경계에서 앞 쪽 쪽번호가 붙은 '30 고백' 꼴이면 쪽번호를 뗀다(앞 그룹 끝에 매달리지 않게)
+        tm = re.search(r"\n(?:\d{1,3}\s+)?([가-힣][가-힣 ]{0,11})\n?$", before)
         if tm and before[:tm.start()].strip():
             head, before = tm.group(1) + "\n", before[:tm.start()]
         out.append(before)

@@ -200,6 +200,106 @@ def test_korean_chapter_reference_in_prose_not_removed():
     assert out[5] == pages[5]
 
 
+def test_korean_and_english_sentences_on_one_line_are_split():
+    line = "0264 모든 사람에게 모든 것을 공유할 수 있는 힘을 주어라 Give everyone the power to share anything with anyone."
+    assert nr.split_language_lines(line) == (
+        "0264 모든 사람에게 모든 것을 공유할 수 있는 힘을 주어라\n"
+        "Give everyone the power to share anything with anyone.", 1)
+    two = ("채용은 핵심 역량입니다 절대로 아웃소싱해서는 안 됩니다 Recruiting is a core competency. "
+           "It should never be outsourced. 다음 명언은 회사의 사명에 관한 것이다")
+    out, n = nr.split_language_lines(two)
+    assert n == 2 and out.split("\n")[1] == "Recruiting is a core competency. It should never be outsourced."
+
+
+def test_inline_english_quotes_and_terms_not_split():
+    for line in ["스티브 잡스는 졸업식 연설에서 “Stay hungry, stay foolish.”라고 말했다",
+                 "애플의 광고 문구인 Think Different Campaign을 통해 브랜드를 바꿨다",
+                 "구글은 기술 기업이다 OK Google",
+                 "넷플릭스는 인터넷의 넷(Net)과 영화를 뜻하는 플릭스(Flix)를 합친 말이다"]:
+        assert nr.split_language_lines(line) == (line, 0), line
+
+
+def test_citation_brackets_repaired():
+    cases = {
+        "〈렛미인(Let The Right One In)>(2008)": "〈렛미인(Let The Right One In)〉(2008)",
+        "〈용서받지 못한 자X2005)": "〈용서받지 못한 자〉(2005)",
+        "〈라라랜드(La La Land)X20l6)": "〈라라랜드(La La Land)〉(2016)",
+        "<블레이드 러너 2049〉(2017)": "〈블레이드 러너 2049〉(2017)",
+        "_제임스 클리어,「아주 작은 습관의 힘j": "_제임스 클리어,「아주 작은 습관의 힘」",
+        "『길매기의 꿈J": "『길매기의 꿈』",
+        "-토마스 아 켐피스(1380-1471), r그리스도를 본받아」저자": "-토마스 아 켐피스(1380-1471), 「그리스도를 본받아」저자",
+        "「파리대왕』은 노벨문학상 수상작으로": "「파리대왕」은 노벨문학상 수상작으로",
+    }
+    for src, want in cases.items():
+        assert nr.repair_quote_brackets(src)[0] == want, src
+
+
+def test_brackets_left_alone_when_ambiguous():
+    for line in ["가격이 3 < 5 이고 Raj 씨가 왔다", "〈빌리 엘리어트〉의 빌리는", "x > y 이면 r 값이 크다",
+                 "그중 일부를 발췌한 내용이 <표 1>이다", "1987년 출간한 <무형자산>에서"]:
+        assert nr.repair_quote_brackets(line) == (line, 0), line
+
+
+def test_space_after_comma_between_hangul():
+    assert nr.clean_page("어느 날，첫사랑의 부고를 들었다") == "어느 날, 첫사랑의 부고를 들었다"
+    assert nr.clean_page("중요한 건,원치 않는 일에 매달리지 않는 것이다") == "중요한 건, 원치 않는 일에 매달리지 않는 것이다"
+    assert nr.clean_page("매출은 1,000억 원, 이익은 a,b 순이다") == "매출은 1,000억 원, 이익은 a,b 순이다"
+
+
+def test_attributed_quote_groups_split_even_without_numbers():
+    # 기독교명언 31쪽 실측: 47·48 번호를 OCR 이 못 읽음 — 저자 출처 줄로 그룹 경계를 잡는다
+    page = "\n".join([
+        "고난", "46",
+        "우리 인생의 어두운 순간들은 필요한 만큼만 지속될 것이다.",
+        "一찰스 스탠리(1932-), 애틀랜타 제일침례교회 담임 목사성경의 진리",
+        "요셉은 형들에게 이렇게 말했다. “당신들은 나를 해하려 하였으나(창",
+        "심장 발작을 비롯한 육체적 질병의 대단히 많은 경우가 우리 죄에서 비롯된다.",
+        "一A. W. 토저(1897-1963), 설교자, 저자",
+    ])
+    pages = [nr.clean_page(page)] * 30
+    out, n = nr.group_attributed_quotes(pages)
+    assert n == 30 and nr.GROUP_MARK + "\n심장 발작을" in out[0]   # 쪽 맨 위 그룹(고난·46)은 경계 불필요
+    assert out[0].startswith("고난\n46")                            # 주제어·번호는 그 그룹의 머리
+    text = nr.finish_groups(out[0])
+    assert "(창\n\n심장 발작을" in text and nr.GROUP_MARK not in text
+
+
+def test_attribution_grouping_off_for_ordinary_documents():
+    pages = ["홍길동(1950-2010)은 경영학자였다.\n그는 많은 책을 남겼다."] * 5
+    assert nr.group_attributed_quotes(pages) == (pages, 0)
+
+
+def test_design_page_noise_cleaned():
+    page = "\n".join(["자다가", "일어날", "정도로", "두근거리는", "일이", "생겼다면", "당장", "해야한다.",
+                      "- 네’ 기직포*. 드’,r",
+                      "‘ 휴/ ,' : ‘ < : : ' < 성노, 급격 히 추락하거나 상승하는 사람은 별로 없다",
+                      "고난", "그 사람은 끝까지 해낸다."])
+    assert nr.clean_page(page).splitlines() == [
+        "자다가 일어날 정도로 두근거리는 일이 생겼다면 당장 해야한다.",
+        "성노, 급격 히 추락하거나 상승하는 사람은 별로 없다",
+        "고난", "그 사람은 끝까지 해낸다."]
+
+
+def test_low_quality_line_keeps_real_sentence():
+    assert nr.clean_page("가,' 무시당한다.") == "가, 무시당한다."
+    assert nr.clean_page("1 - I_ _ 낸거야!”").endswith("낸거야!”")   # 앞 '1'은 항목 번호일 수 있어 남김
+    assert nr.clean_page("-J. H. 에번스") == "-J. H. 에번스"          # 저자 출처 줄
+    assert nr.clean_page("| 우정의 끝").endswith("우정의 끝")          # 항목 제목(구분자 + 한 글자 낱말)
+    assert nr.clean_page("I 기본의 힘") == "I 기본의 힘"
+    # 디지털 문서 실측(평가 도구가 찾은 손실): 기고자 표시·한자 병기·한문 인용
+    assert nr.clean_page("206호(2016년 8월 lssue 1) / 한숙기") == "206호(2016년 8월 lssue 1) / 한숙기"
+    assert nr.clean_page("건(件) 단위로 기억하는 프로세스") == "건(件) 단위로 기억하는 프로세스"
+    assert "患人之不知己患不知人也)." in nr.clean_page("患人之不知己患不知人也).” (<논어> 학이편)")
+    for line in ["[표1] 인터넷 리뷰에 대한 일반 국민과 트위터 사용자 비교",
+                 "‘1%만 바꾸면 된다’는 삶의 철학을 널리 퍼트렸다.",
+                 "㎝도 안 되지만 가슴속에 담아둔 생각", "5월 9일 - 10일", "합 계", "의 견",
+                 "③PT가 있는 사업이면 프레젠테이션에서 승부하라.", "甲이 요청한 순서·제목",
+                 "표제에 좋은 것:", "‘짜증나는 델’이 ‘쿨∼한 델’로 대변신"]:
+        assert nr.clean_page(line) == line, line
+    for junk in ["7혓", "r- 5못", "1사", "2야 568", "돈 나"]:     # 숫자+아무 글자·띄어 쓴 조각은 잡음
+        assert nr.clean_page(junk) == "", junk
+
+
 def test_short_number_runs_are_not_paragraphed():
     text = "1984년에 3. 가지 원칙과 2 3 4 를 말했다."
     assert nr.paragraph_entries(text) == (text, 0)
