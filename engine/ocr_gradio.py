@@ -733,6 +733,8 @@ def _run_digital_pdf(file_path: Path, pages_text: list[str], out_fmt: OutputForm
             on_chunk=ckpt.append,
             report_out=crep,
             local=local_clean,
+            # 장절 책(성경)은 줄 잇기 전 원문 줄로 장·절을 세운다(R-15) — 디지털 PDF 만
+            raw_pages=[p.raw_text for p in content_pages] if page_fn is _finalize_digital else None,
         )
         try:
             while True:

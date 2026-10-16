@@ -27,6 +27,7 @@ from core import config
 from core import gemini_vision as _gemini
 from core import ollama_vision as _ollama
 from core import noise_rules
+from core import verse_rules
 from core.postprocessor import _PAGE_FOOTER_LINE
 
 # 페이지 경계 센티넬 — 입력에 실제로 등장할 가능성이 없는 문자열
@@ -162,7 +163,8 @@ def clean_pages(pages: list[str], progress_cb=None, drop_front_matter: bool = Fa
 
 
 def iter_clean(pages: list[str], drop_front_matter: bool = False, on_chunk=None,
-               report_out: dict | None = None, local: bool = False):
+               report_out: dict | None = None, local: bool = False,
+               raw_pages: list[str] | None = None):
     """
     제너레이터: 청크 처리마다 (done_chunks, total_chunks) 를 yield 하고,
     마지막에 정제된 전체 본문을 return(StopIteration.value)한다.
@@ -181,9 +183,28 @@ def iter_clean(pages: list[str], drop_front_matter: bool = False, on_chunk=None,
 
     report_out: 넘기면 이 실행의 무결성 리포트를 채워 준다. 여러 파일을 동시에 처리할 때는
     get_last_report()(전역 — 마지막에 끝난 실행 것) 대신 이것을 쓴다.
+
+    raw_pages: 디지털 PDF 원문 쪽(줄바꿈·줄 끝 공백 그대로). 내장 규칙 모드에서 장절 책(성경 등)이면
+    이것으로 장·절 단위를 세운다(R-15) — 앞부속 제거는 하지 않는다.
     """
     global _last_report
     _last_report = None
+    rules_mode = local and config.get_local_cleanup_engine() == "rules"
+    # 장절 책: 쪽 단위 줄 잇기·잡음 줄 판정을 거치면 장 머리·관주가 지워지고 절이 앞 절에 붙는다
+    # (king_james_bible 실측) → 원문 줄로 바로 세운다
+    if rules_mode and raw_pages and verse_rules.is_verse_book(raw_pages):
+        text, st = verse_rules.format_book(raw_pages)
+        text = deterministic_preclean(text)
+        report = {"chunks": 1, "fallback_api": 0, "fallback_guard": 0, "warnings": [
+            f"장절 책으로 정제 — 장 {st['chapters']}개·절 {st['verses']}개,"
+            f" 쪽 머리글·쪽번호 {st['headers']}줄 제거 (정제 전 원문 사본에서 확인 가능)"]}
+        _last_report = report
+        if report_out is not None:
+            report_out.update(report)
+        if on_chunk is not None:
+            on_chunk(text)
+        yield 1, 1
+        return (text + "\n") if text else ""
     pages = [p.strip() for p in pages if p and p.strip()]
     if not pages:
         return ""
@@ -193,7 +214,6 @@ def iter_clean(pages: list[str], drop_front_matter: bool = False, on_chunk=None,
     pages = [deterministic_preclean(p) for p in pages]
     # 비용 우선(내장 규칙) — LLM 이 대신 걸러 주지 않으므로 OCR 잡음을 규칙으로 먼저 걷는다
     # (2026-10-16 명언집 5권 실측: 잡음 줄·기호·전각 부호·깨진 머리글이 결과에 그대로 남음)
-    rules_mode = local and config.get_local_cleanup_engine() == "rules"
     header_notes: list[str] = []
     if rules_mode:
         pages = [noise_rules.clean_page(p) for p in pages]
