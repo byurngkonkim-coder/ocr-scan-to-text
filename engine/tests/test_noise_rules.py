@@ -59,6 +59,25 @@ def test_part_header_with_page_number_removed_mid_line():
     assert out[0] == "Give me a turbulent world and I'll take the turbulent one."
 
 
+def test_paired_guillemets_kept_but_stray_ones_removed():
+    # 하루명화하루명언 실측: '«대지»의 작가' 의 여는 '«'를 장식 기호로 지웠다 — 짝 맞는 책 제목 표시는 본문
+    for line in ["«대지»의 작가 펄 백의 말입니다.", "샘을 길어 올린다. «대지»의 작가 필 백의 말입니다.",
+                 "«대지»", "«대지의 노래»를 읽었다"]:
+        assert nr.clean_page(line) == line, line
+    assert nr.clean_page("« 하루에 한개 팔고 끝이다.") == "하루에 한개 팔고 끝이다."   # 홀로 떨어진 '«'는 잡음
+    assert nr.clean_page("«하루에 한개 팔고 끝이다.") == "하루에 한개 팔고 끝이다."    # 짝 없는 '«'도 잡음
+
+
+def test_toc_chapter_labels_kept():
+    # 하루명화하루명언 실측: 2단 차례 머리 'Chapter 2 Chapter 3 …'의 두 번째 번호를 쪽번호로 보고 지웠다
+    line = "Chapter 2 Chapter 3 아침, 오후, 일어나 시작하는 당신에게 다시 살아가는 당신에게"
+    assert nr.strip_fuzzy_headers([line]) == ([line], 0)
+    # 줄 구조가 살아 있는 차례 쪽 — 장 제목 뒤 쪽번호는 머리글이 아니라 차례 항목
+    toc = "\n".join(["차례", "Chapter 1 새벽, 잠 못 이루는 당신에게 14"]
+                    + [f"제목 {k}번째 이야기{20 + 6 * k}" for k in range(12)])
+    assert nr.strip_fuzzy_headers([toc])[0] == [toc]
+
+
 def test_entry_paragraphs_restored_and_page_numbers_dropped():
     body = []
     for k in range(1, 41):

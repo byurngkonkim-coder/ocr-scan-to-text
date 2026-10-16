@@ -27,7 +27,9 @@ _JAMO_TOKEN_RE = re.compile(r"(?<!\S)[ᄀ-ᇿ][A-Za-z]{0,2}(?!\S)")
 _JAMO_CHAR_RE = re.compile(r"[ᄀ-ᇿ]")
 # 장식 기호 덩어리('■■■', '•', '^', '«') — 토큰 전체가 기호일 때만
 _SYMBOL_TOKEN_RE = re.compile(r"(?<!\S)[■□▪▫◆◇●○•^«»°◊※*]+(?!\S)")
-_SYMBOL_LEAD_RE = re.compile(r"(?<!\S)[■□▪▫◆◇●○•^«»]+(?=[가-힣A-Za-z“‘\"'(])")
+# 단, 같은 줄에서 짝이 맞는 '«…»'는 책·작품 제목 표시라 본문('«대지»의 작가' — 하루명화하루명언 실측)
+_PAIRED_GUIL_RE = re.compile(r"«[^«»\n]{1,40}»")
+_SYMBOL_LEAD_RE = re.compile(r"(?<!\S)(?!«[^«»\n]{1,40}»)[■□▪▫◆◇●○•^«»]+(?=[가-힣A-Za-z“‘\"'(])")
 # 스캔 밑줄·점선('______', '-------')
 _RULE_RE = re.compile(r"[_\-–—―一]{5,}")
 # 깨진 항목 번호: 'OO52'·'O457' → '0052'·'0457'. 숫자 두 자리 이상일 때만(산소 'O2' 등 본문 보호)
@@ -60,7 +62,7 @@ def is_garbage_line(line: str) -> bool:
     s = line.strip()
     if not s:
         return False
-    ns = re.sub(r"\s", "", s)
+    ns = re.sub(r"\s", "", _PAIRED_GUIL_RE.sub(lambda m: m.group(0)[1:-1], s))   # 짝 맞는 '«»'는 잡기호로 세지 않음
     if re.fullmatch(r"[\d\-.,:/()|]+", ns):
         return False
     # 의미 있는 토큰: 한글 2자·영문 3자, 숫자+단위('5월 9일'), 띄어 쓴 표 머리('합 계')
@@ -160,17 +162,20 @@ def _is_noise_token(t: str) -> bool:
     return (not good and bool(bad or hanja)) or (bad + hanja >= 2 and bad + hanja >= len(t) / 2)
 
 
-def _strip_token_edges(t: str) -> str:
-    """'一오스틴' → '오스틴', '臣麗因주기도문은' → '주기도문은' (한글 어절 앞뒤에 붙은 한자·기호)."""
+def _strip_token_edges(t: str, keep_guil: bool = False) -> str:
+    """'一오스틴' → '오스틴', '臣麗因주기도문은' → '주기도문은' (한글 어절 앞뒤에 붙은 한자·기호).
+    keep_guil: 줄에 짝 맞는 '«…»'가 있으면 '«»'는 떼지 않는다."""
     if not re.search(r"[가-힣]{2}", t) or re.search(r"\([一-鿿]+\)", t):
         return t
-    return re.sub(r"^[一-鿿㐀-䶿々^■•*«»~`]+|[一-鿿㐀-䶿々^■•*«»~`]+$", "", t)
+    cls = "[一-鿿㐀-䶿々^■•*~`]" if keep_guil else "[一-鿿㐀-䶿々^■•*«»~`]"
+    return re.sub(rf"^{cls}+|{cls}+$", "", t)
 
 
 def _clean_line(line: str) -> str:
     """잡음 줄이면 '', 본문 줄이면 섞인 잡음 토큰과 양끝 잡음을 뗀 줄."""
+    keep_guil = bool(_PAIRED_GUIL_RE.search(line))
     # 잡음 토큰과, 낱말 사이에 홀로 떨어진 따옴표 토큰("가, ' 무시당한다."의 "'")을 뗀다
-    line = " ".join(_strip_token_edges(t) for t in line.split()
+    line = " ".join(_strip_token_edges(t, keep_guil) for t in line.split()
                     if not _is_noise_token(t) and not re.fullmatch(r"[‘’'\"“”]", t))
     # 저자 출처 줄('-J. H. 에번스', '一찰스 스탠리(1932-)')은 이니셜·연도가 많아도 본문
     if re.match(r"^[-一—–_]\s?(?:[A-Z]\.\s?)*[가-힣A-Z][가-힣A-Za-z.]*(?:\s[가-힣A-Za-z.]+){0,3}\s*(?:\(|,|$)", line):
@@ -341,7 +346,10 @@ def _strip_header_spans(line: str, hg: set[str]) -> str:
 # 장·부 머리글 표지 — 영문 대문자 'PART'·'CHAPTER'(OCR 깨짐 포함). 한글 '제N장'은 본문 문장
 # ('제2장에서 살펴본 3가지')과 구분되지 않아 쓰지 않는다
 _PART = r"(?:P ?A ?R ?T|PA.T|P.RT|part|CHAPTER|Chapter)"
-_PART_HEADER_RE = re.compile(rf"\b{_PART}\s?\d{{1,2}}\b[^\n]{{0,40}}?(?<!\S)[•·|I]?\s*\d{{1,3}}(?=\s|$)")
+# 머리글 구간 안에 다른 장 표지가 오면 머리글이 아니다 — 2단 차례 머리 'Chapter 2 Chapter 3 …'의
+# '3'을 쪽번호로 읽어 지웠다(하루명화하루명언 실측)
+_PART_HEADER_RE = re.compile(
+    rf"\b{_PART}\s?\d{{1,2}}\b(?:(?!{_PART})[^\n]){{0,40}}?(?<!\S)[•·|I]?\s*\d{{1,3}}(?=\s|$)")
 _PART_LINE_RE = re.compile(rf"^{_PART}\s?(\d{{1,2}})\b.{{0,40}}$")
 
 
@@ -349,6 +357,9 @@ def _strip_part_headers(pages: list[str]) -> tuple[list[str], int]:
     seen: set[str] = set()
     out, n = [], 0
     for p in pages:
+        if _is_toc_page(p) or _is_toc_part_page(p):   # 차례의 '장 제목 + 쪽번호'는 머리글이 아니라 차례 항목
+            out.append(p)
+            continue
         new = []
         for l in p.splitlines():
             s = re.sub(r" {2,}", " ", _PART_HEADER_RE.sub(" ", l)).strip()
