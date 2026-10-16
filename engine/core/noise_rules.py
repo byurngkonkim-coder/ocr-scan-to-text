@@ -30,9 +30,13 @@ _SYMBOL_TOKEN_RE = re.compile(r"(?<!\S)[■□▪▫◆◇●○•^«»°◊※
 _SYMBOL_LEAD_RE = re.compile(r"(?<!\S)[■□▪▫◆◇●○•^«»]+(?=[가-힣A-Za-z“‘\"'(])")
 # 스캔 밑줄·점선('______', '-------')
 _RULE_RE = re.compile(r"[_\-–—―一]{5,}")
-# 깨진 항목 번호: 'OO52'·'O457' → '0052'·'0457', '0 0 5 1' → '0051'
-_O_NUM_RE = re.compile(r"(?<![\w])([0O]{1,3})(\d{1,3})(?![\w])")
-_SPACED_NUM_RE = re.compile(r"(?<![\w\d])(\d) (\d) (\d)(?: (\d))?(?![\w\d])")
+# 깨진 항목 번호: 'OO52'·'O457' → '0052'·'0457'. 숫자 두 자리 이상일 때만(산소 'O2' 등 본문 보호)
+_O_NUM_RE = re.compile(r"(?<![\w])([0O]{1,3})(\d{2,3})(?![\w])")
+# 띄어 읽힌 숫자: 0으로 시작하는 줄 머리 번호 '0 0 5 1' → '0051', 단위가 바로 뒤따르는 수
+# '1 9 8 3 년'·'1 0 0 퍼센트'·'2 9 2년' 만 잇는다 — 표·척도의 '1 2 3 4 5 중'은 붙이지 않는다
+_SPACED_NUM_RE = re.compile(
+    r"(?m)^[ \t]*(0) (\d) (\d)(?: (\d))?(?![\w\d])"
+    r"|(?<![\w\d])(\d) (\d)(?: (\d))?(?: (\d))?(?=\s*(?:년|퍼센트|%|명|개|원|배|세|달러|억|만)(?![가-힣]{2}))")
 
 _ALLOWED_PUNCT = set(".,!?'\"“”‘’()[]<>〈〉『』「」《》:;-–—~·%/…|_+=&#@")
 
@@ -111,6 +115,11 @@ def _clean_line(line: str) -> str:
     hangul = len(re.findall(r"[가-힣]", line))
     if hangul >= _KEEP_HANGUL:
         return _trim_junk_edges(line)
+    # 한문 인용 줄('學而時習之 不亦說乎')은 본문 — 한자 4자↑ 연속이고 한자·공백·문장부호만 있을 때
+    # (영문·숫자가 섞인 '秘密永近Wteil' 같은 그림 속 글자 오인식은 제외)
+    if re.search(r"[一-鿿]{4,}", line) and all(
+            _HANJA_RE.match(c) or c.isspace() or c in ".,!?;:·()「」『』“”\"'" for c in line):
+        return line
     # 한글이 적은 짧은 줄: 한자가 섞였거나 한글 낱말·영단어(모음 포함 3자↑)가 없으면 잡음
     if not re.fullmatch(r"[\d\-.,:/()| ]+", line.strip()) and (
             _HANJA_RE.search(line)
@@ -235,7 +244,9 @@ def _strip_header_spans(line: str, hg: set[str]) -> str:
 
 # 'PART 3 실라콘뱅리 혁신가들의 통학 331' — 장 머리글+쪽번호가 본문 줄 가운데에 끼어든 것.
 # 쪽번호(1~3자리)가 뒤따를 때만 머리글로 본다. 번호가 둘이면('명대사 51 115 언제') 앞 것만 쪽번호.
-_PART = r"(?:P ?A ?R ?T|PA.T|P.RT|part)"
+# 장·부 머리글 표지 — 영문 대문자 'PART'·'CHAPTER'(OCR 깨짐 포함). 한글 '제N장'은 본문 문장
+# ('제2장에서 살펴본 3가지')과 구분되지 않아 쓰지 않는다
+_PART = r"(?:P ?A ?R ?T|PA.T|P.RT|part|CHAPTER|Chapter)"
 _PART_HEADER_RE = re.compile(rf"\b{_PART}\s?\d{{1,2}}\b[^\n]{{0,40}}?(?<!\S)[•·|I]?\s*\d{{1,3}}(?=\s|$)")
 _PART_LINE_RE = re.compile(rf"^{_PART}\s?(\d{{1,2}})\b.{{0,40}}$")
 
@@ -291,21 +302,34 @@ def strip_fuzzy_headers(pages: list[str]) -> tuple[list[str], int]:
 # 차례 이어지는 쪽이 그대로 남았다. 모양이 뚜렷한 것만 규칙으로 고른다 — 머리말·프롤로그는 본문.
 _FRONT_MAX_PAGES = 40
 _PRICE_AD_RE = re.compile(r"\d[\d,.]{3,6}\s*원")
-_PRICE_CTX_RE = re.compile(r"지음|옮김|(?<![가-힣])저(?![가-힣])|(?<![가-힣])역(?![가-힣])|\d\s*면\b|\d\s*쪽")
+# 도서 광고 문맥: '지음·옮김', '| 175면 |'·'384쪽' 같은 쪽수, '김남진 역 | 15,000원'·'이상혁 저 I' 처럼
+# 구분자가 뒤따르는 '저'·'역'. 대명사 '저'('저 역시')와 헷갈리지 않게 '저'·'역' 단독은 쓰지 않는다
+_PRICE_CTX_RE = re.compile(r"지음|옮김|저자|역자|\d\s*면\s*[|｜I]|\d{2,4}\s*쪽|(?<![가-힣])[저역]\s*[|｜I](?![A-Za-z])")
 _COPYRIGHT_RE = re.compile(r"Copyright|©|저작권법|무단\s*(?:전재|복제)|ISBN|All rights reserved|출판권", re.I)
 _BIO_WORDS = ("저자", "지은이", "옮긴이", "대표이사", "큐레이터", "졸업", "학위", "저서", "출간", "강연",
               "페이스북", "블로그", "http", "인문학자", "facebook")
 _BODY_START_RE = re.compile(r"^(?:prologue|프롤로그|머리말|서문|들어가며|들어가는 글|여는 글)", re.I)
 
 
+_SENTENCE_END_RE = re.compile(r"[다요죠][.!?]?(?:\s|$)")
+_BOOK_MIN_PAGES = 30       # 위치(앞부분)에 기대는 판정(표지·저자 소개·차례)은 책 분량 문서에만
+
+
 def _is_toc_page(p: str) -> bool:
-    """차례 쪽 꼴: 짧은 줄이 많고 상당수가 쪽번호(숫자)로 끝나거나 숫자뿐인 쪽."""
+    """차례 쪽 꼴: 짧은 줄이 많고 상당수가 쪽번호(숫자)로 끝나거나 숫자뿐이며, 문장이 거의 없거나
+    쪽 분량이 적은 쪽. 2단 편집 기사(짧은 줄 + 'www.dongabiz.com 127' 같은 숫자 끝 줄)는 줄 모양이
+    차례와 같아 본문 쪽을 지웠다(DBR 매몰비용 실측) — 기사 쪽은 1,900자↑·문장 16개↑, 차례 쪽은
+    400~1,100자(명언집 차례는 장 제목이 '…하라.' 문장이라 문장 수만으로는 못 가른다)."""
     lines = [l.strip() for l in p.splitlines() if l.strip()]
-    if len(lines) < 12:
+    if len(lines) < 12 or (len(_SENTENCE_END_RE.findall(p)) > 3 and len(p) > 1300):
         return False
     avg = sum(len(l) for l in lines) / len(lines)
     numeric = sum(1 for l in lines if re.search(r"(?:^|\s|[가-힣.])\d{1,3}$", l))
     return avg <= 30 and numeric / len(lines) >= 0.2
+
+
+# 차례 덩어리의 첫 쪽 표지어 — 제목('차례'·'CONTENTS') 또는 차례 첫 항목('prologue 4'·'머리말')
+_TOC_START_RE = re.compile(r"(?i)차\s?례|목\s?차|contents|prolog|프롤로그|머리말|서\s?문|들어가며")
 
 
 def _is_toc_part_page(p: str) -> bool:
@@ -329,10 +353,11 @@ def drop_book_matter_rules(pages: list[str], notes: list[str]) -> list[str]:
     first = lambda pred: next((i for i in range(win) if pred(out[i])), None)
     head_lines = lambda p: [l.strip() for l in p.splitlines() if l.strip()][:3]
     marks = [x for x in (first(lambda p: any(_BODY_START_RE.match(l) for l in head_lines(p))),
-                         first(_is_toc_page)) if x is not None]
+                         first(lambda p: _is_toc_page(p) and bool(_TOC_START_RE.search(p)))) if x is not None]
     bound = min(marks) if marks else (first(lambda p: len(p.strip()) >= 600) or 0)
     # 문장으로 된 쪽(머리말 등)은 표지·소개로 보지 않는다 — '…다.' 꼴 종결이 둘 이상이면 본문
-    sentences = lambda p: len(re.findall(r"[다요죠][.!?]?(?:\s|$)", p))
+    sentences = lambda p: len(_SENTENCE_END_RE.findall(p))
+    is_book = n >= _BOOK_MIN_PAGES   # 짧은 기사·보고서는 위치 기반 판정 없이 저작권·광고만
 
     for i in range(win):
         p = out[i]
@@ -342,15 +367,20 @@ def drop_book_matter_rules(pages: list[str], notes: list[str]) -> list[str]:
             drop(i, "다른 책 광고")
         elif len(_COPYRIGHT_RE.findall(p)) >= 2:
             drop(i, "저작권·판권")
-        elif i < bound and len(p) < 1500 and (
+        elif is_book and i < bound and len(p) < 1500 and (
                 re.search(r"(?m)^\s*(?:저자|지은이|옮긴이|역자)\s", p)
                 or sum(w in p for w in _BIO_WORDS) >= 3):
             drop(i, "저자 소개")
-        elif i < bound and len(p.strip()) < 500 and sentences(p) < 2:
+        elif is_book and i < bound and len(p.strip()) < 500 and sentences(p) < 2:
             drop(i, "표지·제목")
     # 차례: 앞쪽의 첫 차례 덩어리만 — 차례 꼴(또는 장별 차례 꼴) 쪽이 이어지는 동안.
     # 본문에도 '번호 / 짧은 제목' 줄이 많은 쪽이 있어(기독교명언) 덩어리 하나에서 멈춘다
-    start = first(_is_toc_page)
+    # 첫 쪽은 차례 꼴이면서 차례 표지어가 있어야 한다 — 숫자 목록 본문(TRIZ '1~40 발명 원리'·그림·표가 든
+    # 기사 쪽 실측)은 모양이 차례와 같아 표지어 없이 시작을 인정하면 본문을 지운다
+    # (표지어는 차례 첫 쪽이 짧아 차례 꼴에 못 미친 경우를 위해 바로 앞 쪽까지 본다 — 악당의명언 8·9쪽)
+    start = next((i for i in range(win) if _is_toc_page(out[i]) and (
+        _TOC_START_RE.search(out[i]) or (i > 0 and _TOC_START_RE.search(out[i - 1])))), None) \
+        if is_book else None
     if start is not None:
         j = start
         while j < win and (not out[j].strip() or _is_toc_page(out[j]) or _is_toc_part_page(out[j])):
@@ -417,7 +447,8 @@ def _is_unit_start(line: str, nxt: str = "") -> bool:
 
 def redistribute_number_stacks(text: str) -> tuple[str, int]:
     """'014 / 015 / 본문A / 본문B' 처럼 몰려 읽힌 연속 번호를 뒤따르는 본문 덩어리 머리에 차례로 붙인다.
-    번호 바로 뒤의 앞 항목 꼬리(영어 번역 줄·끊긴 문장 잇는 줄)는 건너뛴다. (텍스트, 옮긴 번호 수)"""
+    번호 바로 뒤의 앞 항목 꼬리(영어 번역 줄·끊긴 문장 잇는 줄)는 건너뛴다. (텍스트, 옮긴 번호 수)
+    번호 항목 책(is_numbered_book)에만 적용할 것 — 일반 문서의 표·목록 숫자 줄을 본문 머리에 붙이지 않게."""
     raw = text.split("\n")
     lines: list[str] = []
     for k, l in enumerate(raw):
@@ -428,7 +459,9 @@ def redistribute_number_stacks(text: str) -> tuple[str, int]:
             tail = [int(x) for x in m_tail.group(2).split()]
             nxt = _NUM_LINE_RE.match(raw[k + 1]) if k + 1 < len(raw) else None
             seq = all(b - a == 1 for a, b in zip(tail, tail[1:]))
-            if seq and ((nxt and int(nxt.group(1)) == tail[-1] + 1) or len(tail) >= 2):
+            # 다음 줄 번호와 이어지거나, 3자리↑ 연속 번호 둘 이상('0032 0033')일 때만 — '시즌 1 2' 같은 본문 제외
+            if seq and ((nxt and int(nxt.group(1)) == tail[-1] + 1)
+                        or (len(tail) >= 2 and all(len(x) >= 3 for x in m_tail.group(2).split()))):
                 lines += [m_tail.group(1).rstrip()] + m_tail.group(2).split()
                 continue
         # 영어 번역 줄 끝에 다음 항목의 한글이 붙은 줄('…define it 행동가들은 …') — 한글 앞에서 나눈다
@@ -498,6 +531,11 @@ def redistribute_number_stacks(text: str) -> tuple[str, int]:
         prev_num = vals[-1]
         i = end
     return "\n".join(out), moved
+
+
+def is_numbered_book(text: str) -> bool:
+    """연속 번호 항목(1, 2, 3 …)이 _ENTRY_MIN_CHAIN개 이상 이어지는 '번호 항목 책'(명언집 등)인가."""
+    return len(_entry_chain(text)) >= _ENTRY_MIN_CHAIN
 
 
 def paragraph_entries(text: str) -> tuple[str, int]:

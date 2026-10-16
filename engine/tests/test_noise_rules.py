@@ -165,6 +165,41 @@ def test_lone_page_number_at_paragraph_end_removed():
     assert "\n91" not in out and "두 종류의 회사가 있다." in out
 
 
+# ── 일반화 점검: 명언집 밖 문서에서 본문을 해치지 않는가 ─────────────────────────────
+
+def test_classical_chinese_quote_lines_kept():
+    page = "공자는 이렇게 말했다.\n學而時習之 不亦說乎\n배우고 때로 익히면 기쁘지 아니한가."
+    assert nr.clean_page(page).splitlines()[1] == "學而時習之 不亦說乎"
+
+
+def test_number_repairs_do_not_touch_ordinary_text():
+    assert nr.clean_page("혈중 O2 농도가 낮아졌다") == "혈중 O2 농도가 낮아졌다"
+    assert nr.clean_page("만족도 척도 1 2 3 4 5 중 하나를 고른다") == "만족도 척도 1 2 3 4 5 중 하나를 고른다"
+    assert nr.clean_page("그는 1 9 8 3 년에 태어났다") == "그는 1983 년에 태어났다"
+    assert nr.clean_page("원칙을 9 8 퍼센트의 시간보다 1 0 0 퍼센트 지킨다") == "원칙을 98 퍼센트의 시간보다 100 퍼센트 지킨다"
+
+
+def test_price_in_preface_is_not_ad():
+    pages = ["머리말\n저 역시 처음에는 10,000원짜리 책 한 권으로 시작했다. 그 경험을 나누고 싶다."] \
+        + [f"본문 {k}쪽의 문장이다. 계속 이어진다." for k in range(20)]
+    notes: list[str] = []
+    out = nr.drop_book_matter_rules(pages, notes)
+    assert out[0] == pages[0] and not notes
+
+
+def test_numbered_paragraph_rules_only_for_numbered_books():
+    prose = "분기별 실적은 다음과 같다\n1\n2\n3\n매출이 크게 늘어난 분기였다\n이익도 함께 늘었다\n원가는 줄었다"
+    assert not nr.is_numbered_book(prose)
+    assert nr.is_numbered_book("\n".join(f"{k:04d} 명언 {k}번이다." for k in range(1, 40)))
+
+
+def test_korean_chapter_reference_in_prose_not_removed():
+    bodies = [f"{k}번째 쪽의 본문은 서로 다른 내용을 담고 있다 {'가나다라마바'[k % 6]}" for k in range(12)]
+    pages = bodies[:5] + ["제2장에서 살펴본 바와 같이 3가지 원칙이 중요하다."] + bodies[5:]
+    out, _ = nr.strip_fuzzy_headers(pages)
+    assert out[5] == pages[5]
+
+
 def test_short_number_runs_are_not_paragraphed():
     text = "1984년에 3. 가지 원칙과 2 3 4 를 말했다."
     assert nr.paragraph_entries(text) == (text, 0)
