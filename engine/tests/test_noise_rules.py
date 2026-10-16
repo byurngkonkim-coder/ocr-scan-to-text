@@ -92,6 +92,50 @@ def test_book_matter_rules_drop_front_matter_but_keep_prologue_and_body():
     assert any("저자 소개" in n for n in notes) and any("차례" in n for n in notes)
 
 
+def test_stacked_margin_numbers_moved_to_their_quotes():
+    # 시네마명언 23쪽 실측: 쪽번호 '19'가 붙은 번호 몰림, 013 은 OCR 이 놓침, 뒤에 소제목
+    text = "\n".join([
+        "012 우리의 인생도 선택에 따라 달라질 수 있어.",
+        "Also does our life select how to follow.",
+        "PART 1 꿈과 자유를 찾아주는 명대사",
+        "19 014",
+        "015",
+        "과거는 뒤에 둬야 앞으로 나갈 수 있어.",
+        "You got to put the past behind you.",
+        "제 운명은 뭐예요? / 그건 너가 알아서 해야 해.",
+        "Whats my destiny? / It's up to you.",
+        "저마다 운명이 있는지 아니면 그냥 떠도는 건지 모르겠어 I don't know if we each have a destiny.",
+        "희망은",
+        "사라지지 않는다",
+    ])
+    out, moved = nr.redistribute_number_stacks(text)
+    lines = out.split("\n")
+    assert moved == 2
+    assert "014 제 운명은 뭐예요? / 그건 너가 알아서 해야 해." in lines
+    assert any(l.startswith("015 저마다 운명이") for l in lines)
+    assert "과거는 뒤에 둬야 앞으로 나갈 수 있어." in lines      # 놓친 013 몫 — 번호를 지어내지 않는다
+    assert "19 014" not in out and "사라지지 않는다" in lines
+
+
+def test_stacked_numbers_skip_previous_entry_tail_and_split_glued_numbers():
+    # 실리콘밸리 25·27쪽 실측: 앞 문장 끝에 붙은 번호들, 앞 항목 꼬리(조사로 시작·영어 번역 줄)
+    text = "\n".join([
+        "0026 내가 17살 때, 이런 인용구를 읽은 적이 있다 만약 당신이 하루하루를 마지막 날인 0027",
+        "0028",
+        "니.” 일 때마다 나는 변화해야 한다고 느꼈다",
+        "When I was 17, I read a quote that went something like this.",
+        "여러분의 일은 여러분의 인생의 큰 부분이 될 것이고 진정으로 만족하는 방법은 하나다",
+        "Your work is going to fill a large part of your life.",
+        "나는 하루 이틀이 아닌 수년을 최소 단위로 생각하는 것에 익숙해졌다",
+    ])
+    out, moved = nr.redistribute_number_stacks(text)
+    lines = out.split("\n")
+    assert moved == 2
+    assert lines[1] == "니.” 일 때마다 나는 변화해야 한다고 느꼈다"
+    assert lines[3].startswith("0027 여러분의 일은")
+    assert lines[5].startswith("0028 나는 하루 이틀이")
+
+
 def test_short_number_runs_are_not_paragraphed():
     text = "1984년에 3. 가지 원칙과 2 3 4 를 말했다."
     assert nr.paragraph_entries(text) == (text, 0)

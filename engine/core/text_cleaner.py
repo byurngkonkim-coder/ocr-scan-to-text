@@ -283,6 +283,7 @@ def iter_clean(pages: list[str], drop_front_matter: bool = False, on_chunk=None,
         text = post_process_pagebreaks(text)
     text, _ = rejoin_split_sentences(text)
     if rules_mode:   # 번호 붙은 항목(명언집 등)마다 단락 복원 — 연속 번호가 충분할 때만 동작
+        text, _ = noise_rules.redistribute_number_stacks(text)   # 여백 번호가 몰려 읽힌 것부터 제자리로
         text, _ = noise_rules.paragraph_entries(text)
 
     return (text + "\n") if text else ""

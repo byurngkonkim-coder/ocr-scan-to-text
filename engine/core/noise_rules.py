@@ -36,7 +36,14 @@ _SPACED_NUM_RE = re.compile(r"(?<![\w\d])(\d) (\d) (\d)(?: (\d))?(?![\w\d])")
 _ALLOWED_PUNCT = set(".,!?'\"“”‘’()[]<>〈〉『』「」《》:;-–—~·%/…|_+=&#@")
 
 
+# 숫자만 있는 줄의 o·i 오인식('ooi3' → '0013') — 줄 전체가 번호일 때만(영단어 오변환 방지)
+_GARBLED_NUM_LINE_RE = re.compile(r"(?m)^[ \t]*([0Oo]{1,3}[\dilI]{1,3})[ \t]*$")
+
+
 def _fix_numbers(text: str) -> str:
+    text = _GARBLED_NUM_LINE_RE.sub(
+        lambda m: m.group(1).translate(str.maketrans("OoilI", "00111"))
+        if re.search(r"\d", m.group(1)) else m.group(0), text)
     text = _O_NUM_RE.sub(lambda m: m.group(1).replace("O", "0") + m.group(2), text)
     return _SPACED_NUM_RE.sub(lambda m: "".join(g for g in m.groups() if g), text)
 
@@ -378,6 +385,109 @@ def _entry_chain(text: str) -> list[re.Match]:
         chain.append(cands[k])
         k = prev[k]
     return chain[::-1]
+
+
+# ── 문서 단위: 몰려 읽힌 번호를 본문에 되돌리기 ──────────────────────────────────
+# 실측(시네마명언 14곳·실리콘밸리 68곳): 번호가 본문 왼쪽 여백에 따로 인쇄된 책은 RapidOCR 이
+# 한 쪽의 번호들('014' '015')을 먼저 몰아 읽고 본문을 뒤에 읽는다 → 단락 복원 후 번호만 있는
+# 빈 항목(실리콘밸리 173개)이 생기고 본문은 번호 없이 앞 항목에 붙었다. 내용 손실이 아니라 순서 어긋남.
+# 번호만 있는 줄. 쪽 경계에서 앞 쪽 쪽번호가 붙어 '19 014' 가 된 줄도 포함(쪽번호는 버린다)
+_NUM_LINE_RE = re.compile(r"^\s*(?:\d{1,3}\s+)?(\d{1,4})\s*$")
+_SENT_END_RE = re.compile(r"(?:[.!?”\"’')\]]|[다요죠까니])\s*$")
+_BOUND_HEAD_RE = re.compile(
+    r"^(?:며|으며|니|으니|지만|면서|도록|거나|는데|은데|으면|는|은|을|를|에|의|에서|에게|으로|로"
+    r"|었다|았다|였다|했다|한다|된다|합니다|입니다|습니다|니다|리는|하는|이다)(?![가-힣])")
+
+
+def _is_unit_start(line: str, nxt: str = "") -> bool:
+    """본문 덩어리의 첫 줄 — 한글로 시작. 12자 이하 짧은 줄은 소제목('사라지지 않는다')일 수 있어
+    바로 뒤에 영어 번역 줄이 올 때만 덩어리로 본다."""
+    s = line.strip()
+    if not re.match(r"[“\"'‘(]?[가-힣]", s):
+        return False
+    return len(s) > 12 or bool(re.match(r"\s*[A-Z][a-z]", nxt))
+
+
+def redistribute_number_stacks(text: str) -> tuple[str, int]:
+    """'014 / 015 / 본문A / 본문B' 처럼 몰려 읽힌 연속 번호를 뒤따르는 본문 덩어리 머리에 차례로 붙인다.
+    번호 바로 뒤의 앞 항목 꼬리(영어 번역 줄·끊긴 문장 잇는 줄)는 건너뛴다. (텍스트, 옮긴 번호 수)"""
+    raw = text.split("\n")
+    lines: list[str] = []
+    for k, l in enumerate(raw):
+        # 쪽 경계에서 몰림의 앞 번호들이 앞 문장 끝에 붙은 경우('…날인 0027' / '0028',
+        # '…한다 0032 0033' / '0034') — 연속 번호면 떼어 낸다
+        m_tail = re.match(r"^(.*?[가-힣A-Za-z.,!?”\"’')][^\d]*?)((?:\s+\d{2,4})+)\s*$", l)
+        if m_tail:
+            tail = [int(x) for x in m_tail.group(2).split()]
+            nxt = _NUM_LINE_RE.match(raw[k + 1]) if k + 1 < len(raw) else None
+            seq = all(b - a == 1 for a, b in zip(tail, tail[1:]))
+            if seq and ((nxt and int(nxt.group(1)) == tail[-1] + 1) or len(tail) >= 2):
+                lines += [m_tail.group(1).rstrip()] + m_tail.group(2).split()
+                continue
+        # 영어 번역 줄 끝에 다음 항목의 한글이 붙은 줄('…define it 행동가들은 …') — 한글 앞에서 나눈다
+        m_mix = re.match(r"^([A-Za-z‘'\"].*?[A-Za-z.,!?’'\"])\s+([“\"'‘]?[가-힣]{2,}.*)$", l)
+        if m_mix and len(re.findall(r"[가-힣]", m_mix.group(2))) >= 6 \
+                and len(re.findall(r"[A-Za-z]{2,}", m_mix.group(1))) >= 3:   # 영어 쪽이 문장일 때만('Boss 매출이…' 제외)
+            lines += [m_mix.group(1), m_mix.group(2)]
+            continue
+        lines.append(l)
+    out: list[str] = []
+    moved = 0
+    i = 0
+    prev_num = None
+    while i < len(lines):
+        m = _NUM_LINE_RE.match(lines[i])
+        j = i
+        while j < len(lines) and _NUM_LINE_RE.match(lines[j]):
+            j += 1
+        vals = [int(_NUM_LINE_RE.match(lines[k]).group(1)) for k in range(i, j)]
+        if not m or len(vals) < 2 or any(b - a != 1 for a, b in zip(vals, vals[1:])):
+            lm = re.match(r"^\s*(\d{1,4})(?=\s|$)", lines[i])
+            if lm:
+                prev_num = int(lm.group(1))
+            out.append(lines[i])
+            i += 1
+            continue
+        # 번호 몰림 [i, j) — 뒤따르는 덩어리 범위: 다음 번호 줄 전까지. 빈 줄(쪽 경계)은 덩어리가
+        # 아직 모자랄 때만 넘는다(최대 40줄) — 본문이 다음 쪽으로 넘어가 읽힌 경우
+        end = j
+        found = 0
+        while end < len(lines) and end - j < 40 and not _NUM_LINE_RE.match(lines[end]) \
+                and not re.match(r"^\s*\d{2,4}\s+\S", lines[end]):
+            if not lines[end].strip() and found >= len(vals) + 1:
+                break
+            if _is_unit_start(lines[end], lines[end + 1] if end + 1 < len(lines) else ""):
+                found += 1
+            end += 1
+        while end > j and not lines[end - 1].strip():
+            end -= 1
+        starts = [k for k in range(j, end)
+                  if _is_unit_start(lines[k], lines[k + 1] if k + 1 < end else "")]
+        # 앞 항목 꼬리: 첫 한글 줄이 조사·어미로 시작하거나, 번호 몰림 앞 본문이 문장 중간에서 끊겼으면.
+        # 앞 본문 = 번호 몰림 바로 앞 줄(영어 번역 줄이면 그 앞 한 줄). 'PART 1 … 명대사' 같은
+        # 머리글·20자 미만 소제목이면 끊긴 문장이 아니다
+        prev_lines = [l for l in out[-3:] if l.strip()]
+        before = prev_lines[-1] if prev_lines else ""
+        if before and not re.search(r"[가-힣]", before) and len(prev_lines) >= 2:
+            before = prev_lines[-2]
+        if len(before.strip()) < 20 or _PART_LINE_RE.match(before.strip()) or re.match(rf"{_PART}\s?\d", before.strip()):
+            before = ""
+        if starts and (_BOUND_HEAD_RE.match(lines[starts[0]].strip())
+                       or (before and not _SENT_END_RE.search(before) and starts[0] == j)):
+            starts = starts[1:]
+        k_n = len(vals)
+        gap = vals[0] - prev_num - 1 if prev_num is not None and 0 < vals[0] - prev_num <= 5 else 0
+        offset = min(gap, len(starts) - k_n) if len(starts) > k_n else 0
+        nums = [_NUM_LINE_RE.match(lines[k]).group(1) for k in range(i, j)]
+        assign = dict(zip(starts[offset:], nums))
+        left = nums[len(assign):]   # 붙일 덩어리가 모자라면 남은 번호는 그대로
+        out.extend(left)
+        for k in range(j, end):
+            out.append(f"{assign[k]} {lines[k].lstrip()}" if k in assign else lines[k])
+        moved += len(assign)
+        prev_num = vals[-1]
+        i = end
+    return "\n".join(out), moved
 
 
 def paragraph_entries(text: str) -> tuple[str, int]:
