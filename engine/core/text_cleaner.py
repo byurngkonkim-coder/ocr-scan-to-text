@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from core import config
 from core import gemini_vision as _gemini
 from core import ollama_vision as _ollama
+from core import noise_rules
 from core.postprocessor import _PAGE_FOOTER_LINE
 
 # 페이지 경계 센티넬 — 입력에 실제로 등장할 가능성이 없는 문자열
@@ -190,19 +191,31 @@ def iter_clean(pages: list[str], drop_front_matter: bool = False, on_chunk=None,
     # 통합_정제규칙서 §3.3: 결정론적 사전 정제(D-02) — LLM보다 먼저 적용해
     # 같은 오염이 청크마다 다르게 처리되는 것을 막는다.
     pages = [deterministic_preclean(p) for p in pages]
+    # 비용 우선(내장 규칙) — LLM 이 대신 걸러 주지 않으므로 OCR 잡음을 규칙으로 먼저 걷는다
+    # (2026-10-16 명언집 5권 실측: 잡음 줄·기호·전각 부호·깨진 머리글이 결과에 그대로 남음)
+    rules_mode = local and config.get_local_cleanup_engine() == "rules"
+    header_notes: list[str] = []
+    if rules_mode:
+        pages = [noise_rules.clean_page(p) for p in pages]
     # 청크만 보는 LLM은 책 전체에 반복되는 머리글을 알아보지 못한다 → 문서 단위로 선제거
     pages = strip_running_headers(pages)
+    if rules_mode:
+        pages, n_hdr = noise_rules.strip_fuzzy_headers(pages)
+        if n_hdr:
+            header_notes.append(f"깨져 읽힌 머리글 {n_hdr}곳 자동 제거 (정제 전 원문 사본에서 확인 가능)")
     matter_notes: list[str] = []
     # 머리글을 뗀 뒤라야 잡음 쪽이 짧아져 후보가 된다. 지운 잡음 쪽은 빈 자리로 남겨
     # 부속물 보고와 같은 쪽 번호 기준(내용 있는 쪽 순서)을 유지하고, 부속물 제거 뒤에 걸러 낸다
     noise_notes: list[str] = []
     pages = drop_noise_pages(pages, noise_notes)
     if drop_front_matter:
+        if rules_mode:   # LLM 문단 분류를 못 쓰니 표지·저자 소개·광고·저작권·차례를 규칙으로 먼저 고른다
+            pages = noise_rules.drop_book_matter_rules(pages, noise_notes)
         pages, matter_notes = strip_book_matter(pages)
     pages = [p for p in pages if p.strip()]
     if not pages:
         return ""
-    matter_notes = noise_notes + matter_notes
+    matter_notes = header_notes + noise_notes + matter_notes
 
     soft = config.get_cleanup_chunk_chars()
     hard = soft * 2
@@ -269,6 +282,8 @@ def iter_clean(pages: list[str], drop_front_matter: bool = False, on_chunk=None,
     if config.get_enable_margin_filter():
         text = post_process_pagebreaks(text)
     text, _ = rejoin_split_sentences(text)
+    if rules_mode:   # 번호 붙은 항목(명언집 등)마다 단락 복원 — 연속 번호가 충분할 때만 동작
+        text, _ = noise_rules.paragraph_entries(text)
 
     return (text + "\n") if text else ""
 
