@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import re
+from bisect import bisect_left as _bisect
 from collections import Counter
 
 # ── 쪽 단위 ────────────────────────────────────────────────────────────────────
@@ -36,8 +37,9 @@ _SPACED_NUM_RE = re.compile(r"(?<![\w\d])(\d) (\d) (\d)(?: (\d))?(?![\w\d])")
 _ALLOWED_PUNCT = set(".,!?'\"“”‘’()[]<>〈〉『』「」《》:;-–—~·%/…|_+=&#@")
 
 
-# 숫자만 있는 줄의 o·i 오인식('ooi3' → '0013') — 줄 전체가 번호일 때만(영단어 오변환 방지)
-_GARBLED_NUM_LINE_RE = re.compile(r"(?m)^[ \t]*([0Oo]{1,3}[\dilI]{1,3})[ \t]*$")
+# 숫자만 있는 줄의 o·i 오인식('ooi3' → '0013', 'OO7O' → '0070') — 줄 전체가 번호이고 숫자가 하나
+# 이상 섞였을 때만(영단어 오변환 방지)
+_GARBLED_NUM_LINE_RE = re.compile(r"(?m)^[ \t]*((?=[0-9OoilI]*\d)[0-9Oo][0-9OoilI]{1,3})[ \t]*$")
 
 
 def _fix_numbers(text: str) -> str:
@@ -147,7 +149,7 @@ def clean_page(text: str) -> str:
 
 # ── 문서 단위: 깨진 러닝헤더 ─────────────────────────────────────────────────────
 _GRAM = 4
-_HEADER_MIN_SPAN = 10      # 머리글로 지울 구간의 최소 글자(한글·영문) 수
+_HEADER_MIN_SPAN = 8       # 머리글로 지울 구간의 최소 글자(한글·영문) 수('천재■의생각아포리즘' 9자)
 _HEADER_COVER = 0.5        # 구간 4글자 조각 중 머리글 조각 비율
 DEBUG_LOG: list | None = None   # 점검용 — 리스트를 넣으면 (원래 줄, 지운 뒤 줄)을 모은다
 
@@ -189,6 +191,7 @@ def _strip_header_spans(line: str, hg: set[str]) -> str:
         if line_sk[p:p + _GRAM] in hg:
             for q in range(p, p + _GRAM):
                 covered[q] = True
+    hg3 = {g[p:p + 3] for g in hg for p in range(2) if re.fullmatch(r"[가-힣]{3}", g[p:p + 3])}
     hdr, pos = [], 0
     for sk in sks:
         c = sum(covered[pos:pos + len(sk)])
@@ -204,6 +207,10 @@ def _strip_header_spans(line: str, hg: set[str]) -> str:
         while j + 1 < len(toks) and (hdr[j + 1] or (not sks[j + 1] and j + 2 < len(toks) and hdr[j + 2])):
             j += 1
         if sum(len(sks[k]) for k in range(i, j + 1) if hdr[k]) >= _HEADER_MIN_SPAN:
+            # 바로 앞 어절이 더 심하게 깨진 머리글 조각('실리콘IB리')이면 함께 — 머리글 3글자 조각을 품을 때만
+            if i > 0 and len(sks[i - 1]) >= 3 and any(sks[i - 1][p:p + 3] in hg3
+                                                       for p in range(len(sks[i - 1]) - 2)):
+                i -= 1
             span = set(range(i, j + 1))
             # 머리글 바로 앞뒤의 쪽번호 토큰 하나씩('164 실리콘…', '… sellers •)88')
             k = i - 1
@@ -472,18 +479,21 @@ def redistribute_number_stacks(text: str) -> tuple[str, int]:
             before = prev_lines[-2]
         if len(before.strip()) < 20 or _PART_LINE_RE.match(before.strip()) or re.match(rf"{_PART}\s?\d", before.strip()):
             before = ""
+        # 앞 문장이 끊겼다는 정황만으로는 덩어리가 번호보다 많을 때만 건너뛴다 — 모자라면 첫 덩어리도
+        # 새 항목이다(실리콘밸리 0198~0202 실측: '저는 여러분이…'를 꼬리로 보내 0201·0202 가 비었다)
         if starts and (_BOUND_HEAD_RE.match(lines[starts[0]].strip())
-                       or (before and not _SENT_END_RE.search(before) and starts[0] == j)):
+                       or (before and not _SENT_END_RE.search(before) and starts[0] == j
+                           and len(starts) > len(vals))):
             starts = starts[1:]
         k_n = len(vals)
         gap = vals[0] - prev_num - 1 if prev_num is not None and 0 < vals[0] - prev_num <= 5 else 0
         offset = min(gap, len(starts) - k_n) if len(starts) > k_n else 0
         nums = [_NUM_LINE_RE.match(lines[k]).group(1) for k in range(i, j)]
         assign = dict(zip(starts[offset:], nums))
-        left = nums[len(assign):]   # 붙일 덩어리가 모자라면 남은 번호는 그대로
-        out.extend(left)
+        left = nums[len(assign):]   # 붙일 덩어리가 모자라면 남은 번호는 덩어리 뒤에 그대로(순서 유지)
         for k in range(j, end):
             out.append(f"{assign[k]} {lines[k].lstrip()}" if k in assign else lines[k])
+        out.extend(left)
         moved += len(assign)
         prev_num = vals[-1]
         i = end
@@ -496,6 +506,23 @@ def paragraph_entries(text: str) -> tuple[str, int]:
     chain = _entry_chain(text)
     if len(chain) < _ENTRY_MIN_CHAIN:
         return text, 0
+    # 항목 번호 연쇄에 속하지 않는, 숫자만 있는 줄 중 바로 앞 항목 번호보다 확연히 작은 수 = 홀로 남은
+    # 쪽번호('0238 …' 뒤의 '91') — 지운다. 항목 번호와 쪽번호 값대가 겹치는 책(기독교명언 앞부분)은
+    # 구분할 수 없으므로 남긴다
+    pos = [m.start() for m in chain]
+    vals = [int(m.group(1)) for m in chain]
+
+    def _keep(m: re.Match) -> str:
+        k = _bisect(pos, m.start(1))
+        if k < len(pos) and pos[k] == m.start(1):
+            return m.group(0)
+        prev = vals[k - 1] if k > 0 else None
+        v = int(m.group(1))
+        return "" if prev is not None and v <= prev * 0.6 else m.group(0)
+
+    # 쪽번호 꼴: 앞 줄은 본문, 뒤는 빈 줄·끝 — 단락 끝에 홀로 붙은 숫자 줄만 본다
+    text = re.sub(r"(?m)(?<=[^\d\s]\n)[ \t]*(\d{1,3})[ \t]*(?=\n\s*\n|\Z)", _keep, text)
+    chain = _entry_chain(text)
     out, last = [], 0
     for m in chain:
         before = text[last:m.start()]

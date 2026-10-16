@@ -136,6 +136,35 @@ def test_stacked_numbers_skip_previous_entry_tail_and_split_glued_numbers():
     assert lines[5].startswith("0028 나는 하루 이틀이")
 
 
+def test_number_line_with_trailing_letter_o_is_read_as_number():
+    # 실리콘밸리 38쪽 실측: 'OO7O' 가 숫자로 안 읽혀 0068~0071 몰림이 끊겼다
+    assert nr.clean_page("OO68\nOO69\nOO7O\nOO71").splitlines() == ["0068", "0069", "0070", "0071"]
+
+
+def test_stack_with_too_few_quotes_does_not_skip_first_quote():
+    # 실리콘밸리 80쪽 실측: 앞 문장이 끊긴 정황만으로 첫 명언을 꼬리로 보내 0201·0202 가 비었다
+    text = "\n".join([
+        "0197 많은 사람과 함께 일할 방법을 생각해내야",
+        "0198", "0199", "0200",
+        "저는 여러분이 세상을 바꾸는 일에 관심이 있습니다",
+        "I'm interested in things that change the world.",
+        "우리에겐 의식의 빛을 비출 의무가 있다 어떤 일이 지속할 수 있는지",
+        "I think we have a duty to maintain the light.",
+    ])
+    out, moved = nr.redistribute_number_stacks(text)
+    lines = out.split("\n")
+    assert moved == 2
+    assert lines[1].startswith("0198 저는 여러분이") and lines[3].startswith("0199 우리에겐")
+    assert lines[-1] == "0200"          # 붙일 곳이 없는 번호는 본문 뒤에(순서 유지)
+
+
+def test_lone_page_number_at_paragraph_end_removed():
+    entries = [f"{k:04d} 명언 {k}번 문장이다." for k in range(200, 240)]
+    entries[38] += "\n두 종류의 회사가 있다.\n91\n"         # 0238 뒤 쪽번호 + 쪽 경계 빈 줄
+    out, _ = nr.paragraph_entries("\n".join(entries))
+    assert "\n91" not in out and "두 종류의 회사가 있다." in out
+
+
 def test_short_number_runs_are_not_paragraphed():
     text = "1984년에 3. 가지 원칙과 2 3 4 를 말했다."
     assert nr.paragraph_entries(text) == (text, 0)
