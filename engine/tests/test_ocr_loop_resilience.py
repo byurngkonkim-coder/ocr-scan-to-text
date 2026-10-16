@@ -80,3 +80,20 @@ def test_checkpoint_removed_on_success(three_page_scan, sandbox, monkeypatch):
     for _ in _run(three_page_scan):
         pass
     assert not [p for p in sandbox.iterdir() if "OCR중" in p.name]
+
+
+def test_smart_run_retries_once_after_failure(monkeypatch):
+    # 일괄 처리 중 일시 오류로 비던 쪽(대한민국CEO명언집 53쪽)을 한 번 더 읽는다 — 2026-10-17
+    from core import rapidocr_engine as re_
+    from core.types import OCREngine, OCRResult
+    calls = []
+
+    def flaky(image, lang="kor+eng", fast=False, refine=True):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("onnxruntime 일시 오류")
+        return OCRResult(text="정의 속에서만 사회 질서가 중심이 된다.", confidence=93.0, engine=OCREngine.RAPIDOCR)
+
+    monkeypatch.setattr(re_, "run", flaky)
+    res = re_.smart_run(None)
+    assert res.confidence == 93.0 and len(calls) == 2

@@ -221,6 +221,10 @@ def iter_clean(pages: list[str], drop_front_matter: bool = False, on_chunk=None,
     pages = strip_running_headers(pages)
     if rules_mode:
         pages, n_hdr = noise_rules.strip_fuzzy_headers(pages)
+        # 머리글·꼬리말을 뗀 뒤 드러난 쪽 끝 쪽번호를, 다음 쪽 첫 줄에 붙기 전에 뗀다('61 어떤…'·'그러 23 니', R-16)
+        pages, n_pno = noise_rules.strip_page_numbers(pages)
+        if n_pno:
+            header_notes.append(f"쪽번호 {n_pno}곳 자동 제거 (정제 전 원문 사본에서 확인 가능)")
         # 출처 표기 명언집: 줄 잇기 전에 '명언 → 저자 출처' 그룹 경계를 단락으로 고정(번호를 못 읽은 항목 포함)
         pages, _ = noise_rules.group_attributed_quotes(pages)
         if n_hdr:
@@ -718,6 +722,12 @@ _GARBLED_PAGE_NO_RE = re.compile(r'\s*[\dIlOoi?!|]*\d[\dIlOoi?!|]*$|(?<=[가-힣
 
 def _header_key(line: str) -> str | None:
     k = re.sub(r'\s+', ' ', line.strip())
+    # 한글 꼬리말 + 쪽번호는 띄어 썼든 붙었든 같은 꼬리말('정의에 관한 명언 15'·'충고에관한명언143'·'156세계명언집'
+    # — 대한민국CEO명언집 실측: Vision 쪽은 띄어 쓰고 OCR 쪽은 붙어 서로 다른 머리글로 셌다).
+    # 한글 5자 이상만 — '누가복음 5'·'창세기 3' 같은 장 머리글은 묶지 않는다. 쪽번호가 붙어 있으니 첫 등장도 꼬리말('#')
+    if (re.fullmatch(r'\d{1,4}\s?[가-힣][가-힣 ]+|[가-힣][가-힣 ]+?\s?\d{1,4}', k)
+            and len(re.findall(r'[가-힣]', k)) >= 5):
+        return '#' + re.sub(r'[\d\s]', '', k)
     stripped = _PAGE_NO_RE.sub('', k).strip()
     if stripped != k and ' ' in stripped:
         k = stripped
@@ -762,7 +772,7 @@ def strip_running_headers(pages: list[str]) -> list[str]:
     out = []
     for n, lines in enumerate(split):
         drop = {i for i in _edge_indices(lines)
-                if ((k := _header_key(lines[i])) in headers and headers[k] != n)
+                if ((k := _header_key(lines[i])) in headers and (headers[k] != n or k.startswith('#')))
                 or _FOOTER_RE.match(lines[i].strip()) or _PAGE_FOOTER_LINE.match(lines[i].strip())}
         out.append("\n".join(l for i, l in enumerate(lines) if i not in drop)
                    if drop else pages[n])

@@ -85,3 +85,13 @@ def test_chapter_footer_shape_removed_without_repetition():
     out = text_cleaner.strip_running_headers(pages)
     assert out == ["2장\n값이 싸지면 모든 것이 바뀐다\n본문 첫 문장이다.",   # 장 제목(쪽번호 없음)은 보존
                    "본문 둘째 문장이다.", "본문 셋째 문장이다.", "본문 넷째 문장이다."]
+
+
+def test_glued_or_spaced_footer_with_page_number_is_one_footer():
+    # '정의에 관한 명언 15'(Vision)·'충고에관한명언143'·'156세계명언집'(OCR) — 쪽번호 붙은 꼬리말은 첫 등장도 뗀다
+    from core.text_cleaner import strip_running_headers
+    pages = [f"명언 본문 {k}번째 문장이다.\n" + (f"{k}세계명언집" if k % 2 else f"{k} 세계 명언집") for k in range(1, 7)]
+    assert all("명언집" not in p for p in strip_running_headers(pages))
+    # 한글 4자 이하 '누가복음 5' 같은 장 머리글은 묶지 않는다
+    luke = [f"누가복음 {k}\n본문 {k}" for k in range(1, 7)]
+    assert strip_running_headers(luke)[0].startswith("누가복음 1")

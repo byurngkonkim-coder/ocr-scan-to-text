@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Optional
 
 import numpy as np
@@ -19,6 +20,7 @@ logger = logging.getLogger(__name__)
 # 지연 로드 싱글톤 인스턴스
 _ENGINE_INSTANCE = None
 _ENGINE_LANG = None
+_RETRY_LOCK = threading.Lock()   # 판독 실패 쪽 재시도는 한 번에 하나씩
 
 
 def is_available() -> bool:
@@ -290,14 +292,23 @@ def smart_run(image: Image.Image, default_lang: str = "kor+eng", fast: bool = Fa
     RapidOCR 이 없거나 실패하면 빈 결과(신뢰도 0)를 돌려준다 — 처리를 멈추지 않고,
     호출부가 저신뢰 쪽처럼 Vision 폴백하거나 '검토 필요'로 남긴다.
     """
-    try:
+    def once():
         res = run(image, lang=default_lang, fast=fast, refine=refine)
         if default_lang != "eng" and _mostly_english(res.text):
             res = run(image, lang="eng", fast=fast, refine=refine)
         return res
+    try:
+        return once()
     except Exception as e:
-        logger.warning(f"RapidOCR 판독 실패 — 신뢰도 0 으로 넘김: {e}")
-        return OCRResult(text="", confidence=0.0, engine=OCREngine.RAPIDOCR, has_jamo_split=False)
+        # 일시 오류면 한 번 더 — 다른 작업과 겹치지 않게 혼자 읽는다. 대한민국CEO명언집 일괄 처리에서 글자가
+        # 또렷한 53쪽이 신뢰도 0 으로 비었는데, 단독으로 다시 읽으니 90~96% 로 정상이었다(2026-10-17)
+        logger.warning(f"RapidOCR 판독 실패 — 한 번 더 읽음: {e}")
+        try:
+            with _RETRY_LOCK:
+                return once()
+        except Exception as e2:
+            logger.warning(f"RapidOCR 판독 재시도 실패 — 신뢰도 0 으로 넘김: {e2}")
+            return OCRResult(text="", confidence=0.0, engine=OCREngine.RAPIDOCR, has_jamo_split=False)
 
 
 def _mostly_english(text: str) -> bool:

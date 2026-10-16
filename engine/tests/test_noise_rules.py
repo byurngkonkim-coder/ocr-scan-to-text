@@ -322,3 +322,36 @@ def test_low_quality_line_keeps_real_sentence():
 def test_short_number_runs_are_not_paragraphed():
     text = "1984년에 3. 가지 원칙과 2 3 4 를 말했다."
     assert nr.paragraph_entries(text) == (text, 0)
+
+
+def test_strip_page_numbers_follows_page_sequence():
+    # 쪽 끝 쪽번호(이웃 쪽과 1씩 이어짐)만 뗀다 — 2026-10-17 길을묻는그대에게 '61 어떤 단계에서든' 실측
+    pages = [f"본문 {k}쪽 문장이다.\n그러" + ("\n" if k % 2 else " 길을 묻는 그대에게 ") + str(60 + k) for k in range(5)]
+    out, n = nr.strip_page_numbers(pages)
+    assert n == 5
+    assert all(not o.rstrip().endswith(str(60 + k)) for k, o in enumerate(out))
+    assert out[1].endswith("그러") and out[0].endswith("그러 길을 묻는 그대에게")
+
+
+def test_strip_page_numbers_keeps_item_numbers_and_labels():
+    # 쪽마다 항목이 3개씩 — 숫자만 있는 항목 번호 줄은 쪽 순서와 맞지 않아 남긴다(1001가지기독교명언 실측)
+    items = ["\n".join([str(3 * k + 1), "명언 하나", str(3 * k + 2), "명언 둘", str(3 * k + 3)]) for k in range(5)]
+    assert nr.strip_page_numbers(items) == (items, 0)
+    # 장 표지 'PART 2'·괄호 숫자·줄 머리 항목 번호는 쪽번호가 아니다
+    words = ["인간들을 볼 때면", "나 여기 있어", "진실은 진실된", "용서란 타인에게", "다른 식당에 갔다면"]
+    pages = [f"PART {k}\n본문 문장\n({k}) 항목\n{100 + k} {words[k]}" for k in range(5)]
+    assert nr.strip_page_numbers(pages) == (pages, 0)
+
+
+def test_latin_attribution_lines_open_groups_and_stay_apart():
+    # '• 한글이름 Latin Name, 1706~1790.' 꼴 저자 줄(괄호 없음) — 대한민국CEO명언집 실측 2026-10-17
+    attr = "• 벤저민 프랭클린 Benjamin Franklin, 1706~1790. 미국의 정치가."
+    page = "\n".join(["정의가 없는 용기는", "나약하기 짝이 없다.", attr,
+                      "충고는 하늘에서 내리는 눈과 같다",
+                      "마음 깊은곳까지 파고든다 새뮤얼테일러클리지Samuel Taylor Coleridge,1772-1834, 영국의 시인."])
+    out, n = nr.group_attributed_quotes([page] * 30)
+    lines = out[0].split("\n")
+    assert "- 벤저민 프랭클린 Benjamin Franklin, 1706~1790. 미국의 정치가." in lines      # 표지 '- '로 남김
+    assert "- 새뮤얼테일러클리지Samuel Taylor Coleridge,1772-1834, 영국의 시인." in lines   # 붙은 저자 줄 분리
+    # 두 줄 명언은 통째로 한 그룹 — 그룹 표지는 둘째 명언 머리에만
+    assert lines.index(nr.GROUP_MARK) == lines.index("충고는 하늘에서 내리는 눈과 같다") - 1
