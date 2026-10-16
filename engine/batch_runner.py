@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import html
+import re
 import threading
 import time
 from dataclasses import dataclass
@@ -20,6 +21,7 @@ from types import SimpleNamespace
 
 INPUT_DIR = Path(__file__).resolve().parent.parent / "01_입력"   # 기본값 — ④ 탭에서 다른 폴더로 바꿀 수 있다
 _EXTS = {".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".txt"}   # .txt 는 OCR 없이 문장 정제만
+_PARTIAL_RE = re.compile(r"_(?:정제중|OCR중)(?:_\d{8}_\d{6})?$")   # ocr_gradio._CleanCheckpoint 중간 저장분
 
 
 @dataclass
@@ -161,7 +163,10 @@ def _file_kind(path: Path) -> tuple[int | None, str]:
 def _done_names(results_dir: Path) -> tuple[set[str], list[str]]:
     from core import storage_manager
     hist = {e.get("original_name", "") for e in storage_manager.load_history()}
-    outs = [p.name for p in results_dir.iterdir() if p.is_file()] if results_dir.exists() else []
+    # 끊기거나 실패한 실행의 중간 저장분('…_정제중.txt'·'…_OCR중_시각.txt')은 결과가 아니다 —
+    # 실패 6건이 빈 '_정제중' 파일 때문에 '완료'로 보였다(2026-10-17)
+    outs = [p.name for p in results_dir.iterdir()
+            if p.is_file() and not _PARTIAL_RE.search(p.stem)] if results_dir.exists() else []
     return hist, outs
 
 

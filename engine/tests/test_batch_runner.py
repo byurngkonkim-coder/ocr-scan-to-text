@@ -110,6 +110,23 @@ def test_list_inputs_marks_done_by_result_name(monkeypatch, tmp_path):
     assert "미처리" in br.choice_label(rows[1])
 
 
+def test_partial_checkpoint_is_not_done(monkeypatch, tmp_path):
+    # 실패한 실행이 남긴 빈 '_정제중' 복구본은 완료가 아니다(2026-10-17 일괄처리 실패 6건이 '완료'로 보임)
+    inp, out = tmp_path / "in", tmp_path / "out"
+    inp.mkdir()
+    out.mkdir()
+    for n in ("책A", "책B", "책C"):
+        (inp / f"{n}.png").write_bytes(b"x")
+    (out / "책A_정제중.txt").write_text("")
+    (out / "책B_OCR중_20261017_010203.txt").write_text("")
+    (out / "20261017_010203_책C.txt").write_text("결과")
+    monkeypatch.setattr(br, "INPUT_DIR", inp)
+    monkeypatch.setattr("core.storage_manager.load_history", lambda: [])
+    rows = br.list_inputs(out)
+    assert [(r["name"], r["status"]) for r in rows] == [
+        ("책A.png", "미처리"), ("책B.png", "미처리"), ("책C.png", "완료")]
+
+
 def test_list_inputs_includes_txt_for_cleanup_only(monkeypatch, tmp_path):
     inp, out = tmp_path / "in", tmp_path / "out"
     inp.mkdir()
