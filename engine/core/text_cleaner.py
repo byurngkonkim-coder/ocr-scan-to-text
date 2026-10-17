@@ -27,7 +27,7 @@ from core import config
 from core import gemini_vision as _gemini
 from core import ollama_vision as _ollama
 from core import noise_rules
-from core import verse_rules
+from core import spacing, verse_rules
 from core.postprocessor import _PAGE_FOOTER_LINE
 
 # 페이지 경계 센티넬 — 입력에 실제로 등장할 가능성이 없는 문자열
@@ -317,6 +317,10 @@ def iter_clean(pages: list[str], drop_front_matter: bool = False, on_chunk=None,
     if rules_mode and noise_rules.is_numbered_book(text):
         text, _ = noise_rules.redistribute_number_stacks(text)   # 여백 번호가 몰려 읽힌 것부터 제자리로
         text, _ = noise_rules.paragraph_entries(text)
+    if rules_mode:   # 맨 끝 — 줄이 다 자리 잡은 뒤 붙어 쓴 한글만 띄운다(R-17, 넣기만 함)
+        text, n_sp = spacing.fix_spacing(text)
+        if n_sp:
+            report["warnings"].append(f"붙어 쓴 낱말 띄어쓰기 {n_sp}곳 교정 (정제 전 원문 사본에서 확인 가능)")
 
     return (text + "\n") if text else ""
 
