@@ -31,7 +31,7 @@ if not defined BASE (
     exit /b 1
 )
 echo [1/4] Python 복사: %BASE%
-robocopy "%BASE%" "python" /MIR /XD "%BASE%\Lib\site-packages" "%BASE%\Scripts" "%BASE%\Doc" "%BASE%\Lib\test" "%BASE%\Lib\idlelib" "%BASE%\tcl" /NFL /NDL /NJH /NJS /NP > nul
+robocopy "%BASE%" "python" /MIR /XD "%BASE%\Lib\site-packages" "%BASE%\Scripts" "%BASE%\Doc" "%BASE%\Lib\test" "%BASE%\Lib\idlelib" /NFL /NDL /NJH /NJS /NP > nul
 if errorlevel 8 goto copy_failed
 
 echo [2/4] 패키지 복사: venv\Lib\site-packages
