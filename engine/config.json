@@ -19,7 +19,7 @@
   "auto_fallback": true,
   "auto_spellcheck": true,
   "save_figures": false,
-  "enable_cleanup": false,
+  "enable_cleanup": true,
   "cleanup_chunk_chars": 4000,
   "parallel_workers": 4,
   "batch_workers": 2,

@@ -36,7 +36,7 @@ _DEFAULTS: dict = {
     # ── 문서 정제(교정) 단계 ────────────────────────────────────────────────
     # OCR(충실 추출) 이후 문서 전체를 LLM(Gemini)으로 교정하여 쪽번호·러닝헤더·
     # 스캔줄 등 레이아웃 노이즈 제거 + 페이지 넘김 단어 복원 + 띄어쓰기·맞춤법.
-    "enable_cleanup": False,              # 기본 끔 — 전 쪽 Gemini 재전송이라 비용의 94%(2026-10-15 실측). 필요할 때만 체크
+    "enable_cleanup": True,               # 기본 켬 — 정제가 내장 규칙(무료)이 된 뒤 끌 이유가 없다(2026-10-17). 예전엔 Gemini 비용의 94%라 껐다
     "cleanup_chunk_chars": 4000,          # 정제 1회 호출당 목표 문자 수(페이지 누적)
     "parallel_workers": 4,                # 한 파일 안에서 동시에 보내는 정제 구간·Vision 쪽 수(1=차례대로)
     "batch_workers": 2,                   # ④ 일괄 처리에서 동시에 처리하는 파일 수(1=한 건씩)
@@ -231,7 +231,7 @@ def get_default_dpi() -> int:
 
 def get_enable_cleanup() -> bool:
     """OCR 후 문서 전체 LLM 정제(교정) 단계 실행 여부. 기본 False(비용)."""
-    return bool(load().get("enable_cleanup", False))
+    return bool(load().get("enable_cleanup", True))
 
 
 def get_confidence_threshold() -> float:

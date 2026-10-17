@@ -1624,7 +1624,7 @@ def build_ui() -> gr.Blocks:
                                 _vision_mode_note("Vision 우선" if has_key else "RapidOCR 우선"))
                             cleanup_chk = gr.Checkbox(
                                 label="문장 정제 — 쪽번호·머리글 제거, 띄어쓰기·맞춤법 교정, 문단 복원",
-                                value=bool(cfg.get("enable_cleanup", False)),
+                                value=bool(cfg.get("enable_cleanup", True)),
                                 info=_cleanup_info(),
                             )
                             front_matter_chk = gr.Checkbox(
@@ -1832,7 +1832,7 @@ def build_ui() -> gr.Blocks:
                     with gr.Row():
                         batch_cleanup_chk = gr.Checkbox(
                             label="문장 정제 — 쪽번호·머리글 제거, 띄어쓰기·맞춤법 교정, 문단 복원",
-                            value=bool(cfg.get("enable_cleanup", False)),
+                            value=bool(cfg.get("enable_cleanup", True)),
                             info=_cleanup_info(),
                         )
                         batch_front_matter_chk = gr.Checkbox(
