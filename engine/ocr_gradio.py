@@ -20,7 +20,7 @@ from core import rapidocr_engine, char_normalizer, postprocessor, writer
 # vision 파사드 — config.json 의 vision_provider 에 따라 Gemini/Claude 라우팅.
 # 기존 호출부 호환을 위해 claude_vision 이름으로 import 한다.
 from core import vision as claude_vision
-from core import spellcheck, figure_detector, llm_corrector
+from core import spellcheck, figure_detector, llm_corrector, user_typos, reclean, typo_suspects
 from core import config, usage_tracker, blank_detector, storage_manager
 from core import text_cleaner
 from core import pdf_text_layer
@@ -291,6 +291,71 @@ def _finalize_results(ckpt: "_CleanCheckpoint | None", cleaned_text: str | None,
         return None
 
 
+# ── ④ 결과 파일 다시 교정 · 의심 목록 ─────────────────────────────────────────
+
+def _suspect_books() -> list[str]:
+    d = RESULTS_DIR / typo_suspects.SUBDIR
+    files = sorted(d.glob("*.tsv"), key=lambda p: p.stat().st_mtime, reverse=True) if d.is_dir() else []
+    return [p.stem for p in files]
+
+
+def _reclean_views():
+    books = _suspect_books()
+    return (gr.update(choices=[p.name for p in reclean.list_results(RESULTS_DIR)], value=[]),
+            gr.update(choices=books, value=books[0] if books else None))
+
+
+def _reclean_run(names):
+    if not names:
+        yield "<div class='note info'>다시 교정할 파일을 먼저 고르세요.</div>", gr.update()
+        return
+    done = []
+    for i, name in enumerate(names, 1):
+        yield (f"<div class='note info'>다시 교정 중 {i}/{len(names)} — {html.escape(name)}</div>",
+               gr.update())
+        done += reclean.reclean_files([RESULTS_DIR / name])
+    lines = []
+    for r in done:
+        if r["skipped"]:
+            lines.append(f"<li>{html.escape(r['path'].name)} — 건너뜀: {html.escape(r['skipped'])}</li>")
+        else:
+            what = (f"오타 {r['typos']}곳·띄어쓰기 {r['spaces']}곳 교정" if r["changed"] else "바뀐 곳 없음")
+            lines.append(f"<li>{html.escape(r['path'].name)} — {what} · 의심 {r['n_suspects']}곳</li>")
+    backups = {str(r["backup"].parent) for r in done if r["backup"]}
+    tail = f"<div>원본 보관: {html.escape(', '.join(backups))}</div>" if backups else ""
+    books = _suspect_books()
+    last = next((r["path"].stem for r in reversed(done) if r["suspects"]), None)
+    yield (f"<div class='note ok'>다시 교정 완료 {len(done)}개<ul>{''.join(lines)}</ul>{tail}</div>",
+           gr.update(choices=books, value=last or (books[0] if books else None)))
+
+
+def _suspect_rows(book):
+    if not book:
+        return [], "<div class='note info'>의심 목록이 아직 없습니다. 일괄 처리나 다시 교정을 하면 생깁니다.</div>"
+    known = user_typos.load()
+    rows = [r for r in typo_suspects.read(RESULTS_DIR / typo_suspects.SUBDIR / f"{book}.tsv")
+            if r["wrong"] not in known]
+    if not rows:
+        return [], "<div class='note info'>이 책에는 확인할 의심 단어가 없습니다.</div>"
+    return ([[False, r["wrong"], r["suggestion"], r["count"], r["context"]] for r in rows],
+            f"<div>의심 {len(rows)}곳 — '바뀔 곳'은 등록하면 이 책에서 바뀌는 곳의 수입니다.</div>")
+
+
+def _suspect_register(book, table):
+    picked = [(str(r[1]), str(r[2])) for r in (table or [])
+              if r and r[0] in (True, 1, "true", "True")]
+    if not picked:
+        rows, _ = _suspect_rows(book)
+        return rows, "<div class='note info'>등록할 항목의 '등록' 칸을 먼저 체크하세요.</div>"
+    added, rejected = user_typos.add(picked)
+    rows, _ = _suspect_rows(book)
+    msg = f"{added}개 등록했습니다. '결과 파일 다시 교정'을 누르면 이 책에도 반영됩니다."
+    if rejected:
+        msg += "<ul>" + "".join(f"<li>{html.escape(w)} → {html.escape(r)}: {html.escape(why)}</li>"
+                                for w, r, why in rejected) + "</ul>"
+    return rows, f"<div class='note {'ok' if added else 'info'}'>{msg}</div>"
+
+
 def _progress_html(pages_done: int, total: int, label: str,
                    elapsed_str: str = "", done: bool = False,
                    unit: str = "페이지") -> str:
@@ -551,6 +616,7 @@ def _finalize(ocr_result, page_num: int, placeholders: list[str],
         text = refine_korean_text(text)
     except Exception:
         pass
+    text, _ = user_typos.apply(text)   # ④ 의심 목록에서 사람이 등록한 오타
 
     # L2 — 한국어 맞춤법 검사 (설치된 경우)
     if spellcheck.is_available():
@@ -726,7 +792,7 @@ def _run_digital_pdf(file_path: Path, pages_text: list[str], out_fmt: OutputForm
         if local_clean and page_fn is _finalize_digital:   # txt 는 이미 교정된 본문 — 두 번 돌리지 않는다
             # 내장 글자는 OCR 경로(_finalize)의 한글 교정기를 거치지 않았다 → 여기서 1번만
             from core.korean_corrector import refine_korean_text
-            pages_in = [refine_korean_text(t) for t in pages_in]
+            pages_in = [user_typos.apply(refine_korean_text(t))[0] for t in pages_in]
         clean_gen = text_cleaner.iter_clean(
             pages_in,
             drop_front_matter=front_matter,
@@ -1861,6 +1927,31 @@ def build_ui() -> gr.Blocks:
                 with gr.Column(elem_classes="step-card"):
                     gr.HTML(_step_head(None, "대기열", "결과는 02_결과 폴더에 저장되고 ③ 처리 기록에도 남습니다."))
                     batch_status = gr.HTML(batch_runner.status_html())
+                with gr.Column(elem_classes="step-card"):
+                    gr.HTML(_step_head(None, "결과 파일 다시 교정",
+                            "02_결과의 txt 에 지금의 자동 교정(오타 사전·등록한 오타·붙은 낱말 띄어쓰기)을 다시 적용합니다. "
+                            "원본은 _백업 폴더에 보관하고 같은 이름으로 덮어씁니다. 의심 목록도 새로 만듭니다."))
+                    reclean_list = gr.CheckboxGroup(show_label=False, choices=[], value=[],
+                                                    elem_classes="batch-list")
+                    with gr.Row():
+                        reclean_refresh_btn = gr.Button("새로고침", size="sm")
+                        reclean_all_btn = gr.Button("전체 선택", size="sm")
+                        reclean_run_btn = gr.Button("선택 파일 다시 교정 ▶", variant="primary")
+                    reclean_note = gr.HTML("")
+                with gr.Column(elem_classes="step-card"):
+                    gr.HTML(_step_head(None, "의심 목록",
+                            "자동으로 고치지 않은 '틀렸을 수 있는 말'입니다(본문은 그대로). 맞는 것만 '등록'에 체크하고, "
+                            "제안이 틀리면 '고칠 말'을 직접 고친 뒤 등록하세요. 등록한 말은 다음 처리·다시 교정부터 자동으로 고칩니다."))
+                    suspect_book = gr.Dropdown(show_label=False, choices=[], value=None,
+                                               info="책을 고르세요 — 일괄 처리나 다시 교정을 하면 목록이 생깁니다")
+                    suspect_table = gr.Dataframe(
+                        headers=["등록", "틀린 말", "고칠 말", "바뀔 곳", "문맥"],
+                        datatype=["bool", "str", "str", "number", "str"],
+                        type="array", interactive=True, static_columns=[1, 3, 4],
+                        column_widths=["8%", "14%", "14%", "10%", "54%"], wrap=True)
+                    with gr.Row():
+                        suspect_add_btn = gr.Button("선택 항목 사전 등록", variant="primary")
+                    suspect_note = gr.HTML("")
                 batch_timer = gr.Timer(3)
 
         # ── 이벤트 바인딩 ─────────────────────────────────────────────────────
@@ -2015,6 +2106,18 @@ def build_ui() -> gr.Blocks:
         batch_clear_btn.click(fn=lambda: (batch_runner.clear_finished(), batch_runner.status_html())[1],
                               outputs=[batch_status])
         batch_timer.tick(fn=batch_runner.status_html, outputs=[batch_status])
+
+        # ④ 결과 파일 다시 교정 · 의심 목록 (intent 2026-10-17-로컬-맞춤법-자동교정)
+        reclean_view_io = {"outputs": [reclean_list, suspect_book]}
+        batch_tab.select(fn=_reclean_views, **reclean_view_io)
+        reclean_refresh_btn.click(fn=_reclean_views, **reclean_view_io)
+        reclean_all_btn.click(fn=lambda: gr.update(value=[p.name for p in reclean.list_results(RESULTS_DIR)]),
+                              outputs=[reclean_list])
+        reclean_run_btn.click(fn=_reclean_run, inputs=[reclean_list],
+                              outputs=[reclean_note, suspect_book])
+        suspect_book.change(fn=_suspect_rows, inputs=[suspect_book], outputs=[suspect_table, suspect_note])
+        suspect_add_btn.click(fn=_suspect_register, inputs=[suspect_book, suspect_table],
+                              outputs=[suspect_table, suspect_note])
 
         # 엔진 변경 — config.json 의 vision_provider 에 저장하고 관련 화면을 갱신
         def _engine_views():

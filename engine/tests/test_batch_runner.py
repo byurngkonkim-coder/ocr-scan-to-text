@@ -54,6 +54,53 @@ def test_files_processed_in_order_and_marked_done(monkeypatch, tmp_path):
     assert br._jobs[0].result == f"{a}.txt"
 
 
+def test_suspect_list_saved_next_to_result(monkeypatch, tmp_path):
+    # 결과 txt 를 저장하면 의심 목록도 02_결과/_의심목록/ 에 남는다(intent 2026-10-17)
+    from core import typo_suspects
+    result = tmp_path / "책A.txt"
+    result.write_text("걷모습만 보고", encoding="utf-8")
+
+    def process_full(file_obj, *args, progress=None, **kwargs):
+        yield ("", "완료", "", str(result), None, None)
+
+    saved = []
+    monkeypatch.setattr(ocr_gradio, "process_full", process_full)
+    monkeypatch.setattr(typo_suspects, "save", lambda p: (saved.append(p), (p.parent / "x.tsv", 3))[1])
+    br.submit([tmp_path / "책A.pdf"], ("kor+eng",), {"cleanup": True})
+    _wait_idle()
+    assert saved == [result]
+    assert br._jobs[0].state == "완료"
+    assert "의심 3곳" in br._jobs[0].detail
+
+
+def test_suspect_list_failure_does_not_fail_job(monkeypatch, tmp_path):
+    from core import typo_suspects
+    result = tmp_path / "책A.txt"
+    result.write_text("본문", encoding="utf-8")
+
+    def process_full(file_obj, *args, progress=None, **kwargs):
+        yield ("", "완료", "", str(result), None, None)
+
+    def boom(p):
+        raise RuntimeError("kiwi")
+    monkeypatch.setattr(ocr_gradio, "process_full", process_full)
+    monkeypatch.setattr(typo_suspects, "save", boom)
+    br.submit([tmp_path / "책A.pdf"], ("kor+eng",), {"cleanup": True})
+    _wait_idle()
+    assert br._jobs[0].state == "완료"
+
+
+def test_suspect_subfolder_is_not_a_result(monkeypatch, tmp_path):
+    inp, out = tmp_path / "in", tmp_path / "out"
+    inp.mkdir(); out.mkdir()
+    (inp / "책A.pdf").write_bytes(b"%PDF")
+    (out / "_의심목록").mkdir()
+    (out / "_의심목록" / "책A.tsv").write_text("")
+    monkeypatch.setattr("core.storage_manager.load_history", lambda: [])
+    monkeypatch.setattr(br, "_file_kind", lambda p: (1, "스캔"))
+    assert br.list_inputs(out, inp)[0]["status"] == "미처리"
+
+
 def test_same_file_not_queued_twice(monkeypatch, tmp_path):
     monkeypatch.setattr(ocr_gradio, "process_full", _fake_process([], delay=0.3))
     a = tmp_path / "a.pdf"

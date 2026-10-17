@@ -113,15 +113,32 @@ def _run() -> None:
                 job.detail = _last_line(last[1])
             else:
                 job.result = str(last[3]) if last and last[3] else ""
-                job.state = "완료" if job.result else "실패"
                 if not job.result:
                     job.detail = _last_line(last[1]) if last else "결과 없음"
                 else:   # 정제 강등 안내만 남긴다 — '완료'만 보이면 정제가 안 된 것을 모른다(2026-10-13)
                     job.detail = next((ln.strip(" ⚠️") for ln in str(last[1]).splitlines()
                                        if "문장 정제 미적용" in ln), "")
+                    _save_suspects(job)   # '완료' 전에 — 완료로 보이는데 목록이 아직 없는 틈을 없앤다
+                job.state = "완료" if job.result else "실패"
         except Exception as e:   # 한 파일의 실패가 대기열 전체를 멈추지 않게
             job.state, job.detail = "실패", f"{type(e).__name__}: {e}"
         job.ended = time.time()
+
+
+def _save_suspects(job: Job) -> None:
+    """결과 txt 의 의심 목록(Kiwi 오타 후보)을 02_결과/_의심목록/ 에 남긴다 — 본문은 바꾸지 않는다.
+    목록을 못 만들어도 결과는 이미 저장됐으므로 작업은 '완료' 그대로 둔다."""
+    from core import typo_suspects
+    path = Path(job.result)
+    if path.suffix.lower() != ".txt" or not path.is_file():
+        return
+    try:
+        _, n = typo_suspects.save(path)
+    except Exception as e:
+        job.detail = " · ".join(filter(None, [job.detail, f"의심 목록 실패: {type(e).__name__}"]))
+        return
+    if n:
+        job.detail = " · ".join(filter(None, [job.detail, f"의심 {n}곳 — ④ 의심 목록에서 확인"]))
 
 
 def _last_line(text) -> str:
