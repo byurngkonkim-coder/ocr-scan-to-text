@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
-from core import rapidocr_engine
+from core import rapidocr_engine, table_structure
 
 
 @dataclass
@@ -83,10 +83,9 @@ def detect(image: Image.Image, lang: str = "kor+eng") -> DetectionResult:
     for (x, y, bw, bh) in table_boxes:
         crop = image.crop((x, y, x + bw, y + bh))
         md = _extract_table_markdown(crop, lang)
-        # 행 절반 이상이 한 칸이면 표가 아니다 — 쪽 가장자리 선·도식이 격자로 잡혀 본문 조각을
-        # '| 로더정확 |' 처럼 다시 썼다(예측기계 54·107·133·135쪽). 그림 감지로 넘긴다(글자 영역이면 거기서 빠짐)
-        rows = [l for l in md.splitlines() if not l.startswith("| ---")]
-        if rows and sum(l.count("|") > 2 for l in rows) * 2 < len(rows):
+        # 쪽 가장자리 선·도식이 격자로 잡혀 본문 조각을 표로 다시 썼다(예측기계 54·107·133·135쪽) —
+        # 표가 아니면 그림 감지로 넘긴다(글자 영역이면 거기서 빠짐)
+        if md and not _looks_like_table(md):
             continue
         _, _, boxes = _rough_ocr(crop, lang)
         regions.append(Region(
@@ -234,7 +233,42 @@ def _detect_figures(gray: np.ndarray, orig: Image.Image) -> list[tuple[int, int,
 
 
 def _extract_table_markdown(crop: Image.Image, lang: str) -> str:
-    """표 크롭 이미지에서 RapidOCR 로 글자 상자를 읽어 행(세로로 겹치는 상자)·열(왼쪽부터)로 묶어 Markdown"""
+    """표 크롭 이미지 → Markdown. 표 구조 모델(core.table_structure)로 칸을 찾는다.
+
+    예전 방식(아래 _rows_markdown)은 병합 머리글을 한 행으로 섞고 여러 줄 칸을 두 칸으로 가르며
+    줄 순서를 뒤집었다(2026-10-17 측정: 정답 9장 중 7장). rapid_table 이 없는 PC 에서만 예전 방식을 쓴다.
+    """
+    if table_structure.is_available():
+        try:
+            grid = table_structure.recognize(crop, lang)
+        except Exception:
+            grid = []
+        return _grid_to_markdown(grid) if len(grid) >= 2 else ""
+    return _rows_markdown(crop, lang)
+
+
+def _looks_like_table(md: str) -> bool:
+    """글자 있는 칸이 2개 이상인 행이 절반 이상이어야 표다.
+
+    본문 조각은 행마다 글자 칸이 하나뿐이다. 표 구조 모델은 빈 칸으로 열을 채워('| 다시만나도… |  |')
+    칸 개수만 세면 표로 보였다(예측기계 135쪽, 2026-10-17). 빈 양식 행은 절반까지 허용(185쪽 빈 캔버스).
+    """
+    rows = [l for l in md.splitlines() if not l.startswith("| ---")]
+    filled = sum(sum(1 for c in l.strip().strip("|").split("|") if c.strip()) >= 2 for l in rows)
+    return filled * 2 >= len(rows)
+
+
+def _grid_to_markdown(grid: list[list[str]]) -> str:
+    """격자 → Markdown 표(첫 행이 머리글). 칸 안의 '|' 는 표가 깨지지 않게 '\\|' 로."""
+    cell = lambda t: t.replace("|", "\\|")
+    lines = [f"| {' | '.join(cell(c) for c in grid[0])} |",
+             f"| {' | '.join(['---'] * len(grid[0]))} |"]
+    lines += [f"| {' | '.join(cell(c) for c in row)} |" for row in grid[1:]]
+    return "\n".join(lines)
+
+
+def _rows_markdown(crop: Image.Image, lang: str) -> str:
+    """(예전 방식) 글자 상자를 행(세로로 겹치는 상자)·열(왼쪽부터)로 묶어 Markdown"""
     try:
         rows: list[list] = []   # [y0, y1, [(x, 글자), ...]]
         for text, _score, (x, y, w, h) in sorted(_read_framed(crop, lang), key=lambda t: t[2][1]):

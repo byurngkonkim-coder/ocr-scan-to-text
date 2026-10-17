@@ -4,6 +4,8 @@
 # OCR 핵심
 rapidocr>=3.9.0
 onnxruntime>=1.20.0
+# 표 구조 인식(병합·여러 줄 칸) — 없으면 예전 행 묶기 방식으로 표를 만든다. 첫 사용 때 모델(약 7MB)을 내려받는다
+rapid_table>=3.0.0
 pdf2image>=1.16.0
 
 # 디지털 PDF 텍스트 레이어 직접 추출 (born-digital PDF → OCR·API 없이 즉시 추출)

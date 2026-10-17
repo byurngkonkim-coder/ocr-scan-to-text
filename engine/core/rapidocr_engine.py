@@ -33,15 +33,8 @@ def is_available() -> bool:
         return False
 
 
-def get_engine(lang: str = "kor+eng"):
-    """지연 초기화된 RapidOCR 엔진 인스턴스 반환."""
-    global _ENGINE_INSTANCE, _ENGINE_LANG
-
-    # 언어 매핑이 동일하면 기존 인스턴스 재사용
-    if _ENGINE_INSTANCE is not None and _ENGINE_LANG == lang:
-        return _ENGINE_INSTANCE
-
-    from rapidocr import RapidOCR
+def engine_params(lang: str = "kor+eng") -> dict:
+    """RapidOCR 설정 — 본문 판독과 표 칸 판독(core.table_structure)이 함께 쓴다."""
     from rapidocr.utils.typings import OCRVersion, LangRec, ModelType
 
     # 방향 판별(cls) 끔 — 짧은 줄을 뒤집힌 글자로 보고 180° 돌려 읽어 줄이 깨지거나 빠졌다(2026-10-13)
@@ -53,9 +46,21 @@ def get_engine(lang: str = "kor+eng"):
             "Rec.lang_type": LangRec.KOREAN,
             "Rec.model_type": ModelType.MOBILE,
         })
+    return params
+
+
+def get_engine(lang: str = "kor+eng"):
+    """지연 초기화된 RapidOCR 엔진 인스턴스 반환."""
+    global _ENGINE_INSTANCE, _ENGINE_LANG
+
+    # 언어 매핑이 동일하면 기존 인스턴스 재사용
+    if _ENGINE_INSTANCE is not None and _ENGINE_LANG == lang:
+        return _ENGINE_INSTANCE
+
+    from rapidocr import RapidOCR
 
     try:
-        _ENGINE_INSTANCE = RapidOCR(params=params)
+        _ENGINE_INSTANCE = RapidOCR(params=engine_params(lang))
         _ENGINE_LANG = lang
     except Exception as e:
         logger.warning(f"RapidOCR Korean 모델 초기화 실패, 기본 모델로 전환: {e}")
