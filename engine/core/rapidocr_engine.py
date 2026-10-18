@@ -354,7 +354,9 @@ def smart_run(image: Image.Image, default_lang: str = "kor+eng", fast: bool = Fa
     """
     def once():
         res = run(image, lang=default_lang, fast=fast, refine=refine)
-        if default_lang != "eng" and _mostly_english(res.text):
+        # 한글이 한 줄이라도 있으면 다시 읽지 않는다 — 영문 모델은 한글을 못 읽어, 영문이 대부분인
+        # 참고문헌 쪽의 한글 항목이 통째로 사라졌다(실측: 한글 74자 → 0자). 한국어 모델도 영문을 읽는다
+        if default_lang != "eng" and _mostly_english(res.text) and not re.search(r"[가-힣]{2}", res.text):
             res = run(image, lang="eng", fast=fast, refine=refine)
         return res
     try:

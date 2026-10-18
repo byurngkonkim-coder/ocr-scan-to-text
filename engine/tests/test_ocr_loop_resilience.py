@@ -155,3 +155,31 @@ def test_render_short_batch_raises_instead_of_shifting_pages(tmp_path, monkeypat
     monkeypatch.setattr(pdf_splitter, "_RETRY_WAIT", 0)
     with pytest.raises(ValueError):
         list(pdf_splitter.iter_pdf_pages(tmp_path / "x.pdf"))
+
+
+def test_mostly_english_page_with_hangul_keeps_korean_read(monkeypatch):
+    # 영문이 대부분인 참고문헌 쪽을 영문 모델로 다시 읽어 한글 항목이 통째로 사라지던 것(74자 → 0자)
+    from core import rapidocr_engine as re_
+    from core.types import OCRResult
+    eng_line = "Drucker, P. F. (1954). The Practice of Management. New York: Harper & Row.\n" * 12
+    calls = []
+
+    def fake_run(image, lang="kor+eng", fast=False, refine=True):
+        calls.append(lang)
+        text = eng_line + "피터 드러커 (2006). 경영의 실제." if lang != "eng" else eng_line
+        return OCRResult(text=text, confidence=95.0, engine=OCREngine.RAPIDOCR)
+
+    monkeypatch.setattr(re_, "run", fake_run)
+    res = re_.smart_run(None)
+    assert "경영의 실제" in res.text and calls == ["kor+eng"]
+
+
+def test_pure_english_page_still_reread_with_english_model(monkeypatch):
+    from core import rapidocr_engine as re_
+    from core.types import OCRResult
+    calls = []
+    monkeypatch.setattr(re_, "run", lambda image, lang="kor+eng", fast=False, refine=True: (
+        calls.append(lang), OCRResult(text="The Practice of Management " * 5, confidence=95.0,
+                                      engine=OCREngine.RAPIDOCR))[1])
+    re_.smart_run(None)
+    assert calls == ["kor+eng", "eng"]
