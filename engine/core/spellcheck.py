@@ -53,7 +53,8 @@ def correct(text: str) -> tuple[str, list[str]]:
             continue
         try:
             result = spell_checker.check(chunk)
-            corrected_parts.append(result.checked)
+            # 교정기가 조각 끝 공백·줄바꿈을 떼어 돌려줘도 원래 것을 붙인다(문장·문단 경계 보존)
+            corrected_parts.append(result.checked.rstrip() + chunk[len(chunk.rstrip()):])
             # 변경된 단어 수집
             original_words = chunk.split()
             corrected_words = result.checked.split()
@@ -89,7 +90,9 @@ def _split_chunks(text: str, size: int) -> list[str]:
     문장 경계를 유지하면서 size 글자 이하로 분할.
     문장 구분자: 마침표·줄바꿈·느낌표·물음표
     """
-    sentences = re.split(r"(?<=[.!?\n])\s*", text)
+    # 문장 뒤 공백·줄바꿈을 그 문장에 붙여 둔다 — re.split(r"…\s*") 은 공백을 먹어, 조각을 다시 이으면
+    # '문장이다.둘째 문장'·문단 줄바꿈 소실이 났다(hanspell 설치 시, 감사 잠복 1건)
+    sentences = [s for s in re.findall(r".*?(?:[.!?\n]\s*|$)", text, flags=re.S) if s]
     chunks: list[str] = []
     current = ""
 
