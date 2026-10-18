@@ -20,7 +20,7 @@ from core import rapidocr_engine, char_normalizer, postprocessor, writer
 # vision 파사드 — config.json 의 vision_provider 에 따라 Gemini/Claude 라우팅.
 # 기존 호출부 호환을 위해 claude_vision 이름으로 import 한다.
 from core import vision as claude_vision
-from core import spellcheck, figure_detector, llm_corrector, user_typos, reclean, typo_suspects
+from core import spellcheck, figure_detector, llm_corrector, user_typos, reclean, typo_suspects, review_log
 from core import config, usage_tracker, blank_detector, storage_manager
 from core import text_cleaner
 from core import pdf_text_layer
@@ -291,7 +291,22 @@ def _finalize_results(ckpt: "_CleanCheckpoint | None", cleaned_text: str | None,
         return None
 
 
-# ── ④ 결과 파일 다시 교정 · 의심 목록 ─────────────────────────────────────────
+def _save_review(results_path: Path | None, content_pages: list, cleaned_text: str | None,
+                 crep: dict) -> str:
+    """02_결과/_검수기록/ 에 단계별 글자 수·정제 보고를 남기고 요약 줄을 돌려준다.
+    기록을 못 남겨도 결과는 이미 저장됐으므로 경고 줄만 낸다."""
+    if results_path is None or not cleaned_text:
+        return ""
+    try:
+        path = review_log.save(results_path, [p.raw_text for p in content_pages],
+                               [p.corrected_text for p in content_pages], cleaned_text,
+                               list(crep.get("warnings", [])))
+    except Exception as e:
+        return f"   ⚠ 검수기록을 남기지 못했습니다: {type(e).__name__}: {e}"
+    return f"   🧾 검수기록: {path.parent.name}/{path.name}"
+
+
+# ── ④ 결과 파일 다시 교정 · 의심 목록─────────────────────────────────────────
 
 def _suspect_books() -> list[str]:
     d = RESULTS_DIR / typo_suspects.SUBDIR
@@ -784,6 +799,7 @@ def _run_digital_pdf(file_path: Path, pages_text: list[str], out_fmt: OutputForm
     cleaned_text = None
     clean_note = ""
     ckpt = None
+    crep: dict = {}
     content_pages = [p for p in result.pages if not p.is_blank]
     if cleanup and content_pages and text_cleaner.is_available(local=local_clean):
         ckpt = _CleanCheckpoint(file_path.stem, out_fmt)
@@ -908,6 +924,8 @@ def _run_digital_pdf(file_path: Path, pages_text: list[str], out_fmt: OutputForm
     if cleaned_text:
         summary.append("   📝 문장 정제 적용됨")
     summary.append(f"   📁 저장 위치: {results_path or out_path}")
+    if review_note := _save_review(results_path, content_pages, cleaned_text, crep):
+        summary.append(review_note)
     if step_logs:
         summary.append("")
         summary.extend(step_logs[-5:])
@@ -1399,6 +1417,7 @@ def _run_ocr(
     cleaned_text = None
     clean_note = ""
     ckpt = None
+    crep: dict = {}
     content_pages = [p for p in result.pages if not p.is_blank]
     # 정제는 읽는 방식과 상관없이 내장 규칙 — Gemini OCR 결과도 이미 깨끗해 유료 정제 이득이 작다(사용자 결정 2026-10-15)
     if cleanup and content_pages and text_cleaner.is_available(local=True):
@@ -1535,6 +1554,8 @@ def _run_ocr(
     if review_count:
         summary.append(f"   ⚠ 검토 필요: {review_count}p (출력 파일 상단 참조)")
     summary.append(f"   📁 저장 위치: {results_path or out_path}")
+    if review_note := _save_review(results_path, content_pages, cleaned_text, crep):
+        summary.append(review_note)
     if step_logs:
         summary.append("")
         summary.extend(step_logs[-5:])

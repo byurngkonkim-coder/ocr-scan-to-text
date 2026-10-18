@@ -90,6 +90,24 @@ def test_suspect_list_failure_does_not_fail_job(monkeypatch, tmp_path):
     assert br._jobs[0].state == "완료"
 
 
+def test_review_log_noted_in_detail(monkeypatch, tmp_path):
+    # 처리 중 남긴 검수기록이 있으면 ④ 상세에 위치를 알린다(intent 2026-10-18 정제 순서 5단계)
+    from core import typo_suspects
+    result = tmp_path / "책A.txt"
+    result.write_text("본문", encoding="utf-8")
+    (tmp_path / "_검수기록").mkdir()
+    (tmp_path / "_검수기록" / "책A.txt").write_text("기록", encoding="utf-8")
+
+    def process_full(file_obj, *args, progress=None, **kwargs):
+        yield ("", "완료", "", str(result), None, None)
+    monkeypatch.setattr(ocr_gradio, "process_full", process_full)
+    monkeypatch.setattr(typo_suspects, "save", lambda p: (p, 0))
+    br.submit([tmp_path / "책A.pdf"], ("kor+eng",), {"cleanup": True})
+    _wait_idle()
+    assert br._jobs[0].state == "완료"
+    assert "검수기록: _검수기록/책A.txt" in br._jobs[0].detail
+
+
 def test_suspect_subfolder_is_not_a_result(monkeypatch, tmp_path):
     inp, out = tmp_path / "in", tmp_path / "out"
     inp.mkdir(); out.mkdir()

@@ -119,6 +119,7 @@ def _run() -> None:
                     job.detail = next((ln.strip(" ⚠️") for ln in str(last[1]).splitlines()
                                        if "문장 정제 미적용" in ln), "")
                     _save_suspects(job)   # '완료' 전에 — 완료로 보이는데 목록이 아직 없는 틈을 없앤다
+                    _note_review(job)
                 job.state = "완료" if job.result else "실패"
         except Exception as e:   # 한 파일의 실패가 대기열 전체를 멈추지 않게
             job.state, job.detail = "실패", f"{type(e).__name__}: {e}"
@@ -139,6 +140,13 @@ def _save_suspects(job: Job) -> None:
         return
     if n:
         job.detail = " · ".join(filter(None, [job.detail, f"의심 {n}곳 — ④ 의심 목록에서 확인"]))
+
+
+def _note_review(job: Job) -> None:
+    """처리 중 남긴 검수기록(02_결과/_검수기록/)이 있으면 상세에 알린다."""
+    from core import review_log
+    if job.result and review_log.path_for(Path(job.result)).is_file():
+        job.detail = " · ".join(filter(None, [job.detail, f"검수기록: {review_log.SUBDIR}/{Path(job.result).stem}.txt"]))
 
 
 def _last_line(text) -> str:
