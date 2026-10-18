@@ -429,3 +429,17 @@ def test_attribution_line_stays_with_quote():
     # 명언 저자 줄('- 이름')·글머리 목록은 앞 줄과 한 덩어리
     src = "명언 본문이다.\n- 벤저민 프랭클린\n다음 명언.\n• 항목"
     assert text_cleaner.unify_paragraph_breaks(src) == "명언 본문이다.\n- 벤저민 프랭클린\n\n다음 명언.\n• 항목"
+
+
+def test_nfd_hangul_input_is_not_deleted():
+    # 자모가 분리된(NFD) 한글 입력이면 정제가 한글을 모두 지웠다(감사 14번: 1,323자 → 16자)
+    import unicodedata
+    from core import text_cleaner
+    page = "경영자는 조직의 목표를 분명히 하고 구성원들이 그 목표를 향해 나아가도록 도와야 한다."
+    gen = text_cleaner.iter_clean([unicodedata.normalize("NFD", page)] * 3, local=True)
+    try:
+        while True:
+            next(gen)
+    except StopIteration as e:
+        out = e.value
+    assert "구성원들이 그 목표를" in out

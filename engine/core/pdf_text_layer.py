@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import re
 import shutil
+import unicodedata
 import subprocess
 import threading
 from dataclasses import dataclass, field
@@ -439,6 +440,8 @@ def analyze(pdf_path: str | Path, repair: bool = False) -> DigitalPdf | None:
         pages = extract_pages(pdf_path, repaired)
     except Exception:
         return None
+    # 자모가 분리된 한글(NFD — 맥에서 만든 PDF 등)은 '가-힣' 판정에 안 걸려 정제가 한글을 모두 지웠다
+    pages = [unicodedata.normalize("NFC", p) for p in pages]
     total = len(pages)
     if total == 0:
         return None

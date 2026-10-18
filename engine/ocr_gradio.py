@@ -6,6 +6,7 @@ import re
 import sys
 import time
 import tempfile
+import unicodedata
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -1321,7 +1322,7 @@ def _run_ocr(
     # ── 텍스트 파일(.txt) — 이미 읽은 본문: OCR 없이 문장 정제·저장·기록만 한다 ──
     if file_path.suffix.lower() == ".txt":
         yield from _run_digital_pdf(
-            file_path, _text_pages(file_path.read_text(encoding="utf-8-sig")),
+            file_path, _text_pages(unicodedata.normalize("NFC", file_path.read_text(encoding="utf-8-sig"))),
             out_fmt, cleanup, front_matter, start_time,
             label="텍스트 파일 정제", page_fn=_finalize_text,
         )

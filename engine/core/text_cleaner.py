@@ -20,6 +20,7 @@ OCR(gemini_vision)이 페이지별로 '충실 추출'한 결과에는 쪽번호�
 """
 from __future__ import annotations
 import re
+import unicodedata
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 
@@ -205,7 +206,8 @@ def iter_clean(pages: list[str], drop_front_matter: bool = False, on_chunk=None,
             on_chunk(text)
         yield 1, 1
         return (text + "\n") if text else ""
-    pages = [p.strip() for p in pages if p and p.strip()]
+    # NFD(자모 분리) 한글은 정제 규칙의 '가-힣' 판정에 안 걸려 잡음으로 지워진다 — 먼저 합친다
+    pages = [unicodedata.normalize("NFC", p).strip() for p in pages if p and p.strip()]
     if not pages:
         return ""
 
