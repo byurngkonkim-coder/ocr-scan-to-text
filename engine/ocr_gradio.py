@@ -2029,8 +2029,9 @@ def build_ui() -> gr.Blocks:
         ).then(
             fn=lambda: gr.update(visible=True), outputs=[stop_btn]
         ).then(fn=process_preview, inputs=common_inputs, outputs=common_outputs,
-               show_progress="hidden"
-        ).then(fn=lambda imgs: (gr.update(visible=imgs is not None), gr.update(visible=False)),
+               show_progress="hidden")
+        # '처리 중단'은 처리 단계 자체를 가리켜야 멈춘다 — 연쇄의 마지막 단계를 가리키면 처리는 끝까지 돈다
+        prev_event.then(fn=lambda imgs: (gr.update(visible=imgs is not None), gr.update(visible=False)),
                inputs=[images_state], outputs=[continue_row, stop_btn])
 
         run_event = run_btn.click(
@@ -2038,8 +2039,8 @@ def build_ui() -> gr.Blocks:
         ).then(
             fn=lambda: gr.update(visible=True), outputs=[stop_btn]
         ).then(fn=process_full_or_queue, inputs=common_inputs, outputs=common_outputs,
-               show_progress="hidden"
-        ).then(fn=lambda _: (gr.update(visible=False), gr.update(visible=False)),
+               show_progress="hidden")
+        run_event.then(fn=lambda _: (gr.update(visible=False), gr.update(visible=False)),
                inputs=[images_state], outputs=[continue_row, stop_btn]
         ).then(fn=_review_btn_update, outputs=[review_btn])
 
@@ -2047,8 +2048,8 @@ def build_ui() -> gr.Blocks:
             fn=lambda: gr.update(visible=True), outputs=[stop_btn]
         ).then(fn=process_continue, inputs=common_inputs + [images_state],
                outputs=common_outputs,  # common_inputs에 이미 vision_first 포함
-               show_progress="hidden"
-        ).then(fn=lambda _: (gr.update(visible=False), gr.update(visible=False)),
+               show_progress="hidden")
+        cont_event.then(fn=lambda _: (gr.update(visible=False), gr.update(visible=False)),
                inputs=[images_state], outputs=[continue_row, stop_btn]
         ).then(fn=_review_btn_update, outputs=[review_btn])
 
