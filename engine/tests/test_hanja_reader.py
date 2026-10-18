@@ -32,9 +32,12 @@ def _hangul(text):
 @needs_ocr
 @pytest.mark.parametrize("name, want", [
     ("paren_jangwon.png", ["縮圖"]),                     # 빈 괄호 '축도()' → '축도(縮圖)'
-    ("inline_sonja.png", ["武經七書"]),                  # 괄호 없이 붙은 한자 '무경칠서武經七書'
-    ("confusable_sonja.png", ["經", "計", "法", "與"]),   # 一曰 은 日 과 헷갈려 넣지 않는다
-    ("partial_gongja.png", []),                          # 孔父嘉 를 孔父 로 덜 읽음 → 넣지 않는다
+    # 괄호 없이 붙은 한자 '무경칠서武經七書' · 줄 끝 '계計'(2026-10-18 줄 끝 틈도 읽음)
+    ("inline_sonja.png", ["計", "武經七書"]),
+    # 一曰 은 日 과 헷갈려 넣지 않는다. 늘어난 글자는 원본과 대조해 모두 일치(2026-10-18 틈 바짝 다시 읽기)
+    ("confusable_sonja.png", ["故", "經", "校", "計", "情", "道", "天", "地", "法",
+                              "令民與上同意也", "與", "也"]),
+    ("partial_gongja.png", ["大司馬"]),                  # 孔父嘉 를 孔父 로 덜 읽음 → 넣지 않는다
     ("plain_ctrl.png", []),                              # 한자 없는 책
 ])
 def test_fills_only_sure_hanja(name, want, monkeypatch):
