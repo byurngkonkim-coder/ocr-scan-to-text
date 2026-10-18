@@ -1912,8 +1912,8 @@ def build_ui() -> gr.Blocks:
             with gr.Tab("④ 일괄 처리") as batch_tab:
                 with gr.Column(elem_classes="step-card"):
                     gr.HTML(_step_head(None, "일괄 처리 방식",
-                            "파일 종류를 보고 자동으로 처리합니다. 일괄 처리는 비용 우선 고정이라 대량 과금이 생기지 않습니다."))
-                    # 대량 과금 방지 — 일괄은 비용 우선 고정(사용자 결정 2026-10-15). _batch_submit 도 강제한다
+                            "파일 종류를 보고 자동으로 처리합니다. 일괄 처리는 로컬 전용이라 API 요금이 생기지 않습니다."))
+                    # 일괄은 로컬 전용 — 비용 우선 고정(2026-10-15) + API 다시 읽기 끔(batch_runner.submit, 2026-10-18)
                     batch_vision_first = gr.State(BATCH_MODE)
                     batch_vision_note = gr.HTML(_batch_mode_note())
                     with gr.Row():
@@ -2393,9 +2393,8 @@ def _batch_mode_note() -> str:
     label = claude_vision.provider_label()
     rows = [
         ("디지털 PDF·txt", "OCR 없이 내장 글자를 그대로 추출 — <b>무료</b>"),
-        ("스캔 PDF·이미지", f"RapidOCR 한글 v5가 무료로 읽고, 신뢰도 85% 미만 쪽만 {label}로 다시 읽기"
-                           " (문서당 쪽수의 10%까지 — 넘으면 <b>검토 필요</b>로 남김)"
-         if _engine_ok() else f"RapidOCR 한글 v5로만 읽기 — {label} 연결이 없어 다시 읽기 없음 (무료)"),
+        ("스캔 PDF·이미지", f"RapidOCR 한글 v5로만 읽기 — <b>무료</b>, {label} 다시 읽기 없음."
+                           " 신뢰도 85% 미만 쪽은 <b>검토 필요</b>로 남김"),
         ("문장 정제", "켜면 내장 정제규칙으로 — <b>무료</b>, API 호출 없음"),
     ]
     body = "".join(f"<li><b>{k}</b> — {v}</li>" for k, v in rows)

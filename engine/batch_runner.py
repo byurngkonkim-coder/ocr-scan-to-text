@@ -22,6 +22,9 @@ from types import SimpleNamespace
 INPUT_DIR = Path(__file__).resolve().parent.parent / "01_입력"   # 기본값 — ④ 탭에서 다른 폴더로 바꿀 수 있다
 _EXTS = {".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".txt"}   # .txt 는 OCR 없이 문장 정제만
 _PARTIAL_RE = re.compile(r"_(?:정제중|OCR중)(?:_\d{8}_\d{6})?$")   # ocr_gradio._CleanCheckpoint 중간 저장분
+# process_full 위치 인자(lang, fmt, no_preprocess, no_fallback, …) 중 no_fallback 자리.
+# 일괄 처리는 로컬 전용 — API 요금은 최소화(사용자 설계원칙 2026-10-18)
+NO_FALLBACK_ARG = 3
 
 
 @dataclass
@@ -53,6 +56,9 @@ def busy() -> bool:
 def submit(paths, args: tuple, kwargs: dict) -> int:
     """파일들을 대기열 끝에 넣고 작업 스레드를 띄운다. 이미 대기·처리 중인 파일은 건너뛴다."""
     from core import config
+    args = tuple(args)
+    if len(args) > NO_FALLBACK_ARG:   # 일괄은 로컬 전용 — 저신뢰 쪽도 API 로 다시 읽지 않고 '검토 필요'로 남긴다
+        args = (*args[:NO_FALLBACK_ARG], True, *args[NO_FALLBACK_ARG + 1:])
     added = 0
     with _lock:
         active = {j.path for j in _jobs if j.state in ("대기", "처리 중")}

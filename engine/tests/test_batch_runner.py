@@ -90,6 +90,21 @@ def test_suspect_list_failure_does_not_fail_job(monkeypatch, tmp_path):
     assert br._jobs[0].state == "완료"
 
 
+def test_batch_never_uses_vision_fallback(monkeypatch, tmp_path):
+    # 일괄 처리는 로컬 전용 — 화면에서 폴백을 켜 둬도 API 다시 읽기를 끈다(사용자 설계원칙 2026-10-18)
+    seen = []
+
+    def process_full(file_obj, *args, progress=None, **kwargs):
+        seen.append(args)
+        yield ("", "완료", "", None, None, None)
+    monkeypatch.setattr(ocr_gradio, "process_full", process_full)
+    args = ("kor+eng", "txt", False, False, True, False, 0, "", "RapidOCR 우선")
+    br.submit([tmp_path / "책A.pdf"], args, {"cleanup": True})
+    _wait_idle()
+    assert seen[0][br.NO_FALLBACK_ARG] is True
+    assert seen[0][:3] == args[:3] and seen[0][4:] == args[4:]
+
+
 def test_review_log_noted_in_detail(monkeypatch, tmp_path):
     # 처리 중 남긴 검수기록이 있으면 ④ 상세에 위치를 알린다(intent 2026-10-18 정제 순서 5단계)
     from core import typo_suspects
