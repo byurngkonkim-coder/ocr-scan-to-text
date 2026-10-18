@@ -132,3 +132,11 @@ def test_pdf_text_layer_filter(mock_open):
         assert "1" not in extracted[0]
         assert "이미지영역" not in extracted[0]
         assert "본문 내용 첫 줄입니다." in extracted[0]
+
+
+def test_numbers_joined_by_symbols_at_line_start_kept():
+    # '6 · 25 전쟁'·'2026. 10. 19.'의 숫자·기호를 줄 머리 마진 잡음으로 지우던 것(감사 26번)
+    from core import postprocessor
+    for line in ("6 · 25 전쟁이 일어났다", "3 · 1 운동", "2026. 10. 19. 서울에서"):
+        assert postprocessor._strip_margin_noise(line) == line
+    assert postprocessor._strip_margin_noise("00 10: *인간은 생각한다") == "인간은 생각한다"

@@ -164,6 +164,10 @@ def _strip_margin_noise(line: str) -> str:
         else:
             break
 
+    # 숫자 사이를 기호로 이은 표기('6 · 25 전쟁'·'3 · 1 운동'·'2026. 10. 19.')는 본문 — 마진 잡음
+    # ('00 10: *…'·'| 0 00000 …')은 숫자 사이에 잇는 기호가 없다
+    if n >= 2 and re.fullmatch(r"\d{1,4}(?:\s*[·.:~\-+×=/]\s*\d{1,4})+\.?", " ".join(tokens[:n]).strip()):
+        n = 0
     if n >= 2:                       # 선두 노이즈 토큰 2개 이상일 때만 제거
         tokens = tokens[n:]
     proc = ' '.join(tokens).strip()
