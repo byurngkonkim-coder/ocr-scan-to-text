@@ -13,14 +13,29 @@ set "PATH=%PYDIR%;%PATH%"
 rem Server output goes to a log file; without this Python writes it in cp949 and crashes on emoji.
 set "PYTHONUTF8=1"
 
-netstat -an 2>nul | findstr ":7860 " | findstr "LISTENING" > nul
-if %errorlevel% == 0 (
-    echo.
-    echo  Already running. Opening http://localhost:7860
-    start http://localhost:7860
-    timeout /t 3 > nul
-    exit
-)
+rem Port 7860 already open: only treat it as this tool when the PID matches ocr_server.pid
+rem (written by the server itself). Another program on 7860 used to be opened as if it were this tool.
+set "_owner="
+for /f "tokens=5" %%p in ('netstat -ano 2^>nul ^| findstr ":7860 " ^| findstr "LISTENING"') do set "_owner=%%p"
+if not defined _owner goto start_new
+set "_mine="
+if exist "ocr_server.pid" set /p _mine=<"ocr_server.pid"
+if not "%_owner%"=="%_mine%" goto port_taken
+echo.
+echo  Already running. Opening http://localhost:7860
+start http://localhost:7860
+timeout /t 3 > nul
+exit
+
+:port_taken
+echo.
+echo  [ERROR] Port 7860 is used by another program (PID %_owner%), not by this OCR tool.
+echo  Close that program, then run START_OCR.bat again.
+echo.
+pause
+exit /b 1
+
+:start_new
 
 echo.
 echo  ==================================================

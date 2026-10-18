@@ -2685,6 +2685,12 @@ def main():
     # (InvalidPathError) 산출물이 정상 생성돼도 다운로드 단계에서만 실패했다.
     # 서버는 127.0.0.1 에만 바인딩되므로 노출 범위는 이 PC로 한정된다.
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    # 실제 서버 프로세스 번호 — venv 의 python.exe 는 진짜 파이썬을 자식으로 띄우는 실행기라 START 가 저장한
+    # 번호와 7860 을 연 프로세스가 다르다. STOP/START 는 이 번호로 '이 프로그램의 서버'인지 확인한다
+    try:
+        (Path(__file__).parent / "ocr_server.pid").write_text(str(os.getpid()), encoding="ascii")
+    except OSError:
+        pass
     demo.launch(server_name="127.0.0.1", server_port=7860,
                 share=False, inbrowser=True, css=_CSS, theme=_THEME,
                 allowed_paths=[str(RESULTS_DIR)])
