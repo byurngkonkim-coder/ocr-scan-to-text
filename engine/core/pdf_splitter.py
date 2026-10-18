@@ -152,7 +152,40 @@ def iter_pdf_pages(
         p = end + 1
 
 
-def load_image(image_path: str | Path) -> list[Image.Image]:
-    """이미지 파일을 단일 페이지 리스트로 로드."""
-    img = Image.open(str(image_path)).convert("RGB")
-    return [img]
+def _to_rgb(img: Image.Image) -> Image.Image:
+    """16비트 흑백('I;16'·'I')은 8비트로 줄이고, 투명 배경은 흰색으로 깐다 — 그냥 convert('RGB')
+    하면 16비트는 하얗게 날아가고 투명 부분은 검게 나온다."""
+    if img.mode in ("I;16", "I;16B", "I;16L", "I"):
+        img = img.point(lambda v: v / 256).convert("L")
+    if img.mode in ("RGBA", "LA", "PA") or (img.mode == "P" and "transparency" in img.info):
+        img = img.convert("RGBA")
+        bg = Image.new("RGB", img.size, "white")
+        bg.paste(img, mask=img.getchannel("A"))
+        return bg
+    return img.convert("RGB")
+
+
+class _ImageFrames:
+    """여러 쪽 이미지(다중 페이지 TIFF 등)를 쪽마다 필요할 때만 읽는 목록 — 300쪽 TIFF 도 메모리 일정."""
+
+    def __init__(self, path: Path):
+        self.path = path
+        with Image.open(str(path)) as im:
+            self.n = getattr(im, "n_frames", 1)
+
+    def __len__(self) -> int:
+        return self.n
+
+    def __getitem__(self, i: int) -> Image.Image:
+        if i < 0:
+            i += self.n
+        if not 0 <= i < self.n:
+            raise IndexError(i)
+        with Image.open(str(self.path)) as im:
+            im.seek(i)
+            return _to_rgb(im)
+
+
+def load_image(image_path: str | Path) -> "_ImageFrames":
+    """이미지 파일을 쪽 목록으로 로드(다중 페이지 TIFF 는 모든 쪽 — 예전엔 첫 쪽만 읽고 '완료')."""
+    return _ImageFrames(Path(image_path))

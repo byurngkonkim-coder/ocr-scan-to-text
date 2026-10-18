@@ -183,7 +183,11 @@ def _file_kind(path: Path) -> tuple[int | None, str]:
     if path.suffix.lower() == ".txt":
         res = (None, "텍스트(정제만)")
     elif path.suffix.lower() != ".pdf":
-        res = (1, "이미지")
+        from core import pdf_splitter
+        try:
+            res = (len(pdf_splitter.load_image(path)), "이미지")   # 다중 페이지 TIFF 는 쪽 수 그대로
+        except Exception:
+            res = (None, "이미지")
     else:
         info = pdf_text_layer.analyze(path) if pdf_text_layer.is_available() else None
         if info is None:

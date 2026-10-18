@@ -183,3 +183,25 @@ def test_pure_english_page_still_reread_with_english_model(monkeypatch):
                                       engine=OCREngine.RAPIDOCR))[1])
     re_.smart_run(None)
     assert calls == ["kor+eng", "eng"]
+
+
+def test_multipage_tiff_reads_every_page(tmp_path):
+    # 다중 페이지 TIFF 가 첫 쪽만 처리되고 '완료'로 나오던 것
+    from PIL import Image
+    from core import pdf_splitter
+    p = tmp_path / "scan.tif"
+    frames = [Image.new("RGB", (40, 40), (i * 40, 0, 0)) for i in range(5)]
+    frames[0].save(p, save_all=True, append_images=frames[1:])
+    imgs = pdf_splitter.load_image(p)
+    assert len(imgs) == 5 and imgs[4].getpixel((0, 0))[0] == 160 and imgs[0].mode == "RGB"
+
+
+def test_16bit_and_transparent_images_keep_content(tmp_path):
+    from PIL import Image
+    from core import pdf_splitter
+    p16 = tmp_path / "g16.png"
+    Image.new("I;16", (10, 10), 20000).save(p16)
+    assert pdf_splitter.load_image(p16)[0].getpixel((0, 0))[0] < 200     # 하얗게 날아가지 않음
+    pa = tmp_path / "a.png"
+    Image.new("RGBA", (10, 10), (0, 0, 0, 0)).save(pa)
+    assert pdf_splitter.load_image(pa)[0].getpixel((0, 0)) == (255, 255, 255)   # 투명 → 흰 배경
