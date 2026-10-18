@@ -72,3 +72,25 @@ def test_vision_success_is_used(monkeypatch, run, blurry, conf):
     page = run(monkeypatch, blurry, conf, _vision_ok)
     assert page.engine == OCREngine.OLLAMA and "비전" in page.raw_text
     assert not page.needs_review
+
+
+def test_batch_low_confidence_page_flagged_for_review(monkeypatch):
+    # 일괄(no_fallback=True)은 Vision 을 부르지 않는 대신 '검토 필요'로 남겨야 한다(825f19c 설계) —
+    # 표시하는 블록이 no_fallback 조건 안에 있어 일괄에서는 늘 빠졌다
+    ocr_gradio = pytest.importorskip("ocr_gradio")
+    calls = []
+    _setup(monkeypatch, False, 40.0, lambda *a, **k: calls.append(1))
+    page = ocr_gradio._process_page(IMG, 1, "kor+eng", no_preprocess=True, no_fallback=True,
+                                    no_figure=True, llm_correct=False, llm_budget=0)[0]
+    assert page.needs_review and "신뢰도 낮음" in page.review_reason
+    assert calls == []                                     # 유료 호출 없음
+
+
+def test_vision_first_failure_flagged_for_review(monkeypatch):
+    # Vision 우선 모드에서 Vision 이 실패해 로컬 결과로 넘어간 쪽은 표시 없이 저장됐다
+    ocr_gradio = pytest.importorskip("ocr_gradio")
+    _setup(monkeypatch, False, 95.0, _boom)
+    page = ocr_gradio._process_page(IMG, 1, "kor+eng", no_preprocess=True, no_fallback=False,
+                                    no_figure=True, llm_correct=False, llm_budget=0, vision_first=True)[0]
+    assert page.engine == OCREngine.RAPIDOCR
+    assert page.needs_review and "Vision 오류" in page.review_reason

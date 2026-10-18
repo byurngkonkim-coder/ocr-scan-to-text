@@ -524,6 +524,7 @@ def _process_page(image, page_num: int, lang: str,
     # ══════════════════════════════════════════════════════════════════════════
     # Vision 우선 모드 (API 키 있을 때)
     # ══════════════════════════════════════════════════════════════════════════
+    vision_first_err = ""
     if vision_first and claude_vision.is_available():
         logs.append(f"  p.{page_num}: {claude_vision.provider_label()} 처리 중...")
         try:
@@ -533,7 +534,8 @@ def _process_page(image, page_num: int, lang: str,
             return _finalize(ocr_result, page_num, placeholders, llm_correct, llm_budget), logs
         except Exception as e:
             logs.append(f"  p.{page_num}: Vision 오류 {time.time() - _t:.1f}s → {LOCAL_OCR_NAME} 폴백 ({e})")
-            # Vision 실패 시 RapidOCR 로 전환
+            # Vision 실패 시 RapidOCR 로 전환 — 그 쪽은 검토 필요로 남긴다(아래)
+            vision_first_err = str(e)
 
     elif vision_first and not claude_vision.is_available():
         logs.append(f"  p.{page_num}: ⚠ API 키 미설정 → {LOCAL_OCR_NAME}(으)로 처리")
@@ -579,10 +581,10 @@ def _process_page(image, page_num: int, lang: str,
     ocr_result  = rapidocr_engine.smart_run(processed, default_lang=lang, fast=quick, refine=False)
     low_quality = ocr_result.confidence < config.get_confidence_threshold() or ocr_result.has_jamo_split
 
-    # RapidOCR 저신뢰도 → Vision 폴백 (비용 우선 모드일 때만)
-    if not vision_first and not no_fallback and low_quality:
+    # RapidOCR 저신뢰도 → Vision 폴백(비용 우선 모드·일괄 아닐 때만), 못 하면 검토 필요로 남긴다
+    if low_quality:
         # 문서당 상한 넘으면 호출 안 함
-        if claude_vision.is_available() and _budget_ok():
+        if not vision_first and not no_fallback and claude_vision.is_available() and _budget_ok():
             reason = "자모분리" if ocr_result.has_jamo_split else f"신뢰도 {ocr_result.confidence:.1f}%"
             logs.append(f"  p.{page_num}: {reason} → {claude_vision.provider_label()} 폴백")
             try:
@@ -598,6 +600,13 @@ def _process_page(image, page_num: int, lang: str,
             reason += " · Vision 폴백 실패"
         elif over_budget:
             reason += " · 문서당 Vision 상한 도달(비용 보호)"
+        if vision_first_err:
+            reason += " · Vision 오류"
+        logs.append(f"  p.{page_num}: ⚠ {reason} — 검토 필요")
+        return _finalize(ocr_result, page_num, placeholders, llm_correct, llm_budget,
+                         needs_review=True, review_reason=reason), logs
+    if vision_first_err:
+        reason = f"Vision 오류 → {LOCAL_OCR_NAME} 결과 ({vision_first_err[:80]})"
         logs.append(f"  p.{page_num}: ⚠ {reason} — 검토 필요")
         return _finalize(ocr_result, page_num, placeholders, llm_correct, llm_budget,
                          needs_review=True, review_reason=reason), logs
