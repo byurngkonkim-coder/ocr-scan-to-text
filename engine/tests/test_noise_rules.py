@@ -191,6 +191,22 @@ def test_classical_chinese_quote_lines_kept():
     assert nr.clean_page(page).splitlines()[1] == "學而時習之 不亦說乎"
 
 
+def test_long_classical_lines_and_leading_hanja_words_kept():
+    # 한자 낱말 3개↑ 한문 줄을 낱말 품질 미달로 지우던 것(손자병법 실측: 한자 184→74자)
+    for line in ("學而時習之 不亦說乎 有朋自遠方來",
+                 "夫未戰而廟算勝者, 得算多也. 未戰而廟算不勝者, 得算少也.",
+                 "知彼知己 百戰不殆 不知彼而知己 一勝一負",
+                 "夫, 未戰而廟算勝者, 得算多也. 未戰而廟算不勝者, 得算少",
+                 "也.多算勝, 少算不勝, 而況於無算乎.吾以此觀之, 勝負見矣."):
+        assert nr.clean_page(line) == line
+    # 줄 앞 한자 낱말·줄바꿈으로 갈린 한자 병기의 뒷부분
+    assert nr.clean_page("佛經, 현실을 꿀맛 젖은 사형수에 비유") == "佛經, 현실을 꿀맛 젖은 사형수에 비유"
+    assert nr.clean_page("인재(人\n災)란 점이 밝혀졌습니다.") == "인재(人\n災)란 점이 밝혀졌습니다."
+    # 괄호 없는 한자 병기(로컬 한자 읽기 결과) — 한글 뒤·한글 사이
+    assert "般若心經" in nr.clean_page("불교의 «반야심경般若心經 외에 다른 것이 별로 없을 것이다.")
+    assert "新井白石" in nr.clean_page("손자해석가의 한 사람인 아라이하쿠세 키新井白石가 그의 책에서 남긴 말")
+
+
 def test_number_repairs_do_not_touch_ordinary_text():
     assert nr.clean_page("혈중 O2 농도가 낮아졌다") == "혈중 O2 농도가 낮아졌다"
     assert nr.clean_page("만족도 척도 1 2 3 4 5 중 하나를 고른다") == "만족도 척도 1 2 3 4 5 중 하나를 고른다"

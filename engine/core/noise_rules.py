@@ -86,7 +86,7 @@ _NUM_UNIT_RE = re.compile(rf"\d[%㎝㎞㎏㎎℃]?{_UNIT}(?![가-힣])|\d{_UNIT}
 # 띄어 쓴 표 머리 낱말('합 계'·'의 견') — 이 목록만 본문으로 본다('돈 나' 같은 잡음 조각 제외)
 _SPACED_HEADER_RE = re.compile(r"^(?:합 계|총 계|소 계|의 견|총 평|비 고|구 분|항 목|내 용|평 가|점 수|순 위|합 산)$")
 # 본문 토큰 꼴: 한자 병기 '건(件)', 숫자+한글 '2016년'·'1%만', 동그라미 숫자 '③PT', 한자+조사 '甲이'
-_CONTENT_TOKEN_RE = re.compile(rf"\([一-鿿]+\)|\d[%㎝㎞㎏㎎℃]?{_UNIT}|\d%[가-힣]|[①-⑳]|^[一-鿿]+[가-힣]{{1,2}}[.,:]?$")
+_CONTENT_TOKEN_RE = re.compile(rf"\([一-鿿]+(?:\)|$)|\d[%㎝㎞㎏㎎℃]?{_UNIT}|\d%[가-힣]|[①-⑳]|^[一-鿿]+[가-힣]{{1,2}}[.,:]?$")
 
 
 def _is_junk_token(t: str) -> bool:
@@ -94,12 +94,16 @@ def _is_junk_token(t: str) -> bool:
     ('그 사람은'의 '그')·정상 표기('[표1]', '것:')는 본문으로 둔다."""
     if re.search(r"[가-힣]{2}|[A-Za-z]{3}|^\d{1,4}[.,]?$", t) or _CONTENT_TOKEN_RE.search(t):
         return False
+    # 한자 낱말('佛經,')·줄바꿈으로 갈린 한자 병기의 뒷부분('災)란')은 본문
+    if re.search(r"[一-鿿]{2}", t) or re.match(r"^[一-鿿]+\)", t):
+        return False
     if re.search(r"[가-힣]", t):
         return not all(_OK_CHAR_RE.match(c) for c in t)
     return True
 
 
-_GOOD_TOKEN_RE = re.compile(r"[가-힣]{2}|[A-Za-z]{3}|^\d+[.,]?$")
+# 한자 2자↑ 낱말도 정상 — 한문 원문 줄('知彼知己 百戰不殆 …')을 품질 미달로 지우던 것 보호
+_GOOD_TOKEN_RE = re.compile(r"[가-힣]{2}|[A-Za-z]{3}|[一-鿿]{2}|^\d+[.,]?$")
 
 
 def _low_word_quality(line: str) -> bool:
@@ -154,7 +158,8 @@ def _is_noise_token(t: str) -> bool:
     # 한문 인용·한자 병기는 본문: '患人之不知己…也).”', '건(件)', '사(意思)’가'
     if re.fullmatch(r"[(\[“\"‘']?[一-鿿]{2,}[)\]”\"’'.,]*", t) or _CONTENT_TOKEN_RE.search(t):
         return False
-    if re.search(r"[가-힣]{2}", t):      # 한글 낱말이 있으면 토큰은 남기고 앞뒤 잡음만 뗀다(_strip_token_edges)
+    # 한글 사이에 괄호 없이 낀 한자 낱말('세키新井白石가'가 띄어 읽혀 생긴 '키新井白石가')도 본문
+    if re.search(r"[가-힣]{2}", t) or re.search(r"[가-힣][一-鿿]{2,}|[一-鿿]{2,}[가-힣]", t):  # 한글 낱말이 있으면 토큰은 남기고 앞뒤 잡음만 뗀다(_strip_token_edges)
         return False
     hanja = len(_HANJA_RE.findall(t))
     bad = sum(1 for c in t if not _OK_CHAR_RE.match(c)) - hanja
@@ -172,14 +177,25 @@ _HANJA_WORD_RE = re.compile(r"^(?:[一-鿿]{2,}|(?![一乂卜丶丨亅])[一-鿿
 def _strip_token_edges(t: str, keep_guil: bool = False) -> str:
     """'一오스틴' → '오스틴', '臣麗因주기도문은' → '주기도문은' (한글 어절 앞뒤에 붙은 한자·기호).
     keep_guil: 줄에 짝 맞는 '«…»'가 있으면 '«»'는 떼지 않는다."""
-    if not re.search(r"[가-힣]{2}", t) or re.search(r"\([一-鿿]+\)", t) or _HANJA_WORD_RE.match(t):
+    # '인재(人'처럼 줄 끝에서 갈린 한자 병기의 앞부분도 본문
+    if (not re.search(r"[가-힣]{2}", t) or re.search(r"\([一-鿿]+(?:\)|$)", t)
+            or _HANJA_WORD_RE.match(t)):
         return t
     cls = "[一-鿿㐀-䶿々^■•*~`]" if keep_guil else "[一-鿿㐀-䶿々^■•*«»~`]"
+    # 한글 뒤에 괄호 없이 붙은 한자 2자↑('반야심경般若心經'·'묘산廟算')는 병기 — 뒤쪽은 떼지 않는다
+    if re.search(r"[가-힣][一-鿿]{2,}[^가-힣一-鿿]*$", t):
+        return re.sub(rf"^{cls}+", "", t)
     return re.sub(rf"^{cls}+|{cls}+$", "", t)
 
 
 def _clean_line(line: str) -> str:
     """잡음 줄이면 '', 본문 줄이면 섞인 잡음 토큰과 양끝 잡음을 뗀 줄."""
+    # 한문 인용 줄('學而時習之 不亦說乎')은 본문 — 한자 4자↑ 연속이고 한자·공백·문장부호만 있을 때
+    # (영문·숫자가 섞인 '秘密永近Wteil' 같은 그림 속 글자 오인식은 제외). 토큰 정리보다 먼저 봐야
+    # '夫,'·'也.多算勝,' 같은 한문 토큰이 잡음으로 떨어지지 않는다
+    if re.search(r"[一-鿿]{4,}", line) and all(
+            _HANJA_RE.match(c) or c.isspace() or c in ".,!?;:·()「」『』“”\"'" for c in line):
+        return line
     keep_guil = bool(_PAIRED_GUIL_RE.search(line))
     # 잡음 토큰과, 낱말 사이에 홀로 떨어진 따옴표 토큰("가, ' 무시당한다."의 "'")을 뗀다
     line = " ".join(_strip_token_edges(t, keep_guil) for t in line.split()
@@ -196,11 +212,6 @@ def _clean_line(line: str) -> str:
         return line
     if _low_word_quality(line):
         return _salvage(line)
-    # 한문 인용 줄('學而時習之 不亦說乎')은 본문 — 한자 4자↑ 연속이고 한자·공백·문장부호만 있을 때
-    # (영문·숫자가 섞인 '秘密永近Wteil' 같은 그림 속 글자 오인식은 제외)
-    if re.search(r"[一-鿿]{4,}", line) and all(
-            _HANJA_RE.match(c) or c.isspace() or c in ".,!?;:·()「」『』“”\"'" for c in line):
-        return line
     # 한글이 적은 짧은 줄: 한자가 섞였거나 한글 낱말·영단어(모음 포함 3자↑)가 없으면 잡음
     if not re.fullmatch(r"[\d\-.,:/()| ]+", line.strip()) and (
             (_HANJA_RE.search(line) and not re.search(r"[一-鿿]{4,}", line)
