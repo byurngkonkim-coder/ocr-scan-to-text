@@ -242,10 +242,22 @@ class _CleanCheckpoint:
         self.stem = stem
         self.ext  = fmt.value
         self.path = RESULTS_DIR / f"{stem}_{suffix}.{self.ext}"
-        # 앞 실행이 끊겨 남긴 복구본은 시각을 붙여 보존(재실행이 0바이트로 덮어쓰던 결함)
-        if self.path.exists() and self.path.stat().st_size:
-            self.path.replace(RESULTS_DIR / f"{stem}_{suffix}_{time.strftime('%Y%m%d_%H%M%S')}.{self.ext}")
-        self._fh  = open(self.path, "w", encoding="utf-8")
+        # 같은 이름이 이미 있으면 그 파일은 건드리지 않고 이 실행은 시각 붙은 이름을 쓴다 — 앞 실행이 끊겨
+        # 남긴 복구본을 0바이트로 덮어쓰던 결함, 이름(stem)이 같은 책 두 권이 동시에 돌 때 열린 파일
+        # 이름 바꾸기가 WinError 32 로 실패하거나 두 책 쪽이 한 파일에 섞이던 결함(감사 18번)
+        if self.path.exists():
+            try:
+                if self.path.stat().st_size:
+                    raise OSError("앞 실행의 복구본")
+                self.path.unlink()          # 빈 찌꺼기는 지우고 같은 이름을 쓴다
+            except OSError:
+                ts = time.strftime('%Y%m%d_%H%M%S')
+                self.path = RESULTS_DIR / f"{stem}_{suffix}_{ts}.{self.ext}"
+                k = 2
+                while self.path.exists():
+                    self.path = RESULTS_DIR / f"{stem}_{suffix}_{ts}_{k}.{self.ext}"
+                    k += 1
+        self._fh  = open(self.path, "x", encoding="utf-8")
 
     def append(self, chunk: str) -> None:
         self._fh.write(chunk + "\n\n")

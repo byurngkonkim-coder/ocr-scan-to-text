@@ -19,3 +19,20 @@ def test_previous_checkpoint_survives_rerun(tmp_path, monkeypatch):
     second.close()
     kept = [p for p in tmp_path.iterdir() if "앞 실행" in p.read_text(encoding="utf-8")]
     assert len(kept) == 1 and kept[0] != second.path
+
+
+def test_same_stem_books_running_together_get_separate_checkpoints(tmp_path, monkeypatch):
+    # 다른 폴더의 같은 이름 책 두 권이 동시에 돌면 열린 복구본 이름 바꾸기가 WinError 32 로 실패하거나
+    # 두 책 쪽이 한 파일에 섞였다(감사 18번)
+    monkeypatch.setattr(ocr_gradio, "RESULTS_DIR", tmp_path)
+    a = ocr_gradio._CleanCheckpoint("001", OutputFormat.TXT, suffix="OCR중")
+    a.append("A 책 1쪽")
+    b = ocr_gradio._CleanCheckpoint("001", OutputFormat.TXT, suffix="OCR중")   # A 가 열고 있는 중
+    b.append("B 책 1쪽")
+    c = ocr_gradio._CleanCheckpoint("001", OutputFormat.TXT, suffix="OCR중")
+    for ck in (a, b, c):
+        ck.close()
+    assert len({a.path, b.path, c.path}) == 3
+    assert "A 책" in a.path.read_text(encoding="utf-8") and "A 책" not in b.path.read_text(encoding="utf-8")
+    import batch_runner
+    assert all(batch_runner._PARTIAL_RE.search(ck.path.stem) for ck in (a, b, c))

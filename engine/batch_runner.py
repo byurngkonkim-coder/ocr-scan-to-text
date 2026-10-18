@@ -21,7 +21,7 @@ from types import SimpleNamespace
 
 INPUT_DIR = Path(__file__).resolve().parent.parent / "01_입력"   # 기본값 — ④ 탭에서 다른 폴더로 바꿀 수 있다
 _EXTS = {".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".txt"}   # .txt 는 OCR 없이 문장 정제만
-_PARTIAL_RE = re.compile(r"_(?:정제중|OCR중)(?:_\d{8}_\d{6})?$|_미완$")   # 중간 저장분·앞부분만 읽은 결과
+_PARTIAL_RE = re.compile(r"_(?:정제중|OCR중)(?:_\d{8}_\d{6}(?:_\d+)?)?$|_미완$")   # 중간 저장분·앞부분만 읽은 결과
 # process_full 위치 인자(lang, fmt, no_preprocess, no_fallback, …) 중 no_fallback 자리.
 # 일괄 처리는 로컬 전용 — API 요금은 최소화(사용자 설계원칙 2026-10-18)
 NO_FALLBACK_ARG = 3
