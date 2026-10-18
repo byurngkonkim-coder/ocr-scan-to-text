@@ -878,6 +878,9 @@ def _run_digital_pdf(file_path: Path, pages_text: list[str], out_fmt: OutputForm
                 )
         except StopIteration as stop:
             cleaned_text = stop.value or ""
+        except Exception as e:   # 정제 오류 하나로 OCR 결과까지 잃지 않게 — 정제 없이 저장한다
+            cleaned_text = None
+            step_logs.append(f"  ⚠️ 문장 정제 미적용 — 정제 오류로 원문 그대로 저장 ({type(e).__name__}: {e})")
         cleaned_text = _shrink_guard(pages_in, cleaned_text, step_logs, front_matter)
         if cleaned_text:
             step_logs.append(f"  📝 문장 정제 완료 ({len(cleaned_text):,}자)")
@@ -1493,6 +1496,9 @@ def _run_ocr(
                 )
         except StopIteration as stop:
             cleaned_text = stop.value or ""
+        except Exception as e:   # 정제 오류 하나로 OCR 결과까지 잃지 않게 — 정제 없이 저장한다
+            cleaned_text = None
+            step_logs.append(f"  ⚠️ 문장 정제 미적용 — 정제 오류로 원문 그대로 저장 ({type(e).__name__}: {e})")
         cleaned_text = _shrink_guard([p.corrected_text for p in content_pages], cleaned_text, step_logs,
                                      front_matter)
         if cleaned_text:

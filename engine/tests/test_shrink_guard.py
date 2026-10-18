@@ -62,3 +62,17 @@ def test_normal_clean_kept(sandbox, monkeypatch, tmp_path):
     Image.new("RGB", (50, 50), "white").save(img)
     last = _run(img, monkeypatch, _cleaner(BODY[:-20]))
     assert "분량 급감" not in str(last[1])
+
+
+def test_cleanup_exception_saves_original_instead_of_failing(sandbox, monkeypatch, tmp_path):
+    # 정제 중 예외 하나로 몇 시간 OCR 한 책이 '실패'·빈 _정제중 파일만 남던 것(감사 16번)
+    img = tmp_path / "a.png"
+    from PIL import Image
+    Image.new("RGB", (50, 50), "white").save(img)
+
+    def boom(pages, **kw):
+        yield 0, 2
+        raise IndexError("규칙 회귀")
+    last = _run(img, monkeypatch, boom)
+    assert last[3] and "경영은 사람을" in ocr_gradio.Path(last[3]).read_text(encoding="utf-8")
+    assert "문장 정제 미적용" in str(last[1])
