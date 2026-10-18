@@ -2,6 +2,7 @@
 from __future__ import annotations
 import html
 import os
+import re
 import sys
 import time
 import tempfile
@@ -384,6 +385,27 @@ def _progress_html(pages_done: int, total: int, label: str,
   <div class="prog-top"><span>{label}{elapsed_html}</span><span class="prog-num">{step_text}</span></div>
   <div class="prog-track"><div class="{fill_cls}" style="width:{pct}%"></div></div>
 </div>"""
+
+
+# 정제 후 한글이 원문의 이 비율 밑이면 정제본을 버린다(분량 급감). 실측(2026-10-19, 보관 원문 73권):
+# 보존율 최소 0.955(중앙 0.998), 부속물 제거를 켜면 최소 0.843(중앙 0.986)
+_SHRINK_LIMIT = 0.85
+_SHRINK_LIMIT_FRONT = 0.70
+
+
+def _shrink_guard(src_pages: list[str], cleaned: str | None, logs: list[str],
+                  front_matter: bool = False) -> str | None:
+    """내장 규칙 정제가 본문을 크게 지웠으면 정제본을 버리고(None → 정제 없이 저장) 경고를 남긴다.
+    LLM 정제에는 분량 가드가 있지만 내장 규칙에는 없어, 규칙 회귀로 본문이 지워져도 '완료'였다."""
+    if not cleaned:
+        return cleaned
+    src = sum(len(re.findall(r"[가-힣]", p)) for p in src_pages)
+    out = len(re.findall(r"[가-힣]", cleaned))
+    if src >= 200 and out < src * (_SHRINK_LIMIT_FRONT if front_matter else _SHRINK_LIMIT):
+        logs.append(f"  ⚠️ 문장 정제 미적용 — 정제 후 한글이 {100 - out * 100 // src}% 줄어(분량 급감) "
+                    "정제 전 원문으로 저장")
+        return None
+    return cleaned
 
 
 def _clean_degrade_note(crep: dict | None) -> str:
@@ -856,6 +878,7 @@ def _run_digital_pdf(file_path: Path, pages_text: list[str], out_fmt: OutputForm
                 )
         except StopIteration as stop:
             cleaned_text = stop.value or ""
+        cleaned_text = _shrink_guard(pages_in, cleaned_text, step_logs, front_matter)
         if cleaned_text:
             step_logs.append(f"  📝 문장 정제 완료 ({len(cleaned_text):,}자)")
         _crep = crep or None
@@ -1470,6 +1493,8 @@ def _run_ocr(
                 )
         except StopIteration as stop:
             cleaned_text = stop.value or ""
+        cleaned_text = _shrink_guard([p.corrected_text for p in content_pages], cleaned_text, step_logs,
+                                     front_matter)
         if cleaned_text:
             step_logs.append(f"  📝 문장 정제 완료 ({len(cleaned_text):,}자, 마커 없는 클린 텍스트)")
         _crep = crep or None
