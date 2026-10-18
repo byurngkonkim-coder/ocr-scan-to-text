@@ -124,3 +124,32 @@ class TestLlmCorrectorLengthGuard:
         monkeypatch.setattr(llm_corrector, "_call_api", lambda c, k: c.strip().replace("햇삻", "햇살"))
         out = llm_corrector.correct("창문의 햇삻이\n들어온다\n")
         assert out == "창문의 햇살이\n들어온다\n"
+
+
+def _fake_client(resp, captured=None):
+    def create(**kw):
+        return resp
+    return SimpleNamespace(messages=SimpleNamespace(create=create))
+
+
+def test_claude_vision_empty_text_is_rejected(monkeypatch):
+    # end_turn 인데 글자가 없는 응답을 신뢰도 95로 받아들여 쪽이 비던 것 — 예외로 내서 로컬 결과·검토 필요로
+    from PIL import Image
+    resp = SimpleNamespace(stop_reason="end_turn", content=[SimpleNamespace(text="  \n")],
+                           usage=SimpleNamespace(input_tokens=1, output_tokens=1))
+    monkeypatch.setattr(claude_vision, "_get_client", lambda: _fake_client(resp))
+    with pytest.raises(RuntimeError):
+        claude_vision.run(Image.new("RGB", (10, 10)))
+
+
+def test_anthropic_clients_have_timeout(monkeypatch):
+    # 시간 제한이 없으면 SDK 기본(10분 × 재시도)으로 한 쪽에 최대 약 30분 멈췄다
+    anthropic = pytest.importorskip("anthropic")
+    seen = []
+    monkeypatch.setattr(anthropic, "Anthropic", lambda **kw: seen.append(kw) or object())
+    monkeypatch.setattr(claude_vision, "_client", None)
+    monkeypatch.setattr("core.config.get_api_key", lambda: "test-key")
+    claude_vision._get_client()
+    monkeypatch.setattr(llm_corrector, "_client", None)
+    llm_corrector._get_client("test-key")
+    assert len(seen) == 2 and all(0 < kw.get("timeout", 0) <= 180 for kw in seen)

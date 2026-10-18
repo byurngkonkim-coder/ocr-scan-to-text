@@ -99,7 +99,7 @@ def _get_client(api_key: str):
     if _client is None:
         try:
             import anthropic
-            _client = anthropic.Anthropic(api_key=api_key)
+            _client = anthropic.Anthropic(api_key=api_key, timeout=120.0, max_retries=1)   # 무한 대기 방지
         except ImportError:
             raise RuntimeError("pip install anthropic 를 실행해 주세요.")
     return _client

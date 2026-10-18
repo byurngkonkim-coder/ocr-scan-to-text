@@ -40,7 +40,8 @@ def _get_client():
                     "설정 방법 1: python ocr_tool.py --setup\n"
                     "설정 방법 2: set ANTHROPIC_API_KEY=sk-ant-..."
                 )
-            _client = anthropic.Anthropic(api_key=api_key)
+            # 시간 제한 — SDK 기본(10분 × 재시도 2회)이면 응답 없는 쪽 하나에 최대 약 30분 멈춘다
+            _client = anthropic.Anthropic(api_key=api_key, timeout=120.0, max_retries=1)
         except ImportError:
             raise RuntimeError(
                 "anthropic 패키지가 설치되어 있지 않습니다.\n"
@@ -110,6 +111,8 @@ def run(image: Image.Image, lang_hint: str = "kor+eng") -> OCRResult:
         )
 
     text = response.content[0].text if response.content else ""
+    if not text.strip():   # 예외 없음 ≠ 성공 — 빈 응답을 신뢰도 95로 받으면 쪽이 조용히 빈다
+        raise RuntimeError("Claude Vision 빈 응답 — 로컬 결과로 넘김")
 
     # 사용량 기록
     try:
