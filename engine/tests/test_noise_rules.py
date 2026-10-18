@@ -382,3 +382,14 @@ def test_latin_attribution_lines_open_groups_and_stay_apart():
     assert "- 새뮤얼테일러클리지Samuel Taylor Coleridge,1772-1834, 영국의 시인." in lines   # 붙은 저자 줄 분리
     # 두 줄 명언은 통째로 한 그룹 — 그룹 표지는 둘째 명언 머리에만
     assert lines.index(nr.GROUP_MARK) == lines.index("충고는 하늘에서 내리는 눈과 같다") - 1
+
+
+def test_year_followed_by_word_starting_with_won_is_not_price():
+    # '1770-1823 원수가'(원수=元帥)를 책값으로 보고 본문 쪽을 '다른 책 광고'로 지우던 것(감사 27번)
+    body = ("아우스터리츠 전투는 지금의 체코에서 벌어졌는데, 다부Louis-Nicolas Davout, 1770-1823 원수가 "
+            "110킬로미터의 거리를 이틀 만에 강행군으로 돌파해서 전장에 도착했다. 『손자병법』 옮김 322쪽.")
+    pages = [body] * 40
+    out = nr.drop_book_matter_rules(pages, [])
+    assert out[3] == body
+    ad = "경영의 실제 | 피터 드러커 지음 | 이재규 옮김 | 15,000원"
+    assert nr.drop_book_matter_rules([ad] + [body] * 39, [])[0] == ""
