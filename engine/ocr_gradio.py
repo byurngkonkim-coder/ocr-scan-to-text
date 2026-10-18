@@ -7,6 +7,7 @@ import re
 import sys
 import time
 import tempfile
+import threading
 import unicodedata
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
@@ -1612,10 +1613,13 @@ def _run_ocr(
         # 조용히 넘기면 화면엔 '완료'만 뜨고 파일은 없다 — 반드시 표면화한다.
         step_logs.append(f"  ⚠ 이력 보관소 저장 실패: {e}")
 
-    _LAST_REVIEW.clear()
-    if review_count:
-        _LAST_REVIEW.update(file=str(file_path), result=result, cleanup=cleanup,
-                            front_matter=front_matter, out_fmt=out_fmt, lang=lang, total=total)
+    # '검토 필요 쪽 다시 읽기'는 ① 탭 버튼 — ④ 일괄 작업이 끝날 때 그 상태를 지우거나 덮지 않는다
+    # (다시 읽기 도중 일괄 책이 끝나 KeyError 로 유료 다시 읽기 결과를 잃던 것, 감사 20번)
+    if not threading.current_thread().name.startswith("batch-runner"):
+        _LAST_REVIEW.clear()
+        if review_count:
+            _LAST_REVIEW.update(file=str(file_path), result=result, cleanup=cleanup,
+                                front_matter=front_matter, out_fmt=out_fmt, lang=lang, total=total)
 
     head = (f"⚠ 부분 저장  |  전체 {total}p 중 {start_page - 1 + processed}p까지만 처리 — 다시 처리해 주세요"
             if render_err is not None else "✅ 완료")
@@ -1672,7 +1676,7 @@ def reread_review_pages(file_obj):
     """마지막 처리에서 '검토 필요'로 남은 쪽만 Vision 으로 다시 읽어 결과 파일을 새로 저장한다.
     사용자가 쪽 수·예상 요금을 보고 누른 것이라 문서당 상한(_VisionBudget)은 적용하지 않는다."""
     file_obj = _first_file(file_obj)
-    st = _LAST_REVIEW
+    st = dict(_LAST_REVIEW)   # 다시 읽는 동안 다른 처리가 바꿔도 이 실행은 처음 상태로 끝낸다
     if not st or file_obj is None or Path(file_obj.name) != Path(st["file"]):
         return "⚠ 다시 읽을 결과가 없습니다 — 이 파일을 먼저 전체 처리하세요.", gr.update(), None, gr.update(visible=False)
     if not claude_vision.is_available():

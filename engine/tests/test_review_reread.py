@@ -58,3 +58,24 @@ def test_button_shows_count_and_cost(env):
 def test_other_file_is_refused(env):
     status, *_ = ocr_gradio.reread_review_pages(SimpleNamespace(name="다른파일.pdf"))
     assert "먼저 전체 처리" in status and not env
+
+
+def test_state_cleared_mid_reread_does_not_lose_paid_result(env, monkeypatch):
+    # 다시 읽는 도중 ④ 일괄 작업이 책을 끝내며 _LAST_REVIEW 를 비우면 KeyError 로 유료 결과를 잃었다
+    def run_and_clear(img, lang_hint="kor+eng"):
+        ocr_gradio._LAST_REVIEW.clear()
+        return OCRResult(text="비전으로 다시 읽은 본문입니다.", confidence=95.0, engine=OCREngine.GEMINI)
+    monkeypatch.setattr(ocr_gradio.claude_vision, "run", run_and_clear)
+    status, _p, path, _b = ocr_gradio.reread_review_pages(SimpleNamespace(name=str(PNG)))
+    assert "1쪽 교체" in status and "비전으로 다시 읽은" in Path(path).read_text(encoding="utf-8")
+
+
+def test_batch_job_does_not_touch_tab1_review_state(env):
+    import threading
+    before = dict(ocr_gradio._LAST_REVIEW)
+    t = threading.Thread(target=lambda: list(ocr_gradio.process_full(
+        SimpleNamespace(name=str(PNG)), "kor+eng", "txt", True, True, True, False, 0, "", "RapidOCR 우선",
+        cleanup=False, progress=lambda *a, **k: None)), name="batch-runner-9")
+    t.start()
+    t.join(120)
+    assert ocr_gradio._LAST_REVIEW == before
