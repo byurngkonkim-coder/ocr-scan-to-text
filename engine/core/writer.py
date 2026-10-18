@@ -10,10 +10,11 @@ REVIEW_MARKER_TXT = "⚠ [검토필요]"
 REVIEW_MARKER_MD = "> ⚠ **검토 필요**"
 
 
-def write(result: FileResult, output_dir: str | Path, fmt: OutputFormat = OutputFormat.TXT) -> Path:
+def write(result: FileResult, output_dir: str | Path, fmt: OutputFormat = OutputFormat.TXT,
+          stem: str | None = None) -> Path:
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    stem     = result.source_path.stem
+    stem     = stem or result.source_path.stem
     out_path = out_dir / f"{stem}.{fmt.value}"
     content  = _build_md(result) if fmt == OutputFormat.MD else _build_txt(result)
     out_path.write_text(content, encoding="utf-8")

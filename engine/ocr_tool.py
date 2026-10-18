@@ -335,6 +335,19 @@ def _show_settings_table():
 # 내부 처리 함수
 # ══════════════════════════════════════════════════════════════════════════════
 
+# 이번 실행에서 쓴 결과 파일 → 원본. 폴더를 재귀로 모으면 '상권/본문.png'·'하권/본문.png' 처럼 이름이
+# 같은 파일이 생기는데, 결과 이름이 stem 만 써서 뒤 파일이 앞 결과를 조용히 덮어썼다(감사 28번)
+_WRITTEN: dict[Path, Path] = {}
+
+
+def _unique_stem(file_path: Path, output_dir: str, fmt: OutputFormat) -> str:
+    stem, k = file_path.stem, 2
+    while _WRITTEN.get(Path(output_dir) / f"{stem}.{fmt.value}", file_path) != file_path:
+        stem, k = f"{file_path.stem}_{k}", k + 1
+    _WRITTEN[Path(output_dir) / f"{stem}.{fmt.value}"] = file_path
+    return stem
+
+
 def _process_file(
     file_path: Path, output_dir: str, fmt: OutputFormat,
     lang: str, dpi: int,
@@ -362,7 +375,7 @@ def _process_file(
                 vision_budget=vision_budget,
             )
             result.pages.append(page_result)
-        writer.write(result, output_dir, fmt)
+        writer.write(result, output_dir, fmt, stem=_unique_stem(file_path, output_dir, fmt))
     except Exception as e:
         result.success = False
         result.error_message = str(e)
