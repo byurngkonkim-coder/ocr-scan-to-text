@@ -81,3 +81,40 @@ class TestEmptyTextRejected:
     def test_real_bullet_list_accepted(self, monkeypatch):
         page = "경영자의 과업은 다음과 같다.\n• 마케팅\n• 혁신\n• 생산성\n"
         assert self._run(monkeypatch, page).text == page
+
+
+
+def _client(responses, calls):
+    def gen(**k):
+        calls.append(k["config"].thinking_config)
+        fr, text = responses[min(len(calls), len(responses)) - 1]
+        return SimpleNamespace(candidates=[SimpleNamespace(finish_reason=fr)], text=text,
+                               usage_metadata=SimpleNamespace(prompt_token_count=1, candidates_token_count=1,
+                                                              thoughts_token_count=5))
+    return lambda: SimpleNamespace(models=SimpleNamespace(generate_content=gen))
+
+
+def test_recitation_not_retried(monkeypatch):
+    # RECITATION 은 다시 보내도 같아(실측) 유료 호출만 한 번 더 나갔다(감사 29번)
+    import pytest
+    from PIL import Image
+    calls = []
+    monkeypatch.setattr(gemini_vision, "_get_client", _client([("RECITATION", "")], calls))
+    with pytest.raises(RuntimeError):
+        gemini_vision.run(Image.new("RGB", (20, 20), "white"))
+    assert len(calls) == 1
+
+
+def test_retry_keeps_thinking_off(monkeypatch):
+    # 빈 응답 재시도가 thinking 을 켜 추론 토큰까지 과금됐다
+    from PIL import Image
+    calls = []
+    monkeypatch.setattr(gemini_vision, "_get_client", _client([("STOP", ""), ("STOP", "본문 " * 20)], calls))
+    monkeypatch.setattr(gemini_vision.config, "get_gemini_disable_thinking", lambda: True)
+    gemini_vision.run(Image.new("RGB", (20, 20), "white"))
+    assert len(calls) == 2 and all(c is not None and c.thinking_budget == 0 for c in calls)
+
+
+def test_unknown_gemini_model_priced_as_gemini():
+    from core import usage_tracker
+    assert abs(usage_tracker._cost_usd(1_000_000, 0, "gemini-9.9-flash") - 0.30) < 1e-9

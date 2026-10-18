@@ -109,6 +109,9 @@ def _prepare_jpeg_bytes(image: Image.Image, max_edge: int | None = None) -> byte
     return buf.getvalue()
 
 
+_NO_RETRY = {"RECITATION", "SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST", "SPII"}
+
+
 def _record_usage(response, kind: str = "vision") -> None:
     """사용량 기록 (best-effort). kind='vision'(OCR) | 'llm'(텍스트 정제)."""
     try:
@@ -118,6 +121,7 @@ def _record_usage(response, kind: str = "vision") -> None:
             return
         inp = getattr(usage, "prompt_token_count", 0) or 0
         out = getattr(usage, "candidates_token_count", 0) or 0
+        out += getattr(usage, "thoughts_token_count", 0) or 0   # 추론 토큰도 출력 요금으로 과금된다
         model = config.get_gemini_model()
         if kind == "llm":
             record_llm(input_tokens=inp, output_tokens=out, model=model)
@@ -216,20 +220,19 @@ def run(image: Image.Image, lang_hint: str = "kor+eng") -> OCRResult:
                 last_err = RuntimeError(
                     f"Gemini 비정상 종료 finish_reason={fr} "
                     f"(텍스트 {len(response.text or '')}자) — 페이지 소실 방지 차단")
-                disable_thinking = False
-                continue
+                if fr in _NO_RETRY:   # 인용·안전 차단은 다시 보내도 같다(실측) — 요금만 한 번 더
+                    break
+                continue   # 재시도도 thinking 끈 채로 — 켜면 추론 토큰이 과금된다
             # 정상 종료(STOP/UNKNOWN)인데 본문이 비면 쪽이 경고 없이 사라진다 → 폴백
             # (빈 페이지는 blank_detector 가 OCR 전에 걸러낸다)
             if not (response.text or "").strip():
                 last_err = RuntimeError(
                     f"Gemini 빈 응답 finish_reason={fr} — 페이지 소실 방지 차단")
-                disable_thinking = False
-                continue
+                continue   # 재시도도 thinking 끈 채로 — 켜면 추론 토큰이 과금된다
             if looks_fabricated(response.text):
                 last_err = RuntimeError(
                     "Gemini 출력이 책과 무관한 생성 글로 의심됨(마크다운 강조·글머리표) — 원문 소실 방지 차단")
-                disable_thinking = False
-                continue
+                continue   # 재시도도 thinking 끈 채로 — 켜면 추론 토큰이 과금된다
             return OCRResult(
                 text=response.text or "",
                 confidence=95.0,
@@ -276,8 +279,9 @@ def run_text(prompt: str) -> str:
                 last_err = RuntimeError(
                     f"Gemini 비정상 종료 finish_reason={fr} "
                     f"(텍스트 {len(response.text or '')}자)")
-                disable_thinking = False
-                continue
+                if fr in _NO_RETRY:   # 인용·안전 차단은 다시 보내도 같다(실측) — 요금만 한 번 더
+                    break
+                continue   # 재시도도 thinking 끈 채로 — 켜면 추론 토큰이 과금된다
             return response.text or ""
         except Exception as e:  # noqa: BLE001
             _check_block(e)

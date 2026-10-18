@@ -179,7 +179,9 @@ def format_summary() -> str:
 
 def _cost_usd(inp: int, out: int,
               model: str = "claude-haiku-4-5-20251001") -> float:
-    p = _PRICING.get(model, _DEFAULT_PRICE)
+    # 표에 없는 Gemini 모델(새 버전)을 Claude 요율로 계산하던 것 — Gemini 는 Flash 요율로 어림한다
+    p = _PRICING.get(model) or (_PRICING["gemini-2.5-flash"] if str(model).startswith("gemini")
+                                else _DEFAULT_PRICE)
     return (inp * p["input"] + out * p["output"]) / 1_000_000
 
 
