@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+import contextvars
 import html
 import re
 import threading
@@ -44,6 +45,7 @@ _lock = threading.Lock()
 _jobs: list[Job] = []
 _stop = threading.Event()
 _workers: list[threading.Thread] = []
+_END = object()
 direct_running = threading.Event()   # ① 탭에서 직접 처리 중
 
 
@@ -104,6 +106,7 @@ def _claim_job() -> Job | None:
 
 def _run() -> None:
     from ocr_gradio import process_full     # 순환 import 방지 — 실행 시점에 가져온다
+    from core import config
     while not _stop.is_set():
         while direct_running.is_set() and not _stop.is_set():
             time.sleep(2)                   # ① 탭 처리가 끝나기를 기다린다
@@ -111,10 +114,12 @@ def _run() -> None:
         if job is None:
             break
         last = None
+        ctx = contextvars.copy_context()   # 작업마다 따로 — 시작 때 여백 설정을 고정(config.pin_margin)
+        ctx.run(config.pin_margin)
         try:
             gen = process_full(SimpleNamespace(name=str(job.path)), *job.args,
                                progress=lambda *a, **k: None, **job.kwargs)
-            for last in gen:
+            for last in iter(lambda: ctx.run(next, gen, _END), _END):
                 if _stop.is_set():
                     gen.close()
                     job.state = "중단"

@@ -1,5 +1,6 @@
 """설정 파일 관리 — API 키 및 사용자 옵션 로컬 저장"""
 from __future__ import annotations
+import contextvars
 import json
 import os
 from pathlib import Path
@@ -293,8 +294,21 @@ def get_remove_front_matter() -> bool:
 
 # ── 여백 마진 제거 필터 게터 ──────────────────────────────────────────────────
 
+# ④ 일괄 작업은 시작할 때의 여백 설정으로 끝까지 간다 — ① 탭에서 처리 버튼을 누를 때마다 여백 설정이
+# config.json 에 저장되는데, 돌고 있는 일괄 작업의 다음 쪽부터 바로 적용됐다(감사 19번)
+_margin_pin: contextvars.ContextVar = contextvars.ContextVar("margin_pin", default=None)
+
+
+def pin_margin() -> None:
+    """지금 여백 설정을 현재 컨텍스트에 고정한다(batch_runner 가 작업마다 따로 연 컨텍스트에서 부른다)."""
+    _margin_pin.set(None)
+    _margin_pin.set((get_enable_margin_filter(), get_margin_top_ratio(), get_margin_bottom_ratio()))
+
+
 def get_enable_margin_filter() -> bool:
     """머리글·바닥글·쪽번호 물리 필터 활성화 여부. 기본 False."""
+    if (pin := _margin_pin.get()) is not None:
+        return pin[0]
     return bool(load().get("enable_margin_filter", False))
 
 
@@ -305,6 +319,8 @@ def get_auto_margin() -> bool:
 
 def get_margin_top_ratio() -> float:
     """상단 여백 비율 (0.0 ~ 1.0). 기본 0.06."""
+    if (pin := _margin_pin.get()) is not None:
+        return pin[1]
     try:
         val = float(load().get("margin_top_ratio", 0.06))
         return max(0.0, min(1.0, val))
@@ -314,6 +330,8 @@ def get_margin_top_ratio() -> float:
 
 def get_margin_bottom_ratio() -> float:
     """하단 여백 비율 (0.0 ~ 1.0). 기본 0.06."""
+    if (pin := _margin_pin.get()) is not None:
+        return pin[2]
     try:
         val = float(load().get("margin_bottom_ratio", 0.06))
         return max(0.0, min(1.0, val))

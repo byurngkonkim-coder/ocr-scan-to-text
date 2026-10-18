@@ -294,3 +294,24 @@ def test_list_inputs_does_not_match_partial_names(monkeypatch, tmp_path):
     monkeypatch.setattr(br, "_file_kind", lambda p: (1, "스캔"))
     rows = br.list_inputs(out)
     assert [(r["name"], r["status"]) for r in rows] == [("경영.png", "미처리"), ("경영전략.png", "완료")]
+
+
+def test_margin_setting_changed_mid_batch_does_not_leak(monkeypatch, tmp_path):
+    # ① 탭에서 처리 버튼을 누르면 여백 설정이 저장되는데, 돌고 있는 일괄 작업의 다음 쪽부터 바로 적용됐다
+    seen = []
+    state = {"on": False}
+    monkeypatch.setattr(config, "load", lambda: {"enable_margin_filter": state["on"]})
+
+    def process_full(file_obj, *args, progress=None, **kwargs):
+        seen.append(config.get_enable_margin_filter())
+        state["on"] = True                      # 작업 도중 ① 탭이 설정을 바꿈
+        from concurrent.futures import ThreadPoolExecutor
+        import contextvars
+        with ThreadPoolExecutor(1) as ex:       # 쪽 읽기는 작업 스레드에서 돈다
+            seen.append(ex.submit(contextvars.copy_context().run, config.get_enable_margin_filter).result())
+        yield ("", "완료", "", None, None, None)
+    monkeypatch.setattr(ocr_gradio, "process_full", process_full)
+    br.submit([tmp_path / "a.pdf"], ("kor+eng",), {})
+    _wait_idle()
+    assert seen == [False, False]
+    assert config.get_enable_margin_filter() is True       # 일괄 밖(① 탭)은 바뀐 설정을 그대로 쓴다

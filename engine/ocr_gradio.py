@@ -1,5 +1,6 @@
 """Gradio 웹 UI — OCR 스캔파일 텍스트추출 도구 (localhost:7860)"""
 from __future__ import annotations
+import contextvars
 import html
 import os
 import re
@@ -1427,7 +1428,7 @@ def _run_ocr(
                 except Exception as e:   # 손상 페이지 렌더 실패 등 — 읽은 쪽까지는 저장
                     render_err = e
                     break
-                inflight.append((page_num, executor.submit(_read, image, page_num)))
+                inflight.append((page_num, executor.submit(contextvars.copy_context().run, _read, image, page_num)))
             if not inflight:
                 break
             page_num, fut = inflight.popleft()
