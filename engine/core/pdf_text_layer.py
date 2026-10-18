@@ -235,7 +235,8 @@ def _reocr_line(page, rect, orig: str) -> str:
         img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
         if pad:
             img = ImageOps.expand(img, border=pad, fill="white")
-        res = engine(np.array(img), use_det=False, use_cls=False, use_rec=True)
+        # text_score 도 명시 — 쪽 판독(rapidocr_engine._read)이 엔진에 0 으로 남겨 둔다
+        res = engine(np.array(img), use_det=False, use_cls=False, use_rec=True, text_score=0.5)
         txt = " ".join(str(t) for t in (getattr(res, "txts", None) or [])).strip()
         cand = (_agreement(orig, txt) or 0, len(txt), txt)
         best = cand if best is None or cand > best else best

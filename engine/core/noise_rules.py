@@ -162,10 +162,17 @@ def _is_noise_token(t: str) -> bool:
     return (not good and bool(bad or hanja)) or (bad + hanja >= 2 and bad + hanja >= len(t) / 2)
 
 
+# 한자 + 조사·서술격 조사('法이다"라고'·'道이고,'·'時制는계절의'·'較(교)와') — 로컬 OCR 이 한자를 읽게 된 뒤
+# (core.hanja_reader, 2026-10-18) 생긴 정상 표기. OCR 이 뒤 낱말을 붙여 읽어도('險易은험함과') 본문이다.
+# 잡음에 흔한 한 획 글자 하나('一오스틴'·'乂가족')와 조사로 시작하지 않는 것('臣麗因주기도문은')은 여전히 뗀다
+_HANJA_WORD_RE = re.compile(r"^(?:[一-鿿]{2,}|(?![一乂卜丶丨亅])[一-鿿])(?:\([가-힣]+\))?"
+                            r"(?:이다|이고|이며|이라|이란|라고|라는|란|으로|에서|에게|은|는|이|가|을|를|의|에|와|과|로|도|만)")
+
+
 def _strip_token_edges(t: str, keep_guil: bool = False) -> str:
     """'一오스틴' → '오스틴', '臣麗因주기도문은' → '주기도문은' (한글 어절 앞뒤에 붙은 한자·기호).
     keep_guil: 줄에 짝 맞는 '«…»'가 있으면 '«»'는 떼지 않는다."""
-    if not re.search(r"[가-힣]{2}", t) or re.search(r"\([一-鿿]+\)", t):
+    if not re.search(r"[가-힣]{2}", t) or re.search(r"\([一-鿿]+\)", t) or _HANJA_WORD_RE.match(t):
         return t
     cls = "[一-鿿㐀-䶿々^■•*~`]" if keep_guil else "[一-鿿㐀-䶿々^■•*«»~`]"
     return re.sub(rf"^{cls}+|{cls}+$", "", t)

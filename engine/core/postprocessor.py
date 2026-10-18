@@ -153,8 +153,9 @@ def _strip_margin_noise(line: str) -> str:
         t = tok.strip()
         if not t:
             return True
-        # 한글도 영문자도 없는 토큰(숫자·기호만) = 마진 노이즈 후보
-        return re.search(r'[가-힣A-Za-z]', t) is None
+        # 한글·영문자·한자가 없는 토큰(숫자·기호만) = 마진 노이즈 후보
+        # 한자도 글자다 — 빼면 한문 줄('夫未戰而廟算勝者, 得算多也.')이 통째로 지워진다(2026-10-18)
+        return re.search(r'[가-힣A-Za-z一-鿿]', t) is None
 
     n = 0
     for tok in tokens:

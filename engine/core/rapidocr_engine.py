@@ -12,6 +12,7 @@ from typing import Optional
 import numpy as np
 from PIL import Image
 
+from core import config, hanja_reader
 from core.char_normalizer import has_jamo_decomposition
 from core.types import OCREngine, OCRResult
 
@@ -70,13 +71,25 @@ def get_engine(lang: str = "kor+eng"):
     return _ENGINE_INSTANCE
 
 
+def _read(engine, rgb_array: np.ndarray):
+    """한글 엔진 호출 — 언제나 같은 인자로 부른다.
+
+    RapidOCR 은 호출 인자(text_score·return_word_box 등)를 엔진 설정에 남긴다. 쪽 판독은 여러 스레드가
+    한 엔진을 함께 쓰므로 호출마다 인자가 다르면 서로 설정을 덮어쓴다 — 점수 문턱은 받은 뒤 직접 건다.
+    """
+    return engine(rgb_array, use_det=True, use_cls=False, use_rec=True,
+                  return_word_box=True, return_single_char_box=True, text_score=0.0)
+
+
 def read_boxes(image: Image.Image, lang: str = "kor+eng") -> list[tuple[str, float, tuple[int, int, int, int]]]:
     """이미지의 글자 줄마다 (글자, 신뢰도 0~1, 상자 x·y·w·h) — 그림·표 감지에서 쓴다."""
-    result = get_engine(lang=lang)(np.array(image.convert("RGB")))
+    result = _read(get_engine(lang=lang), np.array(image.convert("RGB")))
     if result is None or getattr(result, "txts", None) is None or getattr(result, "boxes", None) is None:
         return []
     out = []
     for text, score, box in zip(result.txts, result.scores, result.boxes):
+        if float(score) < hanja_reader.TEXT_SCORE:
+            continue
         pts = np.asarray(box)
         x0, y0 = pts.min(axis=0)
         x1, y1 = pts.max(axis=0)
@@ -233,7 +246,7 @@ def run(image: Image.Image, lang: str = "kor+eng", fast: bool = False, refine: b
     rgb_array = np.array(image_rgb)
 
     # RapidOCR 실행
-    result = engine(rgb_array)
+    result = _read(engine, rgb_array)
 
     if result is None or getattr(result, "txts", None) is None or not result.txts:
         return OCRResult(
@@ -243,24 +256,17 @@ def run(image: Image.Image, lang: str = "kor+eng", fast: bool = False, refine: b
             has_jamo_split=False,
         )
 
-    txts = result.txts
-    scores = getattr(result, "scores", None) or [1.0] * len(txts)
-
-    # 개별 라인 텍스트 및 신뢰도 수집
-    lines: list[str] = []
-    confs: list[float] = []
-    line_boxes = []
-    boxes = getattr(result, "boxes", None)
-
-    for idx, text in enumerate(txts):
-        line_str = str(text).strip()
-        if line_str:
-            lines.append(line_str)
-            if boxes is not None and idx < len(boxes):
-                line_boxes.append(boxes[idx])
-            score = float(scores[idx]) if idx < len(scores) else 1.0
-            # 0.0~1.0 score -> 0.0~100.0 스케일
-            confs.append(score * 100.0)
+    # 한국어 모델이면 한자 자리를 중국어 모델로 다시 읽어 끼운다(core.hanja_reader). 끄면 한글만.
+    korean = any(k in lang.lower() for k in ("kor", "korean", "ko"))
+    if korean and config.get_hanja_reading():
+        lines, line_boxes, line_scores = hanja_reader.fill(rgb_array, result)
+    else:
+        lines, line_boxes, line_scores = [], [], []
+        for text, score, box in zip(result.txts, result.scores, result.boxes):
+            if float(score) >= hanja_reader.TEXT_SCORE and str(text).strip():
+                lines.append(str(text).strip()); line_boxes.append(box); line_scores.append(float(score))
+    # 0.0~1.0 score -> 0.0~100.0 스케일. 한자로 되살린 한문 줄(점수 0)은 쪽 신뢰도에 넣지 않는다
+    confs = [s * 100.0 for s in line_scores if s > 0]
 
     if len(line_boxes) == len(lines):
         lines, line_boxes = _order_columns(lines, line_boxes)

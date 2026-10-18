@@ -32,6 +32,7 @@ _DEFAULTS: dict = {
     "vision_max_ratio": 0.1,        # 비용 우선: 문서당 Vision 폴백 쪽 상한(비율, 최소 3쪽)
     "local_cleanup_engine": "rules", # 비용 우선 정제: rules(내장 규칙) | ollama(exaone3.5, 보류)
     "auto_spellcheck": True,
+    "hanja_reading": True,                # 한글 모델이 못 읽는 한자를 중국어 모델로 다시 읽어 끼움(core.hanja_reader)
     "save_figures": False,
     # ── 문서 정제(교정) 단계 ────────────────────────────────────────────────
     # OCR(충실 추출) 이후 문서 전체를 LLM(Gemini)으로 교정하여 쪽번호·러닝헤더·
@@ -232,6 +233,11 @@ def get_default_dpi() -> int:
 def get_enable_cleanup() -> bool:
     """OCR 후 문서 전체 LLM 정제(교정) 단계 실행 여부. 기본 False(비용)."""
     return bool(load().get("enable_cleanup", True))
+
+
+def get_hanja_reading() -> bool:
+    """로컬 OCR 에서 한자 자리를 중국어 모델로 다시 읽을지. 기본 켬."""
+    return bool(load().get("hanja_reading", True))
 
 
 def get_confidence_threshold() -> float:
