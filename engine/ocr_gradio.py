@@ -762,6 +762,19 @@ def _run_digital_pdf(file_path: Path, pages_text: list[str], out_fmt: OutputForm
             except Exception as e:   # 렌더·OCR 실패 시 내장 글자라도 남긴다
                 step_logs.append(f"  p.{page_num}: 다시 읽기 실패 → 내장 글자 사용 ({e})")
                 result.pages.append(_finalize_digital(txt, page_num))
+        elif (read_page is not None and page_fn is _finalize_digital
+              and pdf_text_layer.real_chars(txt) < pdf_text_layer.MIN_PAGE_CHARS):
+            # 글자 층이 거의 없는 쪽 — 그림만 있는 쪽·장 제목 쪽일 수 있어 이미지로 읽는다
+            # (빈 쪽은 _process_page 의 빈 쪽 판정이 걸러낸다). 읽은 게 없으면 내장 글자라도 남긴다
+            try:
+                page_result, page_logs = read_page(page_num)
+            except Exception as e:
+                page_result, page_logs = None, [f"  p.{page_num}: 이미지 읽기 실패 → 내장 글자 사용 ({e})"]
+            if page_result is None or page_result.is_blank or not page_result.corrected_text.strip():
+                page_result = (_finalize_text(txt.strip(), page_num) if txt.strip()
+                               else _finalize_digital(txt, page_num))
+            result.pages.append(page_result)
+            step_logs.extend(page_logs)
         else:
             result.pages.append(page_fn(txt, page_num))
         # 초고속이라 5페이지마다(또는 마지막)만 진행률 갱신
