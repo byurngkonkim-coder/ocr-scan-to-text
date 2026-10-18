@@ -279,3 +279,18 @@ def test_batch_never_uses_paid_l3_correction(monkeypatch, tmp_path):
     br.submit([tmp_path / "책A.pdf"], args, {"cleanup": True})
     _wait_idle()
     assert seen[0][br.LLM_CORRECT_ARG] is False
+
+
+def test_list_inputs_does_not_match_partial_names(monkeypatch, tmp_path):
+    # '경영.pdf' 가 '…_경영전략.txt' 결과 때문에 '완료'로 보여 처리 대상에서 빠지던 것
+    inp, out = tmp_path / "in", tmp_path / "out"
+    inp.mkdir()
+    out.mkdir()
+    (inp / "경영.png").write_bytes(b"x")
+    (inp / "경영전략.png").write_bytes(b"x")
+    (out / "20261005_120000_경영전략.txt").write_text("결과")
+    monkeypatch.setattr(br, "INPUT_DIR", inp)
+    monkeypatch.setattr("core.storage_manager.load_history", lambda: [])
+    monkeypatch.setattr(br, "_file_kind", lambda p: (1, "스캔"))
+    rows = br.list_inputs(out)
+    assert [(r["name"], r["status"]) for r in rows] == [("경영.png", "미처리"), ("경영전략.png", "완료")]

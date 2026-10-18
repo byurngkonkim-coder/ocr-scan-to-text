@@ -215,6 +215,7 @@ def list_inputs(results_dir: Path, input_dir: Path | None = None) -> list[dict]:
     if not input_dir.is_dir():
         return []
     hist, outs = _done_names(results_dir)
+    out_stems = {re.sub(r"^\d{8}_\d{6}_", "", Path(o).stem) for o in outs}
     with _lock:
         queued = {j.path.name: j.state for j in _jobs if j.state in ("대기", "처리 중")}
     rows = []
@@ -222,7 +223,9 @@ def list_inputs(results_dir: Path, input_dir: Path | None = None) -> list[dict]:
         if not p.is_file() or p.suffix.lower() not in _EXTS:
             continue
         pages, kind = _file_kind(p)
-        done = p.name in hist or any(p.stem in o for o in outs)
+        # 결과 이름 '{시각}_{원본명}.확장자' 의 원본명과 정확히 같을 때만 — 부분 일치는 '경영.pdf' 를
+        # '…_경영전략.txt' 때문에 완료로 보이게 했다
+        done = p.name in hist or p.stem in out_stems
         rows.append({"name": p.name, "path": p, "pages": pages, "kind": kind,
                      "status": queued.get(p.name) or ("완료" if done else "미처리")})
     return rows
