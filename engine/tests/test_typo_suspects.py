@@ -38,3 +38,8 @@ def test_save_writes_tsv_under_results_subfolder(tmp_path):
     assert result.read_text(encoding="utf-8") == "걷모습만 보고"     # 본문은 그대로
     rows = typo_suspects.read(out)
     assert rows[0]["wrong"] == "걷모습" and rows[0]["suggestion"] == "겉모습"
+
+
+def test_suspects_use_own_kiwi_not_spacing_one():
+    # 같은 Kiwi 로 space() 뒤 tokenize(typos=) 를 부르면 프로세스가 죽는다(kiwipiepy 0.24 실측)
+    assert typo_suspects._get() is not spacing._get()

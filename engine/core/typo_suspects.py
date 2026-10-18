@@ -10,6 +10,7 @@ user_typos 에 등록한 것만 다음부터 고친다(intent 2026-10-17-로컬-
 from __future__ import annotations
 
 import re
+import threading
 from pathlib import Path
 
 from core import spacing
@@ -20,6 +21,19 @@ _SURFACE_TAGS = ("N", "MAG", "MAJ", "MM", "XR")   # 형태 = 겉글자인 품사
 _CTX = 15
 _FIELDS = ("wrong", "suggestion", "count", "context")
 _HEAD = "틀린 말\t제안\t횟수\t문맥"
+
+# 띄어쓰기(spacing)와 Kiwi 를 따로 쓴다 — kiwipiepy 0.24 에서 한 인스턴스로 space() 뒤 tokenize(typos=)
+# 를 부르면 확률적으로 프로세스가 접근 위반으로 죽는다(실측: 같은 인스턴스 5회 중 2~4회, 따로 쓰면 0회)
+_lock = threading.Lock()
+_kiwi = None
+
+
+def _get():
+    global _kiwi
+    if _kiwi is None:
+        from kiwipiepy import Kiwi
+        _kiwi = Kiwi()
+    return _kiwi
 
 
 def _candidates(line: str, tokens) -> list[tuple[str, str]]:
@@ -56,8 +70,8 @@ def find(text: str, user_dict: dict[str, str] | None = None) -> list[dict]:
     lines = [ln for ln in text.split("\n") if re.search("[가-힣]", ln)]
     if not lines:
         return []
-    with spacing._lock:   # 일괄 처리 작업들이 Kiwi 하나를 같이 쓴다
-        token_lists = list(spacing._get().tokenize(lines, typos=_MODE))
+    with _lock:   # 일괄 처리 작업들이 의심 목록용 Kiwi 하나를 같이 쓴다
+        token_lists = list(_get().tokenize(lines, typos=_MODE))
     seen: dict[tuple[str, str], dict] = {}
     for line, toks in zip(lines, token_lists):
         for wrong, sugg in _candidates(line, toks):
