@@ -6,6 +6,7 @@
   - iter_pdf_pages() — 전 페이지를 한 번에 메모리에 올리지 않고
     batch_size 단위로 렌더링하며 하나씩 yield (수백 페이지 책 스캔 OOM 방지).
 """
+import time
 from pathlib import Path
 from typing import Iterator
 from PIL import Image
@@ -93,6 +94,28 @@ def split_pdf(
         raise ValueError(f"PDF 페이지 수를 읽을 수 없습니다: {e}")
 
 
+_RETRY_WAIT = 5      # 초 — 외장 드라이브 순간 끊김·절전 복귀를 기다린다
+_RETRIES = 3
+
+
+def _convert_batch(pdf_path: Path, dpi: int, first: int, last: int, kw: dict) -> list:
+    """first~last 쪽을 그린다. 일시 실패는 다시 시도하고, 받은 장 수가 모자라면 오류로 낸다
+    (모자란 채 넘기면 이후 쪽 번호가 하나씩 밀린다)."""
+    err = None
+    for attempt in range(_RETRIES):
+        if attempt:
+            time.sleep(_RETRY_WAIT * attempt)
+        try:
+            pages = convert_from_path(str(pdf_path), dpi=dpi, first_page=first, last_page=last, **kw)
+        except Exception as e:   # pdfinfo/pdftoppm 실패(PDFPageCountError·I/O·프로세스 생성 실패)
+            err = e
+            continue
+        if len(pages) == last - first + 1:
+            return pages
+        err = f"{first}~{last}쪽 중 {len(pages)}장만 그려짐"
+    raise ValueError(f"PDF {first}~{last}쪽을 그리지 못했습니다({_RETRIES}회 시도): {err}")
+
+
 def iter_pdf_pages(
     pdf_path: str | Path,
     dpi: int = DEFAULT_DPI,
@@ -123,12 +146,7 @@ def iter_pdf_pages(
     p = max(1, first_page)
     while p <= last:
         end = min(p + batch_size - 1, last)
-        try:
-            pages = convert_from_path(
-                str(pdf_path), dpi=dpi, first_page=p, last_page=end, **kw
-            )
-        except PDFPageCountError as e:
-            raise ValueError(f"PDF 페이지 수를 읽을 수 없습니다: {e}")
+        pages = _convert_batch(pdf_path, dpi, p, end, kw)
         for img in pages:
             yield img
         p = end + 1

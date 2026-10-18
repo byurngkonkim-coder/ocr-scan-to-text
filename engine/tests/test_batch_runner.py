@@ -242,3 +242,26 @@ def test_text_pages_split_at_paragraphs():
     assert len(pages) == 3                                   # 2+2+1 문단
     assert "\n\n".join(pages) == "\n\n".join(paras)          # 글자 손실 없음
     assert all(p.endswith(".") for p in pages)               # 문단 중간에서 자르지 않음
+
+
+def test_partial_render_result_is_failure_not_done(monkeypatch, tmp_path):
+    # 쪽 그리기 실패로 앞부분만 저장한 결과를 '완료'로 표시하던 것
+    def process_full(file_obj, *args, progress=None, **kwargs):
+        yield ("", "⚠ 부분 저장  |  전체 10p 중 3p까지만 처리 — 다시 처리해 주세요  |  OCR 처리 3p",
+               "", f"{file_obj.name}_미완.txt", None, None)
+    monkeypatch.setattr(ocr_gradio, "process_full", process_full)
+    br.submit([tmp_path / "a.pdf"], ("kor+eng",), {"cleanup": True})
+    _wait_idle()
+    job = br._jobs[0]
+    assert job.state == "실패" and "3p까지만" in job.detail
+
+
+def test_unfinished_result_is_not_done(monkeypatch, tmp_path):
+    inp, out = tmp_path / "in", tmp_path / "out"
+    inp.mkdir()
+    out.mkdir()
+    (inp / "책A.png").write_bytes(b"x")
+    (out / "20261017_010203_책A_미완.txt").write_text("앞부분")
+    monkeypatch.setattr(br, "INPUT_DIR", inp)
+    monkeypatch.setattr("core.storage_manager.load_history", lambda: [])
+    assert br.list_inputs(out)[0]["status"] == "미처리"

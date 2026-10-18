@@ -21,7 +21,7 @@ from types import SimpleNamespace
 
 INPUT_DIR = Path(__file__).resolve().parent.parent / "01_입력"   # 기본값 — ④ 탭에서 다른 폴더로 바꿀 수 있다
 _EXTS = {".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".txt"}   # .txt 는 OCR 없이 문장 정제만
-_PARTIAL_RE = re.compile(r"_(?:정제중|OCR중)(?:_\d{8}_\d{6})?$")   # ocr_gradio._CleanCheckpoint 중간 저장분
+_PARTIAL_RE = re.compile(r"_(?:정제중|OCR중)(?:_\d{8}_\d{6})?$|_미완$")   # 중간 저장분·앞부분만 읽은 결과
 # process_full 위치 인자(lang, fmt, no_preprocess, no_fallback, …) 중 no_fallback 자리.
 # 일괄 처리는 로컬 전용 — API 요금은 최소화(사용자 설계원칙 2026-10-18)
 NO_FALLBACK_ARG = 3
@@ -119,6 +119,11 @@ def _run() -> None:
                 job.detail = _last_line(last[1])
             else:
                 job.result = str(last[3]) if last and last[3] else ""
+                head = str(last[1]).splitlines()[0] if last and last[1] else ""
+                if job.result and head.startswith("⚠ 부분 저장"):   # 쪽 그리기 실패로 앞부분만 저장
+                    job.state, job.detail = "실패", "부분 저장 — " + head.split("  |  ")[1]
+                    job.ended = time.time()
+                    continue
                 if not job.result:
                     job.detail = _last_line(last[1]) if last else "결과 없음"
                 else:   # 정제 강등 안내만 남긴다 — '완료'만 보이면 정제가 안 된 것을 모른다(2026-10-13)

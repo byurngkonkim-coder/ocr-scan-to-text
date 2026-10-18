@@ -1409,6 +1409,8 @@ def _run_ocr(
     if render_err is not None:
         step_logs.append(f"  ⚠ {start_page + processed}쪽 이후를 읽지 못해 중단 — "
                          f"처리한 {processed}쪽만 저장합니다 ({render_err})")
+    # 앞부분만 읽은 결과는 '완료'가 아니다 — 이름에 미완 표시, OCR 복구본 유지, 처리 기록에 넣지 않음
+    out_stem = file_path.stem + ("_미완" if render_err is not None else "")
 
     # ── 문서 전체 정제(교정) ────────────────────────────────────────────────
     # OCR 원문(페이지 충실 추출)을 문서 전체 맥락에서 Gemini로 교정:
@@ -1421,7 +1423,7 @@ def _run_ocr(
     content_pages = [p for p in result.pages if not p.is_blank]
     # 정제는 읽는 방식과 상관없이 내장 규칙 — Gemini OCR 결과도 이미 깨끗해 유료 정제 이득이 작다(사용자 결정 2026-10-15)
     if cleanup and content_pages and text_cleaner.is_available(local=True):
-        ckpt = _CleanCheckpoint(file_path.stem, out_fmt)
+        ckpt = _CleanCheckpoint(out_stem, out_fmt)
         crep: dict = {}     # 이 실행의 정제 보고서(여러 파일 동시 처리 시 전역 보고서는 섞인다)
         clean_gen = text_cleaner.iter_clean(
             [p.corrected_text for p in content_pages],
@@ -1505,9 +1507,9 @@ def _run_ocr(
     total_el     = elapsed()
 
     # ── 02_결과/ 확정 — 이력에 경로를 남기려고 기록보다 먼저 ──────────────────────
-    results_path = _finalize_results(ckpt, cleaned_text, out_path, file_path.stem, step_logs)
+    results_path = _finalize_results(ckpt, cleaned_text, out_path, out_stem, step_logs)
     ocr_ckpt.close()
-    if results_path is not None:          # 확정됐을 때만 OCR 복구본을 지운다
+    if results_path is not None and render_err is None:   # 다 읽고 확정됐을 때만 OCR 복구본을 지운다
         ocr_ckpt.path.unlink(missing_ok=True)
 
     # ── storage: 결과 파일 영구 저장 + 이력 기록 ─────────────────────────────
@@ -1523,19 +1525,20 @@ def _run_ocr(
                 step_logs.append(f"  ⚠ 정제 전 원문 사본을 보관소에 저장하지 못했습니다(복구용 원문 없음): {e}")
         if _should_save_original():
             stored_upload = storage_manager.save_original(file_path, file_path.name)
-        storage_manager.record(
-            original_name   = file_path.name,
-            result_path     = stored_path,
-            upload_path     = stored_upload,
-            pages_total     = total,
-            pages_ocr       = ocr_count,
-            pages_blank     = blank_count,
-            vision_pages    = vision_count,
-            engine_mode     = "vision_first" if vision_first else "rapidocr_first",
-            file_size_bytes = file_path.stat().st_size,
-            output_path     = results_path,
-            clean_note      = clean_note,
-        )
+        if render_err is None:
+            storage_manager.record(
+                original_name   = file_path.name,
+                result_path     = stored_path,
+                upload_path     = stored_upload,
+                pages_total     = total,
+                pages_ocr       = ocr_count,
+                pages_blank     = blank_count,
+                vision_pages    = vision_count,
+                engine_mode     = "vision_first" if vision_first else "rapidocr_first",
+                file_size_bytes = file_path.stat().st_size,
+                output_path     = results_path,
+                clean_note      = clean_note,
+            )
     except Exception as e:
         # 조용히 넘기면 화면엔 '완료'만 뜨고 파일은 없다 — 반드시 표면화한다.
         step_logs.append(f"  ⚠ 이력 보관소 저장 실패: {e}")
@@ -1545,8 +1548,10 @@ def _run_ocr(
         _LAST_REVIEW.update(file=str(file_path), result=result, cleanup=cleanup,
                             front_matter=front_matter, out_fmt=out_fmt, lang=lang, total=total)
 
+    head = (f"⚠ 부분 저장  |  전체 {total}p 중 {start_page - 1 + processed}p까지만 처리 — 다시 처리해 주세요"
+            if render_err is not None else "✅ 완료")
     summary = [
-        f"✅ 완료  |  전체 {total}p → OCR 처리 {ocr_count}p  |  총 소요: {total_el}",
+        f"{head}  |  전체 {total}p → OCR 처리 {ocr_count}p  |  총 소요: {total_el}",
         f"   Vision 처리: {vision_count}p",
     ]
     if blank_count:
