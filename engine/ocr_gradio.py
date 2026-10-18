@@ -431,7 +431,9 @@ def _status_text(page_num: int, total: int, pct: int,
     header = f"처리 중: {page_num}/{total} 페이지 ({pct}%)"
     if elapsed_str:
         header += f"  |  경과: {elapsed_str}"
-    lines = [header]
+    # ① 탭 처리는 브라우저 연결에 묶여 있다 — 닫거나 새로고침하면 Gradio 가 처리를 끝낸다(④ 일괄은 계속)
+    lines = [header, "  ※ 처리가 끝날 때까지 이 브라우저 탭을 닫거나 새로고침하지 마세요(멈춥니다)."
+                     " 오래 걸리는 책은 ④ 일괄 처리를 쓰면 탭을 닫아도 계속됩니다."]
     if logs:
         lines.append("")
         lines.extend(logs[-5:])
