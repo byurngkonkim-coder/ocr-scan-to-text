@@ -417,3 +417,15 @@ class TestDeterministicPreclean:
 
     def test_empty_input(self):
         assert text_cleaner.deterministic_preclean("") == ""
+
+
+def test_paragraphs_separated_by_one_blank_line():
+    # 정제규칙서 C-08 '단락 = 빈 줄' — 쪽 안은 줄바꿈 하나, 쪽 경계는 빈 줄로 섞여 있었다(2026-10-18)
+    src = "첫 단락.\n둘째 단락.\n\n\n셋째 단락.\n   넷째 단락."
+    assert text_cleaner.unify_paragraph_breaks(src) == "첫 단락.\n\n둘째 단락.\n\n셋째 단락.\n\n넷째 단락."
+
+
+def test_attribution_line_stays_with_quote():
+    # 명언 저자 줄('- 이름')·글머리 목록은 앞 줄과 한 덩어리
+    src = "명언 본문이다.\n- 벤저민 프랭클린\n다음 명언.\n• 항목"
+    assert text_cleaner.unify_paragraph_breaks(src) == "명언 본문이다.\n- 벤저민 프랭클린\n\n다음 명언.\n• 항목"

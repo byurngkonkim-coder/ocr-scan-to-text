@@ -81,6 +81,37 @@ def test_indented_line_marked_as_paragraph_start():
     assert out == ["따라 달라진다", "  인간과 기계는 데이터의", "위한 데이터를 축적한다", "2부 의사결정"]
 
 
+def test_half_char_indent_marked_after_heading_and_quote_block():
+    # 2026-10-18 표본 37쪽: 들여쓰기 한 글자는 줄 높이의 0.5~0.6배라 문턱 0.6h 에 절반이 빠졌고,
+    # 들여 쓴 인용 단락이 여백 중앙값을 오른쪽으로 밀어 본문 줄이 '여백 아님'이 됐다(2천년의강의 120쪽)
+    lines = ["본문 끝 줄", "가운데 제목", "「일자열전」은 반론으로 이뤄진다.", "먼저 사마계주는", "비행을 지적한다.",
+             "인용 첫 줄", "인용 둘째 줄", "인용 셋째 줄", "인용 넷째 줄"]
+    boxes = [_box(100, 0, 600), _box(300, 50, 650), _box(116, 100, 1000), _box(100, 150, 1000),
+             _box(100, 200, 400), _box(160, 250, 1000), _box(160, 300, 1000), _box(160, 350, 1000),
+             _box(160, 400, 1000)]
+    out = rapidocr_engine._mark_paragraph_starts(lines, boxes)
+    assert out[2] == "  「일자열전」은 반론으로 이뤄진다."
+    assert [l for l in out if l.startswith("  ")] == [out[2]]
+
+
+def test_full_line_ending_with_period_joins_unindented_next_line():
+    # 좋은전략 146쪽: '…조종사 출신이다.|우리는 언덕에…' — 줄 끝 마침표에서 문단이 갈렸다
+    lines = ["  첫 문단 첫 줄", "꽉 찬 줄이 마침표로 끝난다.", "들여쓰기 없이 이어지는 줄", "짧은 끝 줄.",
+             "  다음 문단 첫 줄", "꽉 찬 줄이 또 끝난다.", "소제목"]
+    boxes = [_box(115, 0, 1000), _box(100, 50, 1000), _box(100, 100, 1000), _box(100, 150, 400),
+             _box(115, 200, 1000), _box(100, 250, 1000), _box(100, 350, 1000)]   # 소제목 앞은 줄 간격이 넓다
+    out, _ = rapidocr_engine._join_sentence_wraps(lines, boxes)
+    assert out == ["  첫 문단 첫 줄", "꽉 찬 줄이 마침표로 끝난다. 들여쓰기 없이 이어지는 줄", "짧은 끝 줄.",
+                   "  다음 문단 첫 줄", "꽉 찬 줄이 또 끝난다.", "소제목"]
+
+
+def test_no_join_on_page_without_indented_paragraphs():
+    # 들여쓰기로 문단을 열지 않는 쪽은 줄 끝 마침표가 문단 끝인지 알 수 없다 — 그대로 둔다
+    lines = ["꽉 찬 줄이 마침표로 끝난다.", "다음 줄", "끝 줄"]
+    boxes = [_box(100, 0, 1000), _box(100, 50, 1000), _box(100, 100, 1000)]
+    assert rapidocr_engine._join_sentence_wraps(lines, boxes)[0] == lines
+
+
 def test_block_quote_and_heading_not_marked():
     # 인용 단락(여러 줄 모두 들여씀)·가운데 제목(크게 들여씀)은 문단 시작으로 보지 않는다
     lines = ["인용 첫 줄", "인용 둘째 줄", "본문 줄", "가운데 제목", "본문 끝 줄"]

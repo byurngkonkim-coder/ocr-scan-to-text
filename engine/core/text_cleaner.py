@@ -321,8 +321,31 @@ def iter_clean(pages: list[str], drop_front_matter: bool = False, on_chunk=None,
         text, n_sp = spacing.fix_spacing(text)
         if n_sp:
             report["warnings"].append(f"붙어 쓴 낱말 띄어쓰기 {n_sp}곳 교정 (정제 전 원문 사본에서 확인 가능)")
+    text = unify_paragraph_breaks(text)
 
     return (text + "\n") if text else ""
+
+
+# 앞 줄에 붙여 두는 줄 — 명언 저자 줄('- 벤저민 프랭클린…')·글머리 목록
+_ATTACHED_LINE = re.compile(r"[-•·▶■□○●◆※]\s")
+
+
+def unify_paragraph_breaks(text: str) -> str:
+    """단락 사이를 빈 줄 하나로 통일한다(정제규칙서 C-08 '단락 = 빈 줄').
+
+    줄 잇기가 끝난 뒤 남은 줄바꿈은 단락 경계인데, 쪽 안에서는 줄바꿈 하나·쪽 경계에서는 빈 줄이라
+    두 가지가 섞여 있었다(02_결과 14권 실측: 빈 줄 74~230곳, 줄바꿈 하나 1천~1만여 곳, 2026-10-18).
+    글머리(- •)로 시작하는 줄은 앞 줄과 한 덩어리로 둔다 — 명언과 저자 줄이 갈라지지 않게.
+    """
+    lines = [l.strip() for l in text.split("\n")]
+    out: list[str] = []
+    for line in lines:
+        if not line:
+            continue
+        if out:
+            out.append("\n" if _ATTACHED_LINE.match(line) else "\n\n")
+        out.append(line)
+    return "".join(out)
 
 
 # 붙이면 안 되는 1음절 단어 — 관형사·대명사·부사 + 의존명사(수·것…)

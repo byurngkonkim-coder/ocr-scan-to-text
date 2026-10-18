@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import threading
 from typing import Optional
 
@@ -201,25 +202,72 @@ def _mark_paragraph_starts(lines: list[str], boxes) -> list[str]:
     여러 줄이 모두 들여 쓴 인용 단락과 크게 들여 쓴 가운데 제목은 표시하지 않는다.
     오른쪽까지 차야 하는 까닭: 각주 둘째 줄('온다.')이 내어쓰기로 들어가 있는데 OCR 이 글머리 '•' 를
     읽지 않아 문단 첫 줄로 잘못 표시됐다(예측기계 28·34쪽).
+    들여쓰기 한 글자는 줄 상자 높이의 0.5~0.6배다 — 문턱 0.6h 는 표본 37쪽 문단 시작 76곳 중 35곳만
+    잡아(2026-10-18), 문턱을 INDENT_MIN 으로 낮추고 여백 판정은 MARGIN_TOL 로 좁혔다.
+    앞 줄은 여백에 붙은 줄이거나 짧은 줄(가운데 제목·앞 문단 끝 줄)이면 된다.
     """
     if len(lines) != len(boxes) or len(lines) < 3:
         return lines
-    x0 = [min(p[0] for p in b) for b in boxes]
-    x1 = [max(p[0] for p in b) for b in boxes]
-    h = float(np.median([max(p[1] for p in b) - min(p[1] for p in b) for b in boxes]))
-    full = max(x1[i] - x0[i] for i in range(len(lines))) * 0.8
-    wide = [i for i in range(len(lines)) if x1[i] - x0[i] >= full]
-    margin = float(np.median([x0[i] for i in wide]))
-    right = float(np.median([x1[i] for i in wide]))
-    at_margin = [abs(x - margin) < 0.4 * h for x in x0]
+    g = _geometry(boxes)
+    x0, x1, h, right, at_margin = g["x0"], g["x1"], g["h"], g["right"], g["at_margin"]
     out = []
     for i, line in enumerate(lines):
-        indent = x0[i] - margin
-        if (0.6 * h <= indent <= 3.5 * h and x1[i] >= right - h and (i == 0 or at_margin[i - 1])
+        indent = x0[i] - g["margin"]
+        prev_ok = i == 0 or at_margin[i - 1] or x1[i - 1] < right - 2 * h
+        if (INDENT_MIN * h <= indent <= 3.5 * h and x1[i] >= right - h and prev_ok
                 and i + 1 < len(lines) and at_margin[i + 1]):
             line = "  " + line
         out.append(line)
     return out
+
+
+INDENT_MIN = 0.4    # 문단 첫 줄 들여쓰기 최소(줄 높이 배수)
+MARGIN_TOL = 0.3    # 왼쪽 여백에 붙은 줄로 보는 흔들림(줄 높이 배수) — 여백 줄 x 흔들림 실측 0.1h 안팎
+_SENT_END_LINE = re.compile(r'[.?!。！？]["”’\'」』)]*$')
+
+
+def _geometry(boxes) -> dict:
+    """줄 상자들의 왼쪽 여백·오른쪽 끝·줄 높이 — 문단 판정 두 곳이 같이 쓴다."""
+    x0 = [min(p[0] for p in b) for b in boxes]
+    x1 = [max(p[0] for p in b) for b in boxes]
+    y0 = [min(p[1] for p in b) for b in boxes]
+    y1 = [max(p[1] for p in b) for b in boxes]
+    h = float(np.median([b - a for a, b in zip(y0, y1)]))
+    full = max(b - a for a, b in zip(x0, x1)) * 0.8
+    wide = [i for i in range(len(boxes)) if x1[i] - x0[i] >= full]
+    # 왼쪽 여백 = 가장 왼쪽에 몰린 넓은 줄들 — 들여 쓴 인용 단락 줄이 섞이면 중앙값이 오른쪽으로 밀려
+    # 본문 줄이 '여백 아님'이 됐다(2천년의강의 120쪽: 여백 222 → 236, 2026-10-18)
+    left = min(x0[i] for i in wide)
+    margin = float(np.median([x0[i] for i in wide if x0[i] <= left + 0.5 * h]))
+    return {"x0": x0, "x1": x1, "y0": y0, "y1": y1, "h": h, "margin": margin,
+            "right": float(np.median([x1[i] for i in wide])),
+            "at_margin": [abs(x - margin) < MARGIN_TOL * h for x in x0]}
+
+
+def _join_sentence_wraps(lines: list[str], boxes) -> tuple[list[str], list]:
+    """오른쪽 끝까지 찬 줄이 마침표로 끝나고 다음 줄이 들여쓰기 없이 이어지면 같은 문단 — 한 줄로 잇는다.
+
+    줄 잇기(postprocessor.join_broken_lines)는 글자만 보고 줄 끝 마침표에서 늘 문단을 끊었다
+    (표본 37쪽에서 18곳: '…출신이다.|우리는 언덕에…' 가 두 문단으로). 들여쓰기로 문단을 여는 쪽
+    (문단 첫 줄 표시가 하나라도 있는 쪽)에서만 한다 — 들여쓰기 없는 책은 문단 끝을 알 수 없다.
+    줄 간격이 평소의 1.5배를 넘으면(소제목·인용 앞) 잇지 않는다.
+    """
+    if len(lines) != len(boxes) or len(lines) < 3 or not any(l.startswith("  ") for l in lines):
+        return lines, boxes
+    g = _geometry(boxes)
+    gaps = [g["y0"][i + 1] - g["y1"][i] for i in range(len(lines) - 1)]
+    usual = float(np.median(gaps)) if gaps else 0.0
+    out_l, out_b = [lines[0]], [boxes[0]]
+    for i in range(1, len(lines)):
+        prev, cur = lines[i - 1], lines[i]
+        p = i - 1
+        if (g["x1"][p] >= g["right"] - g["h"] and (g["at_margin"][p] or prev.startswith("  "))
+                and _SENT_END_LINE.search(prev.rstrip()) and not cur.startswith("  ")
+                and g["at_margin"][i] and gaps[p] <= max(1.5 * usual, usual + 0.3 * g["h"])):
+            out_l[-1] = out_l[-1].rstrip() + " " + cur.strip()
+            continue
+        out_l.append(cur); out_b.append(boxes[i])
+    return out_l, out_b
 
 
 def run(image: Image.Image, lang: str = "kor+eng", fast: bool = False, refine: bool = True) -> OCRResult:
@@ -271,7 +319,8 @@ def run(image: Image.Image, lang: str = "kor+eng", fast: bool = False, refine: b
     if len(line_boxes) == len(lines):
         lines, line_boxes = _order_columns(lines, line_boxes)
         lines, line_boxes = _drop_page_footer(lines, line_boxes)
-    full_text = "\n".join(_mark_paragraph_starts(lines, line_boxes))
+    marked, _ = _join_sentence_wraps(_mark_paragraph_starts(lines, line_boxes), line_boxes)
+    full_text = "\n".join(marked)
     avg_conf = sum(confs) / len(confs) if confs else 0.0
 
     # MyOCR의 고도화된 한국어 정제기 적용
