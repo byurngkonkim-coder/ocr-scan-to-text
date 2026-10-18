@@ -334,3 +334,21 @@ def test_stop_then_immediate_resubmit_still_stops_running_job(monkeypatch, tmp_p
     assert br.submit([a], ("kor+eng",), {}) == 1          # 다시 넣은 것은 대기열에 들어간다
     _wait_idle(10)
     assert br._jobs[0].state == "중단"
+
+
+def test_submit_while_last_worker_is_exiting_does_not_stall(monkeypatch, tmp_path):
+    # 마지막 작업자가 '할 일 없음'으로 끝나는 틈에 submit 하면 새 작업자를 안 띄워 영원히 '대기'였다
+    monkeypatch.setattr(ocr_gradio, "process_full", _fake_process([], delay=0.1))
+    real = br._claim_job
+
+    def slow_claim():
+        job = real()
+        if job is None:
+            time.sleep(0.5)            # 끝나기 직전의 틈을 넓힌다
+        return job
+    monkeypatch.setattr(br, "_claim_job", slow_claim)
+    br.submit([tmp_path / "a.pdf"], ("kor+eng",), {})
+    time.sleep(0.3)                    # a 완료 → 작업자가 '할 일 없음' 틈에 있음
+    br.submit([tmp_path / "b.pdf"], ("kor+eng",), {})
+    _wait_idle(5)
+    assert [j.state for j in br._jobs] == ["완료", "완료"]

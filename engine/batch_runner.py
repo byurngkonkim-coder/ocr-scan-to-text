@@ -101,9 +101,14 @@ def clear_finished() -> None:
 def _claim_job() -> Job | None:
     """다음 대기 파일을 '처리 중'으로 바꿔 가져온다 — 작업자 둘이 같은 파일을 잡지 않게 잠금 안에서."""
     with _lock:
-        job = next((j for j in _jobs if j.state == "대기"), None)
+        job = None if _stop.is_set() else next((j for j in _jobs if j.state == "대기"), None)
         if job is not None:
             job.state, job.started = "처리 중", time.time()
+        else:
+            # 할 일이 없어 끝나는 작업자는 잠금 안에서 명단에서 빠진다 — 끝나기 직전(is_alive=True)에
+            # submit 이 '살아 있는 작업자'로 세어 새 작업자를 안 띄우면 새 작업이 영원히 '대기'였다(감사 24번)
+            me = threading.current_thread()
+            _workers[:] = [w for w in _workers if w is not me]
         return job
 
 
@@ -113,7 +118,7 @@ def _run() -> None:
     while not _stop.is_set():
         while direct_running.is_set() and not _stop.is_set():
             time.sleep(2)                   # ① 탭 처리가 끝나기를 기다린다
-        job = None if _stop.is_set() else _claim_job()
+        job = _claim_job()
         if job is None:
             break
         last = None
