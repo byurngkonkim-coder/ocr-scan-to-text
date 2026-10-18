@@ -386,16 +386,18 @@ def _strip_header_spans(line: str, hg: set[str]) -> str:
     toks = line.split()
     sks = [_skel(t) for t in toks]
     line_sk = "".join(sks)
+    spans = [m.span() for m in re.finditer(r"\S+", line)]   # 어절의 줄 안 위치
     covered = [False] * len(line_sk)
     for p in range(len(line_sk) - _GRAM + 1):
         if line_sk[p:p + _GRAM] in hg:
             for q in range(p, p + _GRAM):
                 covered[q] = True
     hg3 = {g[p:p + 3] for g in hg for p in range(2) if re.fullmatch(r"[가-힣]{3}", g[p:p + 3])}
-    hdr, pos = [], 0
+    hdr, cov, pos = [], [], 0
     for sk in sks:
         c = sum(covered[pos:pos + len(sk)])
-        hdr.append(len(sk) >= 2 and c / len(sk) >= 0.6)
+        cov.append(c / len(sk) if sk else 0.0)
+        hdr.append(len(sk) >= 2 and cov[-1] >= 0.6)
         pos += len(sk)
     drop: set[int] = set()
     i = 0
@@ -406,7 +408,14 @@ def _strip_header_spans(line: str, hg: set[str]) -> str:
         j = i
         while j + 1 < len(toks) and (hdr[j + 1] or (not sks[j + 1] and j + 2 < len(toks) and hdr[j + 2])):
             j += 1
-        if sum(len(sks[k]) for k in range(i, j + 1) if hdr[k]) >= _HEADER_MIN_SPAN:
+        heads = [k for k in range(i, j + 1) if hdr[k]]
+        # 어절 하나뿐인 구간은 거의 다 덮일 때만 — 가장자리에 자주 오는 이름에 조사가 붙은 본문 낱말
+        # ('아이젠하워에게는'·'엘리자베스여왕이')을 머리글로 지우던 것(인문의숲 실측)
+        # 머리글 조각은 가장자리 줄 양끝 30자에서 배운 것 — 구간도 줄 양끝 30자 안에 걸칠 때만
+        # (긴 문단 가운데의 '실리콘밸리 천재들의 생각과' 같은 본문 구절 보호)
+        at_edge = spans[i][0] <= 30 or spans[j][1] >= len(line) - 30
+        if (at_edge and sum(len(sks[k]) for k in heads) >= _HEADER_MIN_SPAN
+                and (len(heads) > 1 or cov[heads[0]] >= 0.8)):
             # 바로 앞 어절이 더 심하게 깨진 머리글 조각('실리콘IB리')이면 함께 — 머리글 3글자 조각을 품을 때만
             if i > 0 and len(sks[i - 1]) >= 3 and any(sks[i - 1][p:p + 3] in hg3
                                                        for p in range(len(sks[i - 1]) - 2)):
@@ -479,10 +488,17 @@ def strip_fuzzy_headers(pages: list[str]) -> tuple[list[str], int]:
     out, n = [], n_part
     for p in pages:
         new = []
-        for l in p.splitlines():
+        lines = p.splitlines()
+        filled = [i for i, l in enumerate(lines) if l.strip()]
+        edges = set(filled[:2] + filled[-2:])
+        for i, l in enumerate(lines):
             s = _strip_header_spans(l, hg)
             if s != l and is_garbage_line(s):       # 머리글을 떼고 남은 자투리('1 期')
                 s = ""
+            # 머리글은 쪽 가장자리에 붙어 읽힌다 — 가운데 줄은 줄 전체가 머리글일 때만 지운다
+            # (본문 문장 일부를 지우던 것: '…효문제는 또 종실의 딸을…' 2천년의강의 실측)
+            if s and i not in edges:
+                s = l
             if s != l and DEBUG_LOG is not None:
                 DEBUG_LOG.append((l, s))
             if s != l:

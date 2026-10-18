@@ -53,6 +53,17 @@ def test_garbled_running_headers_removed_without_body_loss():
     assert out[-1] == "그렇지 않다면 당"
 
 
+def test_fuzzy_header_removal_keeps_body_words():
+    # 가장자리에 자주 오는 이름('아이젠하워')이 머리글 조각으로 배워져 본문 낱말·문장 가운데를 지우던 것
+    long = "그는 부하들을 아꼈고 동료들과도 잘 지냈다. 그런가 하면 " * 3
+    pages = [f"{100 + i} 아이젠하워는 장군이었다\n{long}\n쪽 {i} 끝" for i in range(8)]
+    pages.append(f"첫 줄\n둘째 줄\n가운데 문단 아이젠하워에게는 자석 같은 매력이 있었다\n셋째 줄\n넷째 줄")
+    pages.append(f"{long}아이젠하워는 장군이었다 하는 말이 문단 가운데에 있다. {long}")
+    out, _ = nr.strip_fuzzy_headers(pages)
+    assert "아이젠하워에게는 자석" in out[-2]
+    assert "아이젠하워는 장군이었다 하는 말이" in out[-1]
+
+
 def test_part_header_with_page_number_removed_mid_line():
     pages = ["Give me a turbulent world and I'll take the PART 3 실라콘뱅리 혁신가들의 통학 331 turbulent one."]
     out, _ = nr.strip_fuzzy_headers(pages)
