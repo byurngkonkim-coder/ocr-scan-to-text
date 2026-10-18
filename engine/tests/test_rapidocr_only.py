@@ -185,3 +185,11 @@ def test_single_column_and_two_cell_table_untouched():
     mixed = [x for pair in zip(rows, vals) for x in pair]
     t = [s for s, _ in mixed]
     assert rapidocr_engine._order_columns(t, [b for _, b in mixed])[0] == t
+
+
+def test_footnote_caption_and_date_at_page_bottom_kept():
+    # 쪽 맨 아래의 각주·그림 설명·날짜 줄을 '숫자가 든 짧은 줄'이라 꼬리말로 지우던 것(감사 22번)
+    for text in ("1) 피터 드러커, 『경영의 실제』, 45쪽.", "[그림 2-1] 조직의 세 가지 차원",
+                 "2019년 10월 저자", "(2015년 4월 20일)", "* 2판 서문에서 옮김"):
+        lines, boxes = _page(text, 400, 2.3)
+        assert rapidocr_engine._drop_page_footer(lines, boxes)[0] == lines, text

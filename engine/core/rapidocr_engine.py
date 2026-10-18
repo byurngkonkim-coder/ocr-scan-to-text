@@ -127,9 +127,20 @@ def _drop_page_footer(lines: list[str], boxes) -> tuple[list[str], list]:
     width = max(x1[i] for i in foot) - min(x0[i] for i in foot)
     body = max(x1[i] for i in rest) - min(x0[i] for i in rest)
     text = " ".join(lines[i] for i in foot)
-    if gap >= 1.5 * pitch and width <= 0.4 * body and any(c.isdigit() for c in text):
+    if gap >= 1.5 * pitch and width <= 0.4 * body and _looks_like_page_footer(text):
         return [lines[i] for i in rest], [boxes[i] for i in rest]
     return lines, boxes
+
+
+# 쪽 맨 아래에 떨어져 있어도 꼬리말이 아닌 줄 — 각주('1) …'·'* …'), 그림·표 설명, 날짜('2019년 10월')
+_NOT_FOOTER_RE = re.compile(r"^\s*(?:\d{1,2}\)|[*※†]|주\s?\d|[\[(<〈]?\s*(?:그림|표|사진|도표|자료|출처)\b)"
+                            r"|\d{2,4}\s?년|\d{1,2}\s?월|\d{1,2}\s?일\b")
+
+
+def _looks_like_page_footer(text: str) -> bool:
+    """쪽번호가 줄 앞이나 끝에 있는 짧은 줄('28'·'피터 드러커의 매니지먼트 029'·'1582부의사결정')."""
+    t = text.strip()
+    return bool(re.match(r"\d{1,4}", t) or re.search(r"\d{1,4}$", t)) and not _NOT_FOOTER_RE.search(t)
 
 
 def _order_columns(lines: list[str], boxes) -> tuple[list[str], list]:
