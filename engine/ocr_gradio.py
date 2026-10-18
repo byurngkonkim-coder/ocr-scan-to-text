@@ -731,6 +731,17 @@ def _finalize_text(text: str, page_num: int) -> PageResult:
                       engine=OCREngine.PDF_TEXT, confidence=100.0)
 
 
+def _read_txt(path: Path) -> str:
+    """txt 입력을 읽는다 — UTF-8 만 받아 메모장의 ANSI(cp949)·유니코드(UTF-16) 저장본이 '실패'였다."""
+    raw = path.read_bytes()
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return raw.decode("utf-16")
+    try:
+        return raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return raw.decode("cp949")
+
+
 def _text_pages(text: str, size: int = 2000) -> list[str]:
     """txt 본문을 문단 경계에서 약 size자씩 묶어 '쪽'으로 나눈다.
 
@@ -1338,7 +1349,7 @@ def _run_ocr(
     # ── 텍스트 파일(.txt) — 이미 읽은 본문: OCR 없이 문장 정제·저장·기록만 한다 ──
     if file_path.suffix.lower() == ".txt":
         yield from _run_digital_pdf(
-            file_path, _text_pages(unicodedata.normalize("NFC", file_path.read_text(encoding="utf-8-sig"))),
+            file_path, _text_pages(unicodedata.normalize("NFC", _read_txt(file_path))),
             out_fmt, cleanup, front_matter, start_time,
             label="텍스트 파일 정제", page_fn=_finalize_text,
         )
