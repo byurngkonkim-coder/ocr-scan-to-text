@@ -265,3 +265,17 @@ def test_unfinished_result_is_not_done(monkeypatch, tmp_path):
     monkeypatch.setattr(br, "INPUT_DIR", inp)
     monkeypatch.setattr("core.storage_manager.load_history", lambda: [])
     assert br.list_inputs(out)[0]["status"] == "미처리"
+
+
+def test_batch_never_uses_paid_l3_correction(monkeypatch, tmp_path):
+    # ① 고급 설정의 'L3 쪽마다 교정(Claude 유료)'을 켜 둔 채 일괄을 돌리면 쪽마다 유료 호출이 나갔다
+    seen = []
+
+    def process_full(file_obj, *args, progress=None, **kwargs):
+        seen.append(args)
+        yield ("", "완료", "", None, None, None)
+    monkeypatch.setattr(ocr_gradio, "process_full", process_full)
+    args = ("kor+eng", "txt", False, False, True, True, 0, "", "RapidOCR 우선")
+    br.submit([tmp_path / "책A.pdf"], args, {"cleanup": True})
+    _wait_idle()
+    assert seen[0][br.LLM_CORRECT_ARG] is False
