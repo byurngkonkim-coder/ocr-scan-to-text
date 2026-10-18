@@ -39,6 +39,7 @@ class Job:
     result: str = ""
     started: float = 0.0
     ended: float = 0.0
+    cancel: bool = False  # '중단'을 누른 작업 — 곧바로 다시 제출해 전체 중단 표시가 풀려도 멈춘다
 
 
 _lock = threading.Lock()
@@ -66,7 +67,7 @@ def submit(paths, args: tuple, kwargs: dict) -> int:
         args = (*args[:LLM_CORRECT_ARG], False, *args[LLM_CORRECT_ARG + 1:])
     added = 0
     with _lock:
-        active = {j.path for j in _jobs if j.state in ("대기", "처리 중")}
+        active = {j.path for j in _jobs if j.state in ("대기", "처리 중") and not j.cancel}
         for p in map(Path, paths):
             if p not in active:
                 _jobs.append(Job(p, tuple(args), dict(kwargs)))
@@ -88,6 +89,8 @@ def stop() -> None:
         for j in _jobs:
             if j.state == "대기":
                 j.state = "취소"
+            elif j.state == "처리 중":
+                j.cancel = True
 
 
 def clear_finished() -> None:
@@ -120,7 +123,7 @@ def _run() -> None:
             gen = process_full(SimpleNamespace(name=str(job.path)), *job.args,
                                progress=lambda *a, **k: None, **job.kwargs)
             for last in iter(lambda: ctx.run(next, gen, _END), _END):
-                if _stop.is_set():
+                if _stop.is_set() or job.cancel:
                     gen.close()
                     job.state = "중단"
                     break

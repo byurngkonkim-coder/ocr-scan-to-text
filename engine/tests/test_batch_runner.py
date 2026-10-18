@@ -315,3 +315,22 @@ def test_margin_setting_changed_mid_batch_does_not_leak(monkeypatch, tmp_path):
     _wait_idle()
     assert seen == [False, False]
     assert config.get_enable_margin_filter() is True       # 일괄 밖(① 탭)은 바뀐 설정을 그대로 쓴다
+
+
+def test_stop_then_immediate_resubmit_still_stops_running_job(monkeypatch, tmp_path):
+    # 중단 직후 다시 제출하면 submit 이 전체 중단 표시를 지워, 처리 중이던 책이 끝까지 돌았다(감사 23번)
+    monkeypatch.setattr(ocr_gradio, "process_full", _fake_process([], delay=0.0))
+
+    def slow(file_obj, *args, progress=None, **kwargs):
+        for k in range(30):
+            time.sleep(0.05)
+            yield ("", f"{k}", "", None, None, None)
+        yield ("", "완료", "", f"{file_obj.name}.txt", None, None)
+    monkeypatch.setattr(ocr_gradio, "process_full", slow)
+    a = tmp_path / "a.pdf"
+    br.submit([a], ("kor+eng",), {})
+    time.sleep(0.2)
+    br.stop()
+    assert br.submit([a], ("kor+eng",), {}) == 1          # 다시 넣은 것은 대기열에 들어간다
+    _wait_idle(10)
+    assert br._jobs[0].state == "중단"
