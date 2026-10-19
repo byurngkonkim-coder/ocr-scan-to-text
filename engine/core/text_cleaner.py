@@ -557,6 +557,19 @@ def _clean_chunk(chunk: list[str], i: int, total: int, *, front_chunk: bool,
     return res
 
 
+_HEADING_MAX = 25                     # 이보다 긴 쪽 첫 줄은 앞 쪽에서 이어지는 본문 줄로 본다
+_HEADING_TAIL_STRIP = '"\'”’)]」』》'
+
+
+def _is_heading_line(rest: str) -> bool:
+    """쪽 첫 줄이 제목·장 번호인가 — 짧고, 문장 끝(. ? ! … , 다 요 까)으로 끝나지 않고, 아래에 줄이 더 있다.
+    짧은 이음 줄('고 하는 데에는 다른이유가 있다.', '져나갈궁리를 한다')은 문장 끝으로 끝나 앞 쪽에 잇는다."""
+    first, _, more = rest.partition("\n")
+    tail = first.strip().rstrip(_HEADING_TAIL_STRIP)
+    return (0 < len(first.strip()) <= _HEADING_MAX and bool(tail) and tail[-1] not in ".!?。…,다요까"
+            and bool(more.strip()))
+
+
 def post_process_pagebreaks(text: str) -> str:
     """
     텍스트 내의 ⟨PAGEBREAK⟩ 경계를 분석하여 잘려나간 어절을 합치고 센티넬을 소거합니다.
@@ -572,6 +585,12 @@ def post_process_pagebreaks(text: str) -> str:
         # 다음 쪽이 항목(2. ② 나. 제2조 …)으로 시작하면 앞 쪽 끝에 붙이지 않는다
         if "\n" in ws_before + ws_after and is_item_start(match.string[match.start(4):], letters):
             return before + "\n" + after
+        # 다음 쪽이 제목('4 / 지난 일은 지나가게 두라')이나 들여 쓴 문단으로 시작하면 문단 경계다.
+        # 장 끝 요약 문구는 마침표 없이 끝나('…터득하는 것이다') 아래 규칙만으로는 제목을 앞 문단에 붙였다
+        # (인생잠언 21쪽 등, 2026-10-19)
+        if "\n" in ws_before + ws_after and (ws_after.endswith("  ")
+                                             or _is_heading_line(match.string[match.start(4):])):
+            return before + "\n\n" + after
         # 앞 문장이 끝났고 사이에 줄바꿈이 있으면 쪽 경계 = 문단 경계 → 빈 줄 유지
         if _SENT_END.search(before):
             return before + ("\n\n" if "\n" in ws_before + ws_after else " ") + after

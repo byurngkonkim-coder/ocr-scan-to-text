@@ -34,6 +34,26 @@ def test_plain_continuation_still_joined(cont):
     assert len(pp.join_broken_lines(f"{_FILL}\n{cont}").splitlines()) == 1
 
 
+_PB = text_cleaner.PAGEBREAK
+
+
+@pytest.mark.parametrize("nxt", ["4\n지난 일은 지나가게 두라\n  사람들은 자주 가벼운 실수를 한다.",
+                                 "지난 일은 지나가게 두라\n  사람들은 자주 가벼운 실수를 한다.",
+                                 "  사람들은 자주 가벼운 실수를 한다."])
+def test_heading_or_indent_after_pagebreak_not_glued(nxt):
+    # 인생잠언 21쪽: 장 끝 요약 문구가 마침표 없이 끝나 다음 쪽 장 번호·소제목이 그 끝에 붙었다
+    out = text_cleaner.post_process_pagebreaks(f"같은 실수를 되풀이하지 않는 방법을 터득하는 것이다\n{_PB}\n{nxt}")
+    assert out.splitlines()[0] == "같은 실수를 되풀이하지 않는 방법을 터득하는 것이다"
+
+
+@pytest.mark.parametrize("nxt", ["고 하는 데에는 다른 이유가 있다.\n  이런 삶의 지혜들이",
+                                 "져나갈 궁리를 한다\n  룰플레이어가 되는 것도",
+                                 "말하면서 고민을 늘어놓는 순간 상대는 어떻게든 빨리 그 상황에서 빠\n져나갈 궁리를 한다."])
+def test_continuation_after_pagebreak_still_glued(nxt):
+    out = text_cleaner.post_process_pagebreaks(f"그들은 잘 지낸다는 대답만을 듣고 싶어한다 당신이 힘들다\n{_PB}\n{nxt}")
+    assert out.splitlines()[0].startswith("그들은") and nxt.split()[0] in out.splitlines()[0]
+
+
 @pytest.mark.parametrize("item", ["2. 둘째 항목", "② 둘째 항목", "제2조 (정의)"])
 def test_item_after_pagebreak_not_glued(item):
     out = text_cleaner.post_process_pagebreaks(f"첫째 항목 설명이 이어지는 줄\n{text_cleaner.PAGEBREAK}\n{item}")
