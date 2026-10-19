@@ -187,6 +187,46 @@ def test_single_column_and_two_cell_table_untouched():
     assert rapidocr_engine._order_columns(t, [b for _, b in mixed])[0] == t
 
 
+def test_three_column_magazine_read_column_by_column():
+    # 위클리비즈 72쪽 실측(2026-10-19): 3단 지면을 두 단으로 갈랐고 너비가 달라 정렬을 포기해 세 단이 줄마다 섞였다
+    cols = [[(f"{c}단 {k}번째 기사 본문 줄입니다", _box(100 + 380 * c, 100 + 50 * k, 450 + 380 * c))
+             for k in range(5)] for c in range(3)]
+    mixed = [x for row in zip(*cols) for x in row]
+    lines, boxes = rapidocr_engine._order_columns([t for t, _ in mixed], [b for _, b in mixed])
+    assert lines == [t for c in cols for t, _ in c] and len(boxes) == len(lines)
+
+
+def test_short_cell_table_not_split_into_many_columns():
+    # sample_docs/table_simple 모양: 짧은 칸 4개가 늘어선 표는 3단 정렬 대상이 아니다(예전 2단 정렬 결과 유지)
+    cells = [[f"칸{c}{k}" for c in range(4)] for k in range(4)]
+    lines = [t for row in cells for t in row]
+    boxes = [_box(100 + 300 * c, 100 + 50 * k, 250 + 300 * c) for k in range(4) for c in range(4)]
+    assert rapidocr_engine._order_columns(lines, boxes) == rapidocr_engine._order_two_columns(lines, boxes)
+
+
+def _side_page():
+    # 인문의숲2 52쪽 모양: 왼쪽 여백 방주 3줄 + 본문 8줄(여백 x=400)
+    side = [("삶은 곧", _box(100, 100, 220)), ("전쟁의", _box(100, 150, 210)), ("역사다", _box(100, 200, 210))]
+    body = [(f"본문 {k}번째 줄은 오른쪽 끝까지 꽉 차 있다", _box(400, 100 + 50 * k, 1300)) for k in range(8)]
+    mixed = [x for pair in zip(side, body) for x in pair] + body[3:]
+    return [t for t, _ in mixed], [b for _, b in mixed], body
+
+
+def test_side_heading_lifted_before_body():
+    lines, boxes, body = _side_page()
+    out, out_b = rapidocr_engine._lift_side_headings(lines, boxes)
+    assert out == ["  삶은 곧 전쟁의 역사다"] + [t for t, _ in body] and len(out_b) == len(out)
+
+
+def test_item_column_table_not_lifted():
+    # 항목 칸 + 내용 칸 표: 항목마다 칸이 있으면(아래 본문 옆에도 좁은 칸) 방주가 아니다
+    rows = [(f"항목{k}", _box(100, 100 + 50 * k, 200)) for k in range(8)]
+    vals = [(f"내용 설명이 들어가는 넓은 칸 {k}", _box(400, 100 + 50 * k, 1300)) for k in range(8)]
+    mixed = [x for pair in zip(rows, vals) for x in pair]
+    t, b = [s for s, _ in mixed], [x for _, x in mixed]
+    assert rapidocr_engine._lift_side_headings(t, b)[0] == t
+
+
 def test_footnote_caption_and_date_at_page_bottom_kept():
     # 쪽 맨 아래의 각주·그림 설명·날짜 줄을 '숫자가 든 짧은 줄'이라 꼬리말로 지우던 것(감사 22번)
     for text in ("1) 피터 드러커, 『경영의 실제』, 45쪽.", "[그림 2-1] 조직의 세 가지 차원",

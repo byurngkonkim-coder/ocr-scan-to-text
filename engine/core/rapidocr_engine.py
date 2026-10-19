@@ -144,13 +144,15 @@ def _looks_like_page_footer(text: str) -> bool:
 
 
 def _order_columns(lines: list[str], boxes) -> tuple[list[str], list]:
-    """2단으로 짠 쪽(색인 등)을 왼쪽 단 → 오른쪽 단 순서로 다시 늘어놓는다.
+    """여러 단으로 짠 쪽(색인·잡지 3단 등)을 왼쪽 단 → 오른쪽 단 순서로 다시 늘어놓는다.
 
-    RapidOCR 은 위에서 아래로, 같은 높이면 왼쪽→오른쪽으로 내보내 두 단의 줄이 번갈아 섞인다
+    RapidOCR 은 위에서 아래로, 같은 높이면 왼쪽→오른쪽으로 내보내 단의 줄이 번갈아 섞인다
     (세일즈왕 343~346쪽 2단 인명 색인: 글자는 99% 맞는데 텍스트층 대비 순서 일치 0.57, 2026-10-15).
-    단 사이 여백 = 쪽 가운데 30~70% 에서 상자가 가장 적게 가로지르는 세로 띠.
-    단으로 보는 조건: 여백을 가로지르는 줄이 20% 이하 · 양쪽 3줄 이상 · 양쪽이 같은 높이대에 나란히 ·
-    두 단 너비 비 0.6 이상(좁은 항목 칸 + 넓은 내용 칸 표는 행 순서를 지킨다).
+    단 사이 여백 = 상자가 거의 가로지르지 않는(줄의 20% 이하) 세로 띠 — 쪽 너비 5~95% 에서 모두 찾는다.
+    예전엔 가운데 30~70% 에서 한 곳만 찾아 잡지 3단(위클리비즈 72쪽, 여백 33%·67%)을 두 단으로 갈랐고,
+    두 단 너비가 크게 달라 정렬을 포기해 세 단이 줄마다 섞였다(2026-10-19).
+    여백이 2곳 이상이고 문장 줄로 된 쪽만 여기서 정렬하고, 나머지는 _order_two_columns(예전 방식)에 맡긴다.
+    단으로 보는 조건: 여백마다 양쪽 3줄 이상 · 이웃한 단이 같은 높이대에 나란히 · 단 너비 비 0.6 이상.
     여백을 가로지르는 넓은 줄(제목·본문)은 제자리를 지키고, 그 사이 블록마다 왼쪽 단 → 오른쪽 단.
     단 안의 순서는 RapidOCR 순서를 그대로 쓴다.
     """
@@ -164,6 +166,71 @@ def _order_columns(lines: list[str], boxes) -> tuple[list[str], list]:
     span = hi - lo
     if span <= 0:
         return lines, boxes
+    xs = np.linspace(lo + 0.05 * span, lo + 0.95 * span, 181)
+    cross_n = [sum(1 for i in range(n) if x0[i] < x < x1[i]) for x in xs]
+    # 가로지르는 줄이 적은 연속 구간마다 가장 덜 가로지르는 x 들의 가운데를 여백 후보로 본다
+    gutters, run = [], []
+    for k, c in enumerate(cross_n + [n + 1]):
+        if c <= 0.2 * n:
+            run.append(k)
+            continue
+        if run:
+            best = min(cross_n[j] for j in run)
+            low = [j for j in run if cross_n[j] == best]
+            g = (xs[low[0]] + xs[low[-1]]) / 2
+            if sum(1 for i in range(n) if x1[i] <= g) >= 3 and sum(1 for i in range(n) if x0[i] >= g) >= 3:
+                gutters.append(g)
+            run = []
+    # 새 정렬은 문장 줄로 된 쪽(잡지)만 — 짧은 칸이 늘어선 표·색인은 칸마다 단으로 갈려 행이 흩어진다
+    # (sample_docs/table_simple 4칸 표). 그런 쪽과 여백이 한 곳인 쪽은 예전 2단 정렬을 먼저 쓰고,
+    # 예전 정렬이 포기한 문장 쪽(가운데 사진으로 여백이 넓은 위클리비즈 73쪽 등)만 아래로 내려간다
+    prose = float(np.median([len(l.strip()) for l in lines])) >= _PROSE_LINE_CHARS
+    if not gutters or not prose:
+        return _order_two_columns(lines, boxes)
+    if len(gutters) < 2:
+        two = _order_two_columns(lines, boxes)
+        if two[0] != lines:
+            return two
+
+    edges = [-np.inf] + gutters + [np.inf]
+    cols = [[i for i in range(n) if edges[c] <= x0[i] and x1[i] <= edges[c + 1]] for c in range(len(gutters) + 1)]
+    cross = [i for i in range(n) if any(x0[i] < g < x1[i] for g in gutters)]
+    if len(cross) > 0.2 * n or any(len(c) < 3 for c in cols):
+        return lines, boxes
+    widths = [max(x1[i] for i in c) - min(x0[i] for i in c) for c in cols]
+    if min(widths) < 0.6 * max(widths):
+        return lines, boxes
+    for a, b in zip(cols, cols[1:]):
+        ay = (min(yc[i] for i in a), max(yc[i] for i in a))
+        by = (min(yc[i] for i in b), max(yc[i] for i in b))
+        if min(ay[1], by[1]) - max(ay[0], by[0]) < 0.5 * min(ay[1] - ay[0], by[1] - by[0]):
+            return lines, boxes
+
+    seps = sorted(cross, key=lambda i: yc[i])
+    def block(i):   # 이 줄 위에 있는 넓은 줄 수 = 블록 번호
+        return sum(1 for s in seps if yc[s] < yc[i])
+    order = []
+    for k in range(len(seps) + 1):
+        for c in cols:
+            order += [i for i in c if block(i) == k]
+        if k < len(seps):
+            order.append(seps[k])
+    return [lines[i] for i in order], [boxes[i] for i in order]
+
+
+_PROSE_LINE_CHARS = 10   # 줄 글자 수 중앙값이 이 이상이면 문장 단(잡지)으로 본다
+
+
+def _order_two_columns(lines: list[str], boxes) -> tuple[list[str], list]:
+    """2단 쪽 정렬(예전 방식) — 단 사이 여백 = 쪽 가운데 30~70% 에서 상자가 가장 적게 가로지르는 세로 띠.
+    단으로 보는 조건: 여백을 가로지르는 줄이 20% 이하 · 양쪽 3줄 이상 · 양쪽이 같은 높이대에 나란히 ·
+    두 단 너비 비 0.6 이상(좁은 항목 칸 + 넓은 내용 칸 표는 행 순서를 지킨다)."""
+    n = len(lines)
+    x0 = [min(p[0] for p in b) for b in boxes]
+    x1 = [max(p[0] for p in b) for b in boxes]
+    yc = [(min(p[1] for p in b) + max(p[1] for p in b)) / 2 for b in boxes]
+    lo, hi = min(x0), max(x1)
+    span = hi - lo
     xs = np.linspace(lo + 0.3 * span, lo + 0.7 * span, 81)
     cross_n = [sum(1 for i in range(n) if x0[i] < x < x1[i]) for x in xs]
     best = min(cross_n)
@@ -202,6 +269,71 @@ def _order_columns(lines: list[str], boxes) -> tuple[list[str], list]:
         if k < len(seps):
             order.append(seps[k])
     return [lines[i] for i in order], [boxes[i] for i in order]
+
+
+_SIDE_MAX_LINES = 4     # 방주 제목 최대 줄 수
+_SIDE_BODY_BELOW = 3     # 방주 아래로 옆 칸 없이 이어져야 하는 본문 줄 수 — 항목 칸 + 내용 칸 표와 가른다
+
+
+def _lift_side_headings(lines: list[str], boxes) -> tuple[list[str], list]:
+    """본문 여백 바깥에 세로로 쌓인 방주 제목('삶은 곧 / 전쟁의 / 역사다')을 한 줄로 합쳐 옆 본문 첫 줄 앞에 둔다.
+
+    방주는 본문 줄과 같은 높이에 있어 RapidOCR 이 본문 줄과 번갈아 내보냈고, 줄 잇기가 그 낱말을
+    본문 문장 끝에 붙였다('…삶이라는 전쟁을 치른 전쟁의 / 다. … 역사다', 인문의숲2 52쪽, 2026-10-19).
+    방주 = 본문 왼쪽 여백보다 왼쪽(또는 오른쪽 끝보다 오른쪽)에 있는 좁은 줄이 줄 간격으로 1~4줄 쌓인 것.
+    아래로 옆 칸 없는 본문이 3줄 이상 이어질 때만 방주로 본다 — 항목마다 칸이 있는 표는 그대로 둔다.
+    합친 줄은 앞에 공백 2칸(문단 시작 표시)을 붙여 줄 잇기가 앞·뒤 본문에 잇지 않게 한다.
+    """
+    n = len(lines)
+    if n != len(boxes) or n < 6:
+        return lines, boxes
+    g = _geometry(boxes)
+    x0, x1, y0, y1, h = g["x0"], g["x1"], g["y0"], g["y1"], g["h"]
+    body_w = g["right"] - g["margin"]
+    body = [i for i in range(n) if x0[i] >= g["margin"] - MARGIN_TOL * h and x1[i] <= g["right"] + h]
+    side = [i for i in range(n) if i not in body and x1[i] - x0[i] < 0.3 * body_w
+            and (x1[i] < g["margin"] - h or x0[i] > g["right"] + h)]
+    if not side or not body:
+        return lines, boxes
+    pitch = float(np.median([b - a for a, b in zip(sorted(y0[i] for i in body), sorted(y0[i] for i in body)[1:])
+                             if b - a > 0.5 * h] or [2 * h]))
+    stacks, cur = [], []
+    for i in sorted(side, key=lambda i: (x0[i] > g["right"], y0[i])):
+        if cur and (y0[i] - y0[cur[-1]] > 1.6 * pitch or (x0[i] > g["right"]) != (x0[cur[-1]] > g["right"])):
+            stacks.append(cur); cur = []
+        cur.append(i)
+    stacks.append(cur)
+
+    moved: dict[int, list[int]] = {}           # 본문 줄 → 그 앞에 둘 방주 줄들
+    for st in stacks:
+        # 쪽번호·차례 쪽수('140')처럼 글자 없는 줄은 방주가 아니다(위클리비즈 7쪽 차례)
+        if len(st) > _SIDE_MAX_LINES or len(re.findall(r'[가-힣A-Za-z]', "".join(lines[j] for j in st))) < 2:
+            continue
+        top, bottom = y0[st[0]], y1[st[-1]]
+        beside = [i for i in body if y1[i] > top - 0.5 * h and y0[i] < bottom + 0.5 * h]
+        below = [i for i in body if y0[i] >= bottom and y0[i] - bottom < (_SIDE_BODY_BELOW + 1) * pitch]
+        if not beside or len(below) < _SIDE_BODY_BELOW:
+            continue
+        # 아래 본문 줄 옆에 또 좁은 칸이 있으면 표(항목 칸)다
+        if any(y1[s] > y0[b] and y0[s] < y1[b] for b in below for s in side if s not in st):
+            continue
+        moved[min(beside, key=lambda i: y0[i])] = st
+    if not moved:
+        return lines, boxes
+
+    drop = {i for st in moved.values() for i in st}
+    out_l, out_b = [], []
+    for i in range(n):
+        if i in drop:
+            continue
+        if i in moved:
+            st = moved[i]
+            out_l.append("  " + " ".join(lines[j].strip() for j in st))
+            xa, xb = min(x0[j] for j in st), max(x1[j] for j in st)
+            ya, yb = y0[st[0]], y1[st[-1]]
+            out_b.append([[xa, ya], [xb, ya], [xb, yb], [xa, yb]])
+        out_l.append(lines[i]); out_b.append(boxes[i])
+    return out_l, out_b
 
 
 def _mark_paragraph_starts(lines: list[str], boxes) -> list[str]:
@@ -331,8 +463,11 @@ def run(image: Image.Image, lang: str = "kor+eng", fast: bool = False, refine: b
     confs = [s * 100.0 for s in line_scores if s > 0]
 
     if len(line_boxes) == len(lines):
-        lines, line_boxes = _order_columns(lines, line_boxes)
-        lines, line_boxes = _drop_page_footer(lines, line_boxes)
+        ordered, ordered_boxes = _order_columns(lines, line_boxes)
+        # 여러 단 쪽에서는 오른쪽 단의 짧은 줄이 '본문 밖 좁은 줄'로 보여 방주로 오인된다 → 1단 쪽만
+        if ordered == lines:
+            ordered, ordered_boxes = _lift_side_headings(lines, line_boxes)
+        lines, line_boxes = _drop_page_footer(ordered, ordered_boxes)
     marked, _ = _join_sentence_wraps(_mark_paragraph_starts(lines, line_boxes), line_boxes)
     full_text = "\n".join(marked)
     avg_conf = sum(confs) / len(confs) if confs else 0.0
