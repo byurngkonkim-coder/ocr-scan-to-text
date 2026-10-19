@@ -74,13 +74,15 @@ def test_structured_text_md_and_txt():
     body = "# 제1장 시작\n\n## 1.첫 절\n\n본문 문장이다.\n"
     rep = {"toc_entries": entries, "toc_note": "차례 2항목 중 2개"}
     logs: list[str] = []
-    md = ocr_gradio._structured_text(body, rep, OutputFormat.MD, logs)
-    assert md.startswith("# 차례\n\n- 제1장 시작\n  - 1.첫 절\n\n# 제1장 시작")
-    txt = ocr_gradio._structured_text(body, rep, OutputFormat.TXT, [])
+    main, md_pair = ocr_gradio._structured_texts(body, rep, OutputFormat.MD, logs)
+    assert main == md_pair and main.startswith("# 차례\n\n- 제1장 시작\n  - 1.첫 절\n\n# 제1장 시작")
+    # txt(+md 짝): 주 결과는 '#'·목록 기호 없는 글, .md 짝은 MD 서식
+    txt, md = ocr_gradio._structured_texts(body, rep, OutputFormat.TXT, [])
     assert txt.startswith("차례\n\n제1장 시작\n  1.첫 절\n\n제1장 시작\n\n1.첫 절\n\n본문") and "#" not in txt
+    assert md == md_pair
     assert logs == ["  📑 차례 2항목 중 2개"]
     # 차례가 없으면 정제본 그대로
-    assert ocr_gradio._structured_text("본문\n", {"toc_entries": []}, OutputFormat.TXT, []) == "본문\n"
+    assert ocr_gradio._structured_texts("본문\n", {"toc_entries": []}, OutputFormat.TXT, []) == ("본문\n", "본문\n")
 
 
 def test_toc_prepass_reads_raw_lines_before_page_join(monkeypatch):
