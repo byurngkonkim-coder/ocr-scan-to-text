@@ -90,7 +90,10 @@ _CONTENT_TOKEN_RE = re.compile(rf"\([一-鿿]+\)|\d[%㎝㎞㎏㎎℃]?{_UNIT}|\d
 def _is_junk_token(t: str) -> bool:
     """줄 끝 잡음 토큰: 한글이 없거나, 한글 한 글자에 잡기호가 붙은 것('휴^', '■가') — 한 글자 낱말
     ('그 사람은'의 '그')·정상 표기('[표1]', '것:')는 본문으로 둔다."""
-    if re.search(r"[가-힣]{2}|[A-Za-z]{3}|^\d{1,4}[.,]?$", t) or _CONTENT_TOKEN_RE.search(t):
+    # 백분율('10%'·'2.5%')과 영문 대문자 약어('SI'·'PM')도 본문 — 줄 끝 '장비사업: 10%' 의 '10%',
+    # 줄 머리 'SI 사업체제' 의 'SI' 가 잡음으로 지워졌다(SI운영방안 1·4쪽, 2026-10-19)
+    if (re.search(r"[가-힣]{2}|[A-Za-z]{3}|^\d{1,4}[.,]?$|^\d+(?:\.\d+)?%[.,]?$|^[A-Z]{2}[.,:]?$", t)
+            or _CONTENT_TOKEN_RE.search(t)):
         return False
     if re.search(r"[가-힣]", t):
         return not all(_OK_CHAR_RE.match(c) for c in t)
@@ -219,19 +222,33 @@ def _join_latin_word_lines(lines: list[str]) -> list[str]:
 _COMMA_SPACE_RE = re.compile(r"(?<=[가-힣]),(?=[가-힣“‘\"'(])")
 
 
+# 줄 머리 글머리 기호 — 장식 기호 제거·잡음 판정 전에 떼어 두었다 되붙인다. 지우면 목록 항목이
+# 줄 잇기로 한 문단에 붙었고, '※SI가' 처럼 기호가 붙은 첫 낱말이 잡음으로 지워졌다(SI운영방안, 2026-10-19)
+# 괄호 번호('(5) 본부 내 …')도 — 줄 머리에 오면 잡음 판정이 '(5)' 를 지웠다(SI운영방안 2쪽)
+_LEAD_BULLET_RE = re.compile(r"^[ \t]*([○●■□◆◇▪•·※①-⑳]|\(\d{1,2}\)|\d{1,2}\))[ \t]*(?=\S)")
+
+
+def _clean_page_line(line: str) -> str:
+    m = _LEAD_BULLET_RE.match(line)
+    # 뒤에 낱말이 있을 때만 기호를 지킨다('• 272' 같은 쪽번호 잡음은 예전처럼). 기호 뒤 띄움은 원문대로('③PT가')
+    if m and re.search(r"[가-힣]{2}|[A-Za-z]{2}", line[m.end():]):
+        rest = _clean_page_line(line[m.end():])
+        return f"{line[:m.end()].lstrip()}{rest}" if rest else ""
+    line = _JAMO_TOKEN_RE.sub(" ", line)
+    line = _JAMO_CHAR_RE.sub("", line)
+    line = _SYMBOL_TOKEN_RE.sub(" ", line)
+    line = _SYMBOL_LEAD_RE.sub("", line)
+    line = re.sub(r"[ \t]{2,}", " ", _fix_numbers(line)).strip()
+    return _clean_line(line) if line else ""
+
+
 def clean_page(text: str) -> str:
     """쪽 하나의 OCR 잡음을 걷어낸다(순서 중요: 부호 정리 → 번호 복원 → 잡음 줄 판정)."""
     text = text.translate(_FULLWIDTH)
     text = _COMMA_SPACE_RE.sub(", ", text)
     text = _RULE_RE.sub(" ", text)
-    text = _JAMO_TOKEN_RE.sub(" ", text)
-    text = _JAMO_CHAR_RE.sub("", text)
-    text = _SYMBOL_TOKEN_RE.sub(" ", text)
-    text = _SYMBOL_LEAD_RE.sub("", text)
-    text = _fix_numbers(text)
-    lines = [re.sub(r"[ \t]{2,}", " ", l).strip() for l in text.splitlines()]
     # 빈 줄(단락 경계)은 하나로 남긴다 — 다 지우면 디지털 PDF 의 단락이 붙는다(C-08, DBR 실측 2026-10-19)
-    lines = [c for l in lines if (c := _clean_line(l) if l else "") or l == ""]
+    lines = [c for l in text.splitlines() if (c := _clean_page_line(l) if l.strip() else "") or not l.strip()]
     text = "\n".join(_join_word_per_line(_join_latin_word_lines(lines)))
     return re.sub(r"\n{3,}", "\n\n", text).strip("\n")
 

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Optional
 
 import numpy as np
@@ -172,6 +173,64 @@ def _order_columns(lines: list[str], boxes) -> tuple[list[str], list]:
     return [lines[i] for i in order], [boxes[i] for i in order]
 
 
+# 글머리 ○ 를 RapidOCR 이 한글 자모·영문 O 로 읽은 것 — 줄 머리에서만('ㅇ협력사'·'ᄋ제안서'·'O영업대표').
+# 'OSI' 처럼 O 뒤가 영문이면 낱말일 수 있어 두지 않는다(SI운영방안, 2026-10-19)
+_MISREAD_BULLET_RE = re.compile(r"^(?:[ㅇᄋ]\s*(?=[가-힣A-Za-z0-9(])|O(?=[가-힣]))")
+
+
+def _restore_bullets(lines: list[str], boxes, rgb: np.ndarray) -> list[str]:
+    """글머리 기호를 되살려 줄 잇기가 항목을 한 문단으로 붙이지 않게 한다.
+
+    ① 잘못 읽힌 ○(ㅇ·ᄋ·O) → '○ '. ② 기호를 아예 못 읽은 줄 — 줄 머리 바로 왼쪽에 글자 하나 크기의
+    네모진 잉크 덩어리가 있고, 같은 x 에 그런 줄이 2줄 이상이면 목록으로 보고 '· ' 를 붙인다
+    (한 줄짜리는 쪽 가장자리 티끌일 수 있어 책 본문을 지키려고 둔다). SI운영방안 1쪽 ○ 11줄이
+    한 문단으로 붙던 문제(2026-10-19)."""
+    lines = [_MISREAD_BULLET_RE.sub("○ ", l) for l in lines]
+    if len(lines) != len(boxes) or not lines:
+        return lines
+    gray = rgb.mean(axis=2) if rgb.ndim == 3 else rgb
+    H, W = gray.shape
+    marks: dict[int, float] = {}
+    for i, b in enumerate(boxes):
+        if _LIST_LEAD_RE.match(lines[i]):
+            continue
+        x0 = int(min(p[0] for p in b))
+        y0, y1 = int(min(p[1] for p in b)), int(max(p[1] for p in b))
+        h = max(1, y1 - y0)
+        a = max(0, x0 - int(1.8 * h))
+        strip = gray[y0:y1, a:max(a, x0 - int(0.15 * h))] < 128
+        ys, xs = np.nonzero(strip)
+        if len(xs) < 4:
+            continue
+        bw, bh = xs.max() - xs.min() + 1, ys.max() - ys.min() + 1
+        # 글자 하나 크기·정사각형 비슷·위아래로 줄 밖까지 이어지지 않음(쪽 가장자리 그림자 제외)
+        above = gray[max(0, y0 - h):y0, a + xs.min():a + xs.max() + 1] < 128
+        if (0.25 * h <= bw <= 1.0 * h and 0.25 * h <= bh <= 1.0 * h and 0.6 <= bw / bh <= 1.6
+                and not above[-max(1, h // 4):].any()):
+            marks[i] = a + (xs.min() + xs.max()) / 2
+    for i, cx in marks.items():
+        h = max(p[1] for p in boxes[i]) - min(p[1] for p in boxes[i])
+        if sum(1 for j, c in marks.items() if j != i and abs(c - cx) < 0.5 * h) >= 1:
+            lines[i] = "· " + lines[i]
+    # ③ 기호를 못 읽었지만 OCR 상자가 기호 자리부터 시작하는 줄 — 같은 쪽에서 ○ 로 시작하는 줄이
+    # 2줄 이상 같은 x 에 있으면 그 x 에서 시작하는 줄도 항목이다(SI운영방안 1쪽 ○ 11줄 중 6줄이 기호 없이 읽힘)
+    x0 = [min(p[0] for p in b) for b in boxes]
+    hs = [max(p[1] for p in b) - min(p[1] for p in b) for b in boxes]
+    anchors = [x0[i] for i, l in enumerate(lines) if l.startswith("○ ")]
+    if len(anchors) >= 2:
+        ax = float(np.median(anchors))
+        for i, l in enumerate(lines):
+            # 0.5줄높이로 넓히면 조금 왼쪽의 □ 제목('목적'·'이익개념')까지 ○ 로 붙었다 — 0.3 유지
+            if not _LIST_LEAD_RE.match(l) and abs(x0[i] - ax) < 0.3 * hs[i]:
+                # 기호 자리의 'O'+대문자 두 자('OSI Biz팀')는 ○ 를 O 로 읽은 것 — 덧붙이지 않고 바꾼다.
+                # 'OECD'·'OPEC' 처럼 세 자 넘는 약어는 낱말이라 그대로 두고 앞에 붙인다
+                lines[i] = ("○ " + l[1:]) if re.match(r"O[A-Z]{2}(?![A-Za-z])", l) else "○ " + l
+    return lines
+
+
+_LIST_LEAD_RE = re.compile(r"^\s*[-–—•·*▶▷►>»※□■○●◆◇▪①-⑳]|^\s*\(?\d{1,2}[.)]")
+
+
 def _mark_paragraph_starts(lines: list[str], boxes) -> list[str]:
     """들여 쓴 줄(문단 첫 줄) 앞에 공백 2칸을 붙인다 — postprocessor.join_broken_lines 가 앞 줄과 잇지 않는다.
 
@@ -270,6 +329,7 @@ def run(image: Image.Image, lang: str = "kor+eng", fast: bool = False, refine: b
     if len(line_boxes) == len(lines):
         lines, line_boxes = _order_columns(lines, line_boxes)
         lines, line_boxes = _drop_page_footer(lines, line_boxes)
+        lines = _restore_bullets(lines, line_boxes, rgb_array)
     marked = _mark_paragraph_starts(lines, line_boxes)
     if anchors:
         marked = _insert_anchors(marked, line_boxes if len(line_boxes) == len(lines) else None,
