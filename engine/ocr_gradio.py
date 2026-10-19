@@ -465,10 +465,13 @@ def _process_page(image, page_num: int, lang: str,
     ocr_image = image
 
     # 그림·표 감지 (Vision 우선 모드·빠른 모드에서는 생략)
+    anchors: list[tuple[float, str]] = []   # 표 자리(쪽 높이 비율, 표지) — 본문 그 자리에 표를 넣는다
     if not no_figure and not quick and not vision_first:
         det = figure_detector.detect(image, lang=lang)
         if det.regions:
             placeholders = [figure_detector.build_placeholder(r) for r in det.regions]
+            anchors = [(r.y / image.height, figure_detector.table_token(page_num, r.index))
+                       for r in det.regions if r.kind == "table" and r.table_md]
             ocr_image = det.masked_image or image
             logs.append(f"  p.{page_num} 감지 영역: {len(det.regions)}개")
 
@@ -496,7 +499,8 @@ def _process_page(image, page_num: int, lang: str,
 
     # RapidOCR 이 실패하면 신뢰도 0 결과가 와서 아래 저신뢰 흐름(Vision 폴백·검토 필요)을 탄다
     # 한글 교정기는 _finalize 에서 1번만 — 두 번 돌리면 띄어쓰기를 다시 붙이기도 한다
-    ocr_result  = rapidocr_engine.smart_run(processed, default_lang=lang, fast=quick, refine=False)
+    ocr_result  = rapidocr_engine.smart_run(processed, default_lang=lang, fast=quick, refine=False,
+                                            anchors=anchors)
     low_quality = ocr_result.confidence < config.get_confidence_threshold() or ocr_result.has_jamo_split
 
     # RapidOCR 저신뢰도 → Vision 폴백 (비용 우선 모드일 때만)
@@ -540,10 +544,31 @@ def _finalize(ocr_result, page_num: int, placeholders: list[str],
               Vision:   단락복원 → 공백정규화
       4. L3  — llm_corrector    (Claude Haiku 문맥 교정, 활성화 시)
     """
-    engine_str = ocr_result.engine.value  # 'rapidocr' 또는 Vision 엔진('gemini'·'claude_vision'·'ollama')
+    # 표 자리 표지(⟨TABLE:쪽-번호⟩)는 교정·줄 잇기에 넣지 않는다 — 표지 사이 본문 조각만 교정하고 다시 잇는다
+    parts = figure_detector.TABLE_TOKEN_RE.split(ocr_result.text)
+    out: list[str] = []
+    for k in range(0, len(parts), 3):
+        chunk = _correct_text(parts[k], ocr_result.engine.value, llm_correct, llm_budget)
+        if chunk.strip():
+            out.append(chunk)
+        if k + 2 < len(parts):
+            out.append(figure_detector.table_token(int(parts[k + 1]), int(parts[k + 2])))
+    text = "\n\n".join(out)
+
+    return PageResult(
+        page_num=page_num, raw_text=ocr_result.text, corrected_text=text,
+        engine=ocr_result.engine, confidence=ocr_result.confidence,
+        figures=placeholders, needs_review=needs_review, review_reason=review_reason,
+    )
+
+
+def _correct_text(text: str, engine_str: str, llm_correct: bool, llm_budget: int) -> str:
+    """_finalize 의 엔진별 교정 체인 — engine_str: 'rapidocr' 또는 Vision 엔진('gemini'·'claude_vision'·'ollama')"""
+    if not text.strip():
+        return ""
 
     # L1 — 규칙 기반 보정 (합자·특수기호·한글분절·영문혼동)
-    text = char_normalizer.normalize_all(ocr_result.text)
+    text = char_normalizer.normalize_all(text)
 
     # MyOCR 기반 한국어 정제 (띄어쓰기, 맞춤법, 어절 쪼개짐/결합 보정)
     try:
@@ -562,12 +587,7 @@ def _finalize(ocr_result, page_num: int, placeholders: list[str],
     # L3 — LLM 문맥 교정 (활성화 시)
     if llm_correct and llm_corrector.is_available():
         text = llm_corrector.correct(text, budget=llm_budget)
-
-    return PageResult(
-        page_num=page_num, raw_text=ocr_result.text, corrected_text=text,
-        engine=ocr_result.engine, confidence=ocr_result.confidence,
-        figures=placeholders, needs_review=needs_review, review_reason=review_reason,
-    )
+    return text
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -750,6 +770,8 @@ def _run_digital_pdf(file_path: Path, pages_text: list[str], out_fmt: OutputForm
                 )
         except StopIteration as stop:
             cleaned_text = stop.value or ""
+        if cleaned_text:   # 표 자리 표지 → Markdown 표 (정제 경로가 표를 통째로 버리던 결함)
+            cleaned_text = writer.place_tables(cleaned_text, result.pages)
         if cleaned_text:
             step_logs.append(f"  📝 문장 정제 완료 ({len(cleaned_text):,}자)")
         _crep = crep or None
@@ -1359,6 +1381,8 @@ def _run_ocr(
                 )
         except StopIteration as stop:
             cleaned_text = stop.value or ""
+        if cleaned_text:   # 표 자리 표지 → Markdown 표 (정제 경로가 표를 통째로 버리던 결함)
+            cleaned_text = writer.place_tables(cleaned_text, result.pages)
         if cleaned_text:
             step_logs.append(f"  📝 문장 정제 완료 ({len(cleaned_text):,}자, 마커 없는 클린 텍스트)")
         _crep = crep or None
@@ -1535,6 +1559,7 @@ def reread_review_pages(file_obj):
     if st["cleanup"]:
         text = text_cleaner.clean_pages([p.corrected_text for p in content],
                                         drop_front_matter=st["front_matter"], local=True)
+        text = writer.place_tables(text, result.pages)
         out_path = writer.write_plain(file_path, text, tmp_dir, st["out_fmt"])
     else:
         out_path = writer.write(result, tmp_dir, st["out_fmt"])

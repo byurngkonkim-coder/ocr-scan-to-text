@@ -45,6 +45,7 @@ _STRUCTURAL = [
     re.compile(r'^\[그림\s*\d+[^\]]*\]'),         # [그림 N: ...]
     re.compile(r'^\[표\s*\d+[^\]]*\]'),           # [표 N...]
     re.compile(r'^\[수식\s*\d+[^\]]*\]'),         # [수식 N...]
+    re.compile(r'^⟨TABLE:\d+-\d+⟩'),              # 본문 표 자리 표지
     re.compile(r'^[─]+\s*비텍스트\s*영역'),        # ── 비텍스트 영역 ──
     re.compile(r'^\s*\|'),                        # Markdown 표 행
     re.compile(r'^\s*\|?\s*:?-{3,}:?\s*\|?'),    # Markdown 구분자

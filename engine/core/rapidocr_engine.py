@@ -202,7 +202,19 @@ def _mark_paragraph_starts(lines: list[str], boxes) -> list[str]:
     return out
 
 
-def run(image: Image.Image, lang: str = "kor+eng", fast: bool = False, refine: bool = True) -> OCRResult:
+def _insert_anchors(lines: list[str], boxes, height: int, anchors: list[tuple[float, str]]) -> list[str]:
+    """표 자리 표지를 그 높이(쪽 높이 대비 비율 — 전처리의 확대·여백과 무관)에 오는 줄 앞에 끼운다.
+    표지는 앞뒤 빈 줄로 따로 세워 줄 잇기에 붙지 않게 한다. 상자가 없으면 끝에 붙인다."""
+    out = list(lines)
+    tops = [min(p[1] for p in b) / height for b in boxes] if boxes is not None else []
+    for frac, token in sorted(anchors, reverse=True):   # 아래 표부터 끼워 앞 표지의 위치가 밀리지 않게
+        i = next((k for k, t in enumerate(tops) if t > frac), len(out))
+        out[i:i] = ["", token, ""]
+    return out
+
+
+def run(image: Image.Image, lang: str = "kor+eng", fast: bool = False, refine: bool = True,
+        anchors: list[tuple[float, str]] | None = None) -> OCRResult:
     """
     이미지에 RapidOCR(ONNX)을 실행하고 OCRResult 반환.
 
@@ -230,7 +242,7 @@ def run(image: Image.Image, lang: str = "kor+eng", fast: bool = False, refine: b
 
     if result is None or getattr(result, "txts", None) is None or not result.txts:
         return OCRResult(
-            text="",
+            text="\n\n".join(t for _f, t in sorted(anchors or [])),   # 표만 있는 쪽
             confidence=100.0,
             engine=OCREngine.RAPIDOCR,
             has_jamo_split=False,
@@ -258,7 +270,11 @@ def run(image: Image.Image, lang: str = "kor+eng", fast: bool = False, refine: b
     if len(line_boxes) == len(lines):
         lines, line_boxes = _order_columns(lines, line_boxes)
         lines, line_boxes = _drop_page_footer(lines, line_boxes)
-    full_text = "\n".join(_mark_paragraph_starts(lines, line_boxes))
+    marked = _mark_paragraph_starts(lines, line_boxes)
+    if anchors:
+        marked = _insert_anchors(marked, line_boxes if len(line_boxes) == len(lines) else None,
+                                 image_rgb.height, anchors)
+    full_text = "\n".join(marked)
     avg_conf = sum(confs) / len(confs) if confs else 0.0
 
     # MyOCR의 고도화된 한국어 정제기 적용
@@ -282,7 +298,8 @@ def run(image: Image.Image, lang: str = "kor+eng", fast: bool = False, refine: b
     )
 
 
-def smart_run(image: Image.Image, default_lang: str = "kor+eng", fast: bool = False, refine: bool = True) -> OCRResult:
+def smart_run(image: Image.Image, default_lang: str = "kor+eng", fast: bool = False, refine: bool = True,
+              anchors: list[tuple[float, str]] | None = None) -> OCRResult:
     """
     로컬 OCR 진입점 — 한 번 읽고, 거의 영문인 쪽만 영문 모델로 다시 읽는다.
 
@@ -291,9 +308,10 @@ def smart_run(image: Image.Image, default_lang: str = "kor+eng", fast: bool = Fa
     호출부가 저신뢰 쪽처럼 Vision 폴백하거나 '검토 필요'로 남긴다.
     """
     try:
-        res = run(image, lang=default_lang, fast=fast, refine=refine)
+        extra = {"anchors": anchors} if anchors else {}
+        res = run(image, lang=default_lang, fast=fast, refine=refine, **extra)
         if default_lang != "eng" and _mostly_english(res.text):
-            res = run(image, lang="eng", fast=fast, refine=refine)
+            res = run(image, lang="eng", fast=fast, refine=refine, **extra)
         return res
     except Exception as e:
         logger.warning(f"RapidOCR 판독 실패 — 신뢰도 0 으로 넘김: {e}")

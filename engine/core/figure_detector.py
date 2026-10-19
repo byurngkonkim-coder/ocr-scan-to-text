@@ -79,16 +79,20 @@ def detect(image: Image.Image, lang: str = "kor+eng") -> DetectionResult:
     fig_idx = tab_idx = form_idx = 1
 
     # ── 1. 표 감지 ──────────────────────────────────────────────────────────────
-    table_boxes = _detect_tables(img_cv)
+    found = _detect_tables(img_cv)
+    table_boxes = [_expand_to_border(img_cv, b, [o for o in found if o != b]) for b in found]
     for (x, y, bw, bh) in table_boxes:
         crop = image.crop((x, y, x + bw, y + bh))
         md = _extract_table_markdown(crop, lang)
         # 행 절반 이상이 한 칸이면 표가 아니다 — 쪽 가장자리 선·도식이 격자로 잡혀 본문 조각을
         # '| 로더정확 |' 처럼 다시 썼다(예측기계 54·107·133·135쪽). 그림 감지로 넘긴다(글자 영역이면 거기서 빠짐)
+        # 칸 수는 행마다 같으니(빈 칸 포함) 글자가 든 칸으로 센다
         rows = [l for l in md.splitlines() if not l.startswith("| ---")]
-        if rows and sum(l.count("|") > 2 for l in rows) * 2 < len(rows):
+        if rows and sum(sum(1 for c in l.strip("|").split("|") if c.strip()) > 1 for l in rows) * 2 < len(rows):
             continue
-        _, _, boxes = _rough_ocr(crop, lang)
+        # 표로 바꾼 영역의 글자는 본문에 되살리지 않는다 — 되살리면 본문 OCR 이 표 글자를 한 줄씩
+        # 다시 풀어 읽어 표와 이중으로 나왔다(SI운영방안 결과의 숫자 나열). 못 바꾼 표만 글자를 살린다
+        boxes = [] if md else _rough_ocr(crop, lang)[2]
         regions.append(Region(
             kind="table", index=tab_idx,
             x=x, y=y, w=bw, h=bh,
@@ -152,6 +156,14 @@ def save_crops(regions: list[Region], out_dir: str | Path, stem: str) -> dict[st
     return mapping
 
 
+TABLE_TOKEN_RE = re.compile(r"⟨TABLE:(\d+)-(\d+)⟩")
+
+
+def table_token(page_num: int, index: int) -> str:
+    """본문 안 표 자리 표지 — 저장 직전 writer.place_tables 가 Markdown 표로 바꾼다."""
+    return f"⟨TABLE:{page_num}-{index}⟩"
+
+
 def build_placeholder(r: Region) -> str:
     """Region → 플레이스홀더 문자열"""
     if r.kind == "figure":
@@ -198,6 +210,43 @@ def _detect_tables(gray: np.ndarray) -> list[tuple[int, int, int, int]]:
     return _merge_overlapping(boxes)
 
 
+def _expand_to_border(gray: np.ndarray, box: tuple[int, int, int, int],
+                      others: list[tuple[int, int, int, int]] = ()) -> tuple[int, int, int, int]:
+    """감지한 표 상자를 근처의 흐린 바깥 테두리까지 넓힌다.
+
+    Otsu 이진화는 연회색 선을 놓친다 — 150dpi 렌더(대시보드 기본)에서 SI운영방안 p5 인벤토리 표가
+    왼쪽 테두리 60px·합계 행을 빼고 잡혀, 프로젝트명 앞 글자와 합계 행이 본문으로 새었다(2026-10-19).
+    상자 밖 15% 안에서 상자 변 길이 절반 이상 이어진 선이 있으면 가장 바깥 선까지 넓힌다.
+    옆에 다른 표 상자가 있으면 그 상자 앞에서 멈춘다(p5 인벤토리 바로 위 제목 띠)."""
+    x, y, w, h = box
+    H, W = gray.shape
+    mx, my = int(w * 0.15), int(h * 0.15)
+    x0, x1, y0, y1 = max(0, x - mx), min(W, x + w + mx), max(0, y - my), min(H, y + h + my)
+    for ox, oy, ow, oh in others:   # 넓힐 범위를 이웃 상자 바로 앞까지로 줄인다
+        if ox < x + w and x < ox + ow:
+            if oy + oh <= y:
+                y0 = max(y0, oy + oh + 1)
+            elif oy >= y + h:
+                y1 = min(y1, oy - 1)
+        if oy < y + h and y < oy + oh:
+            if ox + ow <= x:
+                x0 = max(x0, ox + ow + 1)
+            elif ox >= x + w:
+                x1 = min(x1, ox - 1)
+    binary = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, 25, 10)
+    vert = cv2.morphologyEx(binary[y:y + h, x0:x1], cv2.MORPH_OPEN,
+                            cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(10, h // 4))))
+    horiz = cv2.morphologyEx(binary[y0:y1, x:x + w], cv2.MORPH_OPEN,
+                             cv2.getStructuringElement(cv2.MORPH_RECT, (max(10, w // 4), 1)))
+    cols = np.where(vert.sum(0) / 255 >= h * 0.5)[0] + x0
+    rows = np.where(horiz.sum(1) / 255 >= w * 0.5)[0] + y0
+    left = min([x] + [c for c in cols if c < x])
+    right = max([x + w] + [c + 1 for c in cols if c >= x + w])
+    top = min([y] + [r for r in rows if r < y])
+    bottom = max([y + h] + [r + 1 for r in rows if r >= y + h])
+    return left, top, right - left, bottom - top
+
+
 def _detect_figures(gray: np.ndarray, orig: Image.Image) -> list[tuple[int, int, int, int]]:
     """연속 윤곽선 + 컬러 분석으로 그림·사진 영역 감지"""
     # 컬러 이미지에서 채도 높은 영역 감지
@@ -234,37 +283,186 @@ def _detect_figures(gray: np.ndarray, orig: Image.Image) -> list[tuple[int, int,
 
 
 def _extract_table_markdown(crop: Image.Image, lang: str) -> str:
-    """표 크롭 이미지에서 RapidOCR 로 글자 상자를 읽어 행(세로로 겹치는 상자)·열(왼쪽부터)로 묶어 Markdown"""
+    """표 크롭 이미지에서 RapidOCR 로 글자 상자를 읽어 행·열 칸에 넣고 Markdown 표로.
+
+    예전엔 「세로로 겹치는 상자 = 같은 행」으로 이어 붙였는데, 기울어진 스캔에서 겹침이 연쇄돼
+    15행 표가 2행으로 뭉쳤고 열은 상자 순서라 행마다 칸 수가 달랐다(SI운영방안 p1·p5, 2026-10-19).
+    스캔 격자선은 끊기거나 흐려(p5 인벤토리 내부선 0개) 선만으로 칸을 못 나눈다 → 글자 배치가 기준,
+    선은 「그 사이 줄을 한 칸으로 합치지 않는다」·「열 경계」 보조로만 쓴다.
+    """
     try:
-        rows: list[list] = []   # [y0, y1, [(x, 글자), ...]]
-        for text, _score, (x, y, w, h) in sorted(_read_framed(crop, lang), key=lambda t: t[2][1]):
-            if not text:
-                continue
-            for row in rows:
-                if y < row[1] and row[0] < y + h:   # 세로 겹침 = 같은 행
-                    row[0], row[1] = min(row[0], y), max(row[1], y + h)
-                    row[2].append((x, text))
-                    break
-            else:
-                rows.append([y, y + h, [(x, text)]])
-
-        if not rows:
+        boxes = _read_table_boxes(crop, lang)
+        if not boxes:
             return ""
-
-        lines = [" | ".join(t for _, t in sorted(cells)) for _, _, cells in rows]
-        if len(lines) < 2:
+        unit = sorted(b[3] for _t, b in boxes)[len(boxes) // 2]   # 글자 높이(중앙값)
+        h_lines, v_lines = _grid_segments(_to_gray_cv(crop), unit)
+        lines = _text_lines(boxes, unit)
+        cols = _column_bounds(lines, v_lines, crop.width, unit)
+        rows = _group_rows(lines, cols, h_lines, unit)
+        if len(rows) < 2:
             return ""
-
-        # 첫 행을 헤더로
-        md_lines = [
-            f"| {lines[0]} |",
-            f"| {' | '.join(['---'] * lines[0].count('|') + ['---'])} |",
-        ]
-        for line in lines[1:]:
-            md_lines.append(f"| {line} |")
-        return "\n".join(md_lines)
+        grid = [_fill_cells(row, cols) for row in rows]
+        keep = [j for j in range(len(cols)) if any(r[j] for r in grid)]   # 막대·화살표만 있던 칸(간트) 빼기
+        grid = [[r[j] for j in keep] for r in grid if any(r)]
+        _fold_lone_columns(grid)
+        if len(grid) < 2:
+            return ""
+        md = ["| " + " | ".join(c.replace("|", "/") for c in r) + " |" for r in grid]
+        md.insert(1, "| " + " | ".join(["---"] * len(grid[0])) + " |")
+        return "\n".join(md)
     except Exception:
         return ""
+
+
+# 대시보드 렌더(150dpi) 표 칸 글자는 RapidOCR 이 낱말 조각으로 끊어 읽었다(SI운영방안 p2 설명 칸) — 키워서 읽는다.
+# 1.5배는 p2 가 여전히 조각났고 2배에서 4행 모두 칸 단위로 읽혔다(2026-10-19)
+_TABLE_OCR_SCALE = 2.0
+
+
+def _read_table_boxes(crop: Image.Image, lang: str) -> list[tuple[str, tuple[int, int, int, int]]]:
+    s = _TABLE_OCR_SCALE
+    big = crop.resize((round(crop.width * s), round(crop.height * s)), Image.LANCZOS)
+    return [(t.strip(), (round(x / s), round(y / s), round(w / s), round(h / s)))
+            for t, _sc, (x, y, w, h) in _read_framed(big, lang) if t and t.strip()]
+
+
+def _grid_segments(gray: np.ndarray, unit: int) -> tuple[list[tuple[int, int, int]], list[int]]:
+    """표 안 가로선 조각 (y, x0, x1) 과 세로선 x 위치. 흐린 스캔 선도 잡게 적응형 이진화.
+    세로선은 글자 높이의 1.3배 이상만 — 그보다 짧으면 글자 획(ㅣ·l)이다."""
+    h, w = gray.shape
+    binary = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, 25, 10)
+    horiz = cv2.morphologyEx(binary, cv2.MORPH_OPEN,
+                             cv2.getStructuringElement(cv2.MORPH_RECT, (max(30, w // 20), 1)))
+    v_len = max(20, round(unit * 1.3))
+    vert = cv2.morphologyEx(binary, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (1, v_len)))
+    h_segs = []
+    for cnt in cv2.findContours(horiz, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0]:
+        x, y, bw, bh = cv2.boundingRect(cnt)
+        h_segs.append((y + bh // 2, x, x + bw))
+    v_xs = []
+    for cnt in cv2.findContours(vert, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0]:
+        x, _y, bw, _bh = cv2.boundingRect(cnt)
+        v_xs.append(x + bw // 2)
+    return h_segs, sorted(v_xs)
+
+
+def _text_lines(boxes, unit: int) -> list[list]:
+    """글자 상자를 가운데 높이로 줄로 묶는다 → [[가운데 y, [(글자, 상자), ...]], ...] (위에서 아래로)."""
+    lines: list[list] = []
+    for t, b in sorted(boxes, key=lambda tb: tb[1][1] + tb[1][3] / 2):
+        cy = b[1] + b[3] / 2
+        if lines and cy - lines[-1][0] < unit * 0.5:
+            lines[-1][1].append((t, b))
+            lines[-1][0] = sum(bb[1] + bb[3] / 2 for _t, bb in lines[-1][1]) / len(lines[-1][1])
+        else:
+            lines.append([cy, [(t, b)]])
+    return lines
+
+
+def _group_rows(lines, cols, h_lines, unit: int) -> list[list]:
+    """줄을 행으로. 촘촘한 데이터 행(SI운영방안 p5: 줄 간격이 글자 높이의 1.3배)과 한 칸 안 여러 줄을
+    간격으로는 못 가른다 → 「칸 절반 이상을 채운 줄」은 새 행, 몇 칸만 채운 줄(설명 칸 이어지는 줄·
+    2단 머리글의 윗줄·아랫줄)은 가로선이 사이에 없고 가까우면 이웃 행에 붙인다."""
+    def filled(items) -> int:
+        return sum(1 for c in _fill_cells(items, cols) if c)
+
+    def ruled(y0, y1) -> bool:
+        return any(min(y0, y1) < ly < max(y0, y1) for ly, _x0, _x1 in h_lines)
+
+    def joins(group, cy) -> bool:
+        return not ruled(group[1], cy) and cy - group[1] < unit * 2
+
+    full = max(filled(items) for _cy, items in lines)
+    rows: list[list] = []        # [위 가운데 y, 아래 가운데 y, 상자들]
+    pending: list[list] = []     # 아직 칸 절반을 못 채운 줄 묶음 — 다음 행 위에 붙인다(2단 머리글 윗줄)
+    for cy, items in lines:
+        if filled(items) * 2 < full:
+            # 대기 묶음 → 앞 행 순으로 붙이고, 못 붙으면(첫 줄·세로 병합 칸 이름 「목표 및」처럼
+            # 선에 걸친 줄) 새 대기 묶음
+            target = pending[-1] if pending else rows[-1] if rows else None
+            if target is not None and joins(target, cy):
+                target[1] = cy
+                target[2].extend(items)
+            else:
+                pending.append([cy, cy, list(items)])
+            continue
+        top = cy
+        if pending and joins(pending[-1], cy):
+            last = pending.pop()
+            top, items = last[0], last[2] + items
+        rows += pending
+        pending = []
+        rows.append([top, cy, list(items)])
+    rows += pending
+    return [items for _t, _b, items in sorted(rows, key=lambda r: r[0])]
+
+
+def _column_bounds(lines, v_lines, width: int, unit: int) -> list[tuple[int, int]]:
+    """열 경계 — 거의 모든 줄에서 글자가 없는 세로 띠와 세로선. 여러 열에 걸친 머리글 줄은 띠를 막지 않게 뺀다."""
+    cover = np.zeros(width + 1, dtype=np.int32)
+    for _cy, items in lines:
+        for _t, (x, _y, w, _h) in items:
+            cover[max(0, x):min(width, x + w) + 1] += 1
+    # 줄의 30% 이하만 걸친 띠도 경계 — 여러 열에 걸친 머리글 2줄(SI운영방안 p1 「SI수행」「Project수행팀」)이
+    # 그 아래 「가득률 | 70%+」 경계를 가렸다. 단 그런 띠 안에 글자가 전혀 없는 곳이 있으면 거기서 자른다
+    # (머리글에만 있는 「고객」 열이 넓은 띠에 묻혀 옆 열과 합쳐졌다, p5).
+    limit = max(1, round(len(lines) * 0.35))
+    cuts = list(v_lines)
+    x = 0
+    while x <= width:
+        if cover[x] > limit:
+            x += 1
+            continue
+        start = x
+        while x <= width and cover[x] <= limit:
+            x += 1
+        zeros, z = [], start
+        while z < x:
+            if cover[z] == 0:
+                z0 = z
+                while z < x and cover[z] == 0:
+                    z += 1
+                zeros.append((z0 + z) // 2)
+            z += 1
+        cuts += zeros or [(start + x) // 2]
+    # 가까운 경계는 하나로 — 세로선 옆 여백이 따로 잡히면 칸이 한 칸씩 어긋났다(p2). 세로선을 우선한다
+    merged: list[int] = []
+    for c in sorted(c for c in cuts if 0 < c < width):
+        if merged and c - merged[-1] < unit:
+            if c in v_lines:
+                merged[-1] = c
+            continue
+        merged.append(c)
+    bounds = [0] + merged + [width]
+    return list(zip(bounds[:-1], bounds[1:]))
+
+
+def _fold_lone_columns(grid: list[list[str]]) -> None:
+    """한 행에만 글자가 있고 그 왼쪽 칸이 비어 있는 열은 왼쪽으로 붙인다 — 프로젝트명 칸 오른쪽에 붙은
+    「합계」가 따로 열 하나를 만들었다(p5). 머리글에만 있는 열(「고객」)은 왼쪽 칸이 차 있어 그대로 둔다."""
+    j = len(grid[0]) - 1
+    while j > 0:
+        used = [r for r in grid if r[j]]
+        if len(used) == 1 and not used[0][j - 1]:
+            used[0][j - 1], used[0][j] = used[0][j], ""
+            for r in grid:
+                del r[j]
+        j -= 1
+
+
+def _fill_cells(row, cols) -> list[str]:
+    """상자를 칸에 넣는다 — 상자가 시작하는 칸(병합 칸·긴 프로젝트명은 첫 칸). 시작 칸에 30% 미만만
+    걸쳤으면 가운데가 든 칸. 가운데 기준만 쓰면 긴 이름이 이름 열 안의 약한 경계를 넘어 옆 열로 갔다(p5)."""
+    cells: list[list] = [[] for _ in cols]
+    for t, (x, y, w, _h) in row:
+        start = next((j for j, (a, b) in enumerate(cols) if a <= x < b), 0)
+        if min(cols[start][1], x + w) - x >= w * 0.3:
+            j = start
+        else:
+            cx = x + w / 2
+            j = next((j for j, (a, b) in enumerate(cols) if a <= cx < b), len(cols) - 1)
+        cells[j].append((y, x, t.strip()))
+    return [" ".join(t for _y, _x, t in sorted(c)) for c in cells]
 
 
 def _is_formula(text: str) -> bool:
