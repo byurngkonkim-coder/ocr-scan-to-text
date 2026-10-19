@@ -230,8 +230,10 @@ def clean_page(text: str) -> str:
     text = _SYMBOL_LEAD_RE.sub("", text)
     text = _fix_numbers(text)
     lines = [re.sub(r"[ \t]{2,}", " ", l).strip() for l in text.splitlines()]
-    lines = [c for c in (_clean_line(l) for l in lines) if c]
-    return "\n".join(_join_word_per_line(_join_latin_word_lines(lines)))
+    # 빈 줄(단락 경계)은 하나로 남긴다 — 다 지우면 디지털 PDF 의 단락이 붙는다(C-08, DBR 실측 2026-10-19)
+    lines = [c for l in lines if (c := _clean_line(l) if l else "") or l == ""]
+    text = "\n".join(_join_word_per_line(_join_latin_word_lines(lines)))
+    return re.sub(r"\n{3,}", "\n\n", text).strip("\n")
 
 
 def _join_word_per_line(lines: list[str]) -> list[str]:
@@ -274,7 +276,10 @@ def _header_grams(pages: list[str]) -> set[str]:
         # 쪽 끝에 자주 오는 영어 명언 줄의 흔한 조각('that'·'ally')까지 학습된다
         edge = [s for l in lines[:2] + lines[-2:] for s in (l.strip()[:30], l.strip()[-30:])]
         edge_df.update(set().union(*(_grams(_skel(l)) for l in edge)) if edge else set())
-        all_df.update(_grams(_skel(p)))
+        # 쪽 수가 아니라 나온 횟수로 센다 — 머리글은 쪽마다 한 번, 기사 주제어('스탠다드차타드은행')는
+        # 한 쪽에 여러 번이다. 쪽 수로 세면 단락 첫머리에 자주 오는 주제어를 머리글로 지웠다(DBR 실측 2026-10-19)
+        sk = _skel(p)
+        all_df.update(sk[i:i + _GRAM] for i in range(len(sk) - _GRAM + 1))
     need = max(5, int(len(pages) * 0.03))
     return {g for g, n in edge_df.items() if n >= need and n >= 0.6 * all_df[g]}
 

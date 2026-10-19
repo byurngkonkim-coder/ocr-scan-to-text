@@ -687,6 +687,8 @@ _PAGE_NO_RE = re.compile(r'^\d{1,4}\s+|\s+\d{1,4}$')
 # '머리말 | 029'·'028 | 피터 드러커의 매니지먼트' 꼴 쪽 꼬리말 — 장마다 제목이 달라(짧은 장·OCR 오타
 # '미리말 | 037') 반복 횟수 규칙에 안 걸리던 것. 모양이 뚜렷해 페이지 가장자리 줄이면 바로 뗀다.
 _FOOTER_RE = re.compile(r'^(?:[^|\d][^|]{0,39}\|\s*\d{1,4}|\d{1,4}\s*\|[^|]{1,40})$')
+# '2페이지' 쪽 표시 줄 — DBR 디지털 PDF 실측(표본 120개 쪽 가장자리 436곳). 맨 숫자 줄은 연도('1968')와 섞여 제외
+_PAGE_LABEL_RE = re.compile(r'^\d{1,4}\s*페이지$')
 
 
 # OCR 이 같은 머리글을 쪽마다 다르게 읽는 경우(실측: MyOCR 1분의사결정 165쪽) —
@@ -743,7 +745,8 @@ def strip_running_headers(pages: list[str]) -> list[str]:
     for n, lines in enumerate(split):
         drop = {i for i in _edge_indices(lines)
                 if ((k := _header_key(lines[i])) in headers and headers[k] != n)
-                or _FOOTER_RE.match(lines[i].strip()) or _PAGE_FOOTER_LINE.match(lines[i].strip())}
+                or _FOOTER_RE.match(lines[i].strip()) or _PAGE_FOOTER_LINE.match(lines[i].strip())
+                or _PAGE_LABEL_RE.match(lines[i].strip())}
         out.append("\n".join(l for i, l in enumerate(lines) if i not in drop)
                    if drop else pages[n])
     return out
