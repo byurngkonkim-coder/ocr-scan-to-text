@@ -265,6 +265,8 @@ def _join_sentence_wraps(lines: list[str], boxes) -> tuple[list[str], list]:
     """
     if len(lines) != len(boxes) or len(lines) < 3 or not any(l.startswith("  ") for l in lines):
         return lines, boxes
+    from core.postprocessor import is_item_start, item_letters   # 맨 위에 두면 figure_detector 와 순환 import
+    letters = item_letters(lines)
     g = _geometry(boxes)
     gaps = [g["y0"][i + 1] - g["y1"][i] for i in range(len(lines) - 1)]
     usual = float(np.median(gaps)) if gaps else 0.0
@@ -274,6 +276,7 @@ def _join_sentence_wraps(lines: list[str], boxes) -> tuple[list[str], list]:
         p = i - 1
         if (g["x1"][p] >= g["right"] - g["h"] and (g["at_margin"][p] or prev.startswith("  "))
                 and _SENT_END_LINE.search(prev.rstrip()) and not cur.startswith("  ")
+                and not is_item_start(cur, letters)
                 and g["at_margin"][i] and gaps[p] <= max(1.5 * usual, usual + 0.3 * g["h"])):
             out_l[-1] = out_l[-1].rstrip() + " " + cur.strip()
             continue

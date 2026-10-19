@@ -564,8 +564,14 @@ def post_process_pagebreaks(text: str) -> str:
     if not text:
         return ""
 
+    from core.postprocessor import is_item_start, item_letters
+    letters = item_letters(text.replace(PAGEBREAK, "\n").splitlines())
+
     def _repl(match):
         before, ws_before, ws_after, after = match.groups()
+        # 다음 쪽이 항목(2. ② 나. 제2조 …)으로 시작하면 앞 쪽 끝에 붙이지 않는다
+        if "\n" in ws_before + ws_after and is_item_start(match.string[match.start(4):], letters):
+            return before + "\n" + after
         # 앞 문장이 끝났고 사이에 줄바꿈이 있으면 쪽 경계 = 문단 경계 → 빈 줄 유지
         if _SENT_END.search(before):
             return before + ("\n\n" if "\n" in ws_before + ws_after else " ") + after

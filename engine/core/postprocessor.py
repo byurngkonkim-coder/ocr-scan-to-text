@@ -35,7 +35,34 @@ _PARA_START = re.compile(r'^[가-힣A-Za-z0-9\"\'\(「『《]')
 # 줄이 오른쪽 끝까지 찼다고 볼 비율 — 쪽에서 흔한 줄 길이(중앙값)의 이만큼 이상이어야 다음 줄과 잇는다.
 # MyOCR 정제본 23권 실측: 길이만 보면 제목('목표는 완전한 이해다')·표 행('국내 극장 4,928,000')을 본문에 붙였다
 _FULL_LINE_RATIO = 0.75
-_LIST_START_RE = re.compile(r'^[-–—•·*▶▷►>»※□■○●◆◇]')
+# 항목 시작(글머리 기호·일련번호·조항) — 이 줄은 앞 줄에 잇지 않는다. 쪽 경계 잇기·OCR 문단 잇기도 같이 쓴다.
+# '1.5배'·'가나다'·'제3조에' 처럼 뒤에 공백·괄호가 없으면 항목 표시가 아니다.
+ITEM_START_RE = re.compile(
+    r'^(?:[-–—•·*▶▷►>»※□■○●◆◇▪◦☞➤✓]'
+    r'|\(?\d{1,3}[.．)]\s'                          # 1. 2) (3)
+    r'|[①-⑳㉠-㉭㈀-㈍]'                              # ① ㉠ ㈀
+    r'|제\s?\d{1,3}\s?[조장절항편부관](?:\s|\(|$))')   # 제1조 제2장
+# 한글 항목(가. 나) (다)) — 줄 끝에서 잘린 '…운용되었|다. 그러나' 와 모양이 같아,
+# 앞이나 뒤 글자도 다른 줄 머리에 항목으로 나올 때만 항목으로 본다(목록은 두 개 이상이다)
+_KO_ITEM_RE = re.compile(r'^\(?([가나다라마바사아자차카타파하])[.)]\s')
+_KO_SEQ = "가나다라마바사아자차카타파하"
+
+
+def item_letters(lines) -> frozenset[str]:
+    """줄 머리에 한글 항목 표시로 나온 글자들 — is_item_start 에 넘긴다."""
+    return frozenset(m[1] for l in lines if (m := _KO_ITEM_RE.match(l.lstrip())))
+
+
+def is_item_start(line: str, letters: frozenset[str] = frozenset()) -> bool:
+    """항목 시작 줄인가(글머리 기호·일련번호·조항·한글 항목)."""
+    s = line.lstrip()
+    if ITEM_START_RE.match(s):
+        return True
+    m = _KO_ITEM_RE.match(s)
+    if not m:
+        return False
+    k = _KO_SEQ.index(m[1])
+    return bool(letters & {_KO_SEQ[k - 1] if k else "", _KO_SEQ[k + 1] if k + 1 < len(_KO_SEQ) else ""})
 # 노이즈 줄 (2자 미만 의미 있는 문자)
 _NOISE_LINE = re.compile(r'^[\s\W]{0,2}$')
 # 구조 마커 패턴 (미리보기에서 제거할 것들)
@@ -227,11 +254,12 @@ def join_broken_lines(text: str) -> str:
       - 다음 줄이 들여쓰기 없이 한글·영문으로 시작
       - 다음 줄이 새 단락 표시(빈 줄, 숫자. 로 시작)가 아님
       - 현재 물리적 줄이 오른쪽 끝까지 참(흔한 줄 길이의 75% 이상) — 짧은 제목·표 행 제외
-      - 다음 줄이 목록 기호(- • ▶ 등)로 시작하지 않음
+      - 다음 줄이 항목 시작(- • ▶, 1. 2), ①, 가., 제1조 등)이 아님
     """
     lines = text.splitlines()
     lens = sorted(len(l.strip()) for l in lines if l.strip())
     full = lens[len(lens) // 2] * _FULL_LINE_RATIO if lens else 0
+    letters = item_letters(lines)
     out: list[str] = []
     i = 0
     while i < len(lines):
@@ -249,7 +277,7 @@ def join_broken_lines(text: str) -> str:
                 break  # 빈 줄 → 연결 중단
             # 지금까지 이은 줄이 아니라 '현재 물리적 줄'(lines[i])이 끝까지 찼는지를 본다
             last = not any(l.strip() for l in lines[i + 2:])
-            if (len(lines[i].strip()) >= full and not _LIST_START_RE.match(nxt.strip())
+            if (len(lines[i].strip()) >= full and not is_item_start(nxt, letters)
                     and not (last and _PAGE_FOOTER_LINE.match(nxt.strip()))
                     and _should_join(cur, nxt)):
                 cur = _join_wrapped(cur, nxt)
