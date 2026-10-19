@@ -276,19 +276,58 @@ def _publish_to_results(out_path: Path, stem: str) -> Path:
 
 def _finalize_results(ckpt: "_CleanCheckpoint | None", cleaned_text: str | None,
                       out_path: Path, stem: str,
-                      logs: list[str] | None = None) -> Path | None:
-    """최종 산출물을 02_결과/ 에 확정하고 그 경로를 돌려준다(실패 시 None + logs 경고)."""
+                      logs: list[str] | None = None, md_src: Path | None = None) -> Path | None:
+    """최종 산출물을 02_결과/ 에 확정하고 그 경로를 돌려준다(실패 시 None + logs 경고).
+    md_src 가 있으면(저장 형식 txt+md) 같은 이름의 .md 짝을 옆에 둔다."""
     try:
         if ckpt is not None and cleaned_text:
-            return ckpt.finish(cleaned_text)
-        if ckpt is not None:
-            ckpt.close()   # 정제 결과가 비었으면 _정제중 파일을 증거로 남겨 둔다
-        return _publish_to_results(out_path, stem)
+            final = ckpt.finish(cleaned_text)
+        else:
+            if ckpt is not None:
+                ckpt.close()   # 정제 결과가 비었으면 _정제중 파일을 증거로 남겨 둔다
+            final = _publish_to_results(out_path, stem)
     except Exception as e:
         # 조용히 넘기면 화면의 '저장 위치'가 임시 폴더를 가리킨다 — 반드시 표면화
         if logs is not None:
             logs.append(f"  ⚠ 02_결과 폴더에 결과를 저장하지 못했습니다(아래 경로는 임시 사본): {e}")
         return None
+    _place_md_pair(final, md_src, logs)
+    return final
+
+
+def _parse_fmt(fmt: str) -> tuple[OutputFormat, bool]:
+    """저장 형식 선택 → (주 결과 형식, .md 짝도 만들지). 'txt+md' 는 .txt 가 주 결과(처리 기록)."""
+    if fmt == "txt+md":
+        return OutputFormat.TXT, True
+    return (OutputFormat.MD if fmt == "md" else OutputFormat.TXT), False
+
+
+def _md_pair_source(file_path: Path, result: FileResult, tmp_dir: Path, text: str | None = None) -> Path:
+    """txt+md 짝의 .md 원본을 임시 폴더에 만든다 — 본문(정제 결과·txt 원문)이 있으면 .txt 와 같은 글자,
+    없으면(정제 끈 쪽 단위 출력) 기존 MD 서식(## 페이지 N·문서 정보)."""
+    if text is not None:
+        return writer.write_plain(file_path, text, tmp_dir / "md", OutputFormat.MD)
+    return writer.write(result, tmp_dir / "md", OutputFormat.MD)
+
+
+def _place_md_pair(final: Path, md_src: Path | None, logs: list[str] | None) -> None:
+    if md_src is None:
+        return
+    try:
+        final.with_suffix(".md").write_bytes(Path(md_src).read_bytes())
+    except Exception as e:   # 짝이 없다는 걸 숨기면 .md 를 찾다 헤맨다 — 표면화
+        if logs is not None:
+            logs.append(f"  ⚠ .md 짝 파일을 만들지 못했습니다(.txt 는 저장됨): {e}")
+
+
+def _result_files(path: Path | None) -> list[str] | str | None:
+    """결과 칸에 보낼 파일 — .md 짝이 있으면 둘 다."""
+    if path is None:
+        return None
+    pair = Path(path).with_suffix(".md")
+    if Path(path).suffix == ".txt" and pair.exists():
+        return [str(path), str(pair)]
+    return str(path)
 
 
 def _progress_html(pages_done: int, total: int, label: str,
@@ -658,7 +697,7 @@ def _run_digital_pdf(file_path: Path, pages_text: list[str], out_fmt: OutputForm
                      cleanup: bool, front_matter: bool, start_time: float,
                      label: str = "디지털 PDF 추출",
                      garbled_pages=(), read_page=None, noisy_pages=(), repaired_lines=None,
-                     page_fn=_finalize_digital, local_clean: bool = True):
+                     page_fn=_finalize_digital, local_clean: bool = True, md_pair: bool = False):
     """디지털 PDF(텍스트 레이어 보유) 전용 초고속 경로.
 
     local_clean=True(기본): 문장 정제를 내장 규칙(설정 시 로컬 exaone3.5)으로 — 유료 API 로 보내지 않는다.
@@ -802,10 +841,14 @@ def _run_digital_pdf(file_path: Path, pages_text: list[str], out_fmt: OutputForm
                 step_logs.append(f"  ⚠ 정제 전 원문 사본을 만들지 못했습니다(복구용 원문 없음): {e}")
         elif page_fn is _finalize_text:
             # txt 를 정제 없이 저장 — 문단 묶음일 뿐인 '쪽' 표시를 넣지 않는다
-            out_path = writer.write_plain(
-                file_path, "\n\n".join(p.corrected_text for p in result.pages), tmp_dir, out_fmt)
+            plain = "\n\n".join(p.corrected_text for p in result.pages)
+            out_path = writer.write_plain(file_path, plain, tmp_dir, out_fmt)
         else:
             out_path = writer.write(result, tmp_dir, out_fmt)
+        md_src = None
+        if md_pair:
+            md_src = _md_pair_source(file_path, result, tmp_dir,
+                                     cleaned_text or (plain if page_fn is _finalize_text else None))
     except Exception as e:
         if ckpt is not None:
             ckpt.close()   # 중간 저장분(_정제중)은 회수용으로 남긴다
@@ -821,7 +864,7 @@ def _run_digital_pdf(file_path: Path, pages_text: list[str], out_fmt: OutputForm
         preview = _build_preview(result)
 
     # ── 02_결과/ 확정 — 이력에 경로를 남기려고 기록보다 먼저 ──────────────────────
-    results_path = _finalize_results(ckpt, cleaned_text, out_path, file_path.stem, step_logs)
+    results_path = _finalize_results(ckpt, cleaned_text, out_path, file_path.stem, step_logs, md_src)
 
     # ── storage: 결과 파일 영구 저장 + 이력 기록 ───────────────────────────────
     try:
@@ -871,7 +914,7 @@ def _run_digital_pdf(file_path: Path, pages_text: list[str], out_fmt: OutputForm
                        elapsed_str=total_el, done=True),
         "\n".join(summary),
         preview,
-        str(results_path or out_path),
+        _result_files(results_path) or str(out_path),
         gr.update(visible=False),
         None,
     )
@@ -907,7 +950,7 @@ def process_preview(
         claude_vision.set_session_key(api_key_input)
 
     file_path = Path(file_obj.name)
-    out_fmt   = OutputFormat.MD if fmt == "md" else OutputFormat.TXT
+    out_fmt, md_pair = _parse_fmt(fmt)
     file_mb   = file_path.stat().st_size / 1_048_576
 
     # ── 디지털 PDF 우선 경로 ──────────────────────────────────────────────────
@@ -918,7 +961,7 @@ def process_preview(
         if _info and _info.is_digital:
             yield from _run_digital_pdf(
                 file_path, _info.pages, out_fmt, cleanup, front_matter, start_time,
-                label="디지털 PDF 추출",
+                label="디지털 PDF 추출", md_pair=md_pair,
                 garbled_pages=_info.garbled_pages, noisy_pages=_info.noisy_pages,
                 repaired_lines=_info.repaired_lines,
                 read_page=_page_reader(file_path, lang, no_preprocess, no_fallback, no_figure,
@@ -1203,7 +1246,7 @@ def _run_ocr(
         claude_vision.set_session_key(api_key_input)
 
     file_path = Path(file_obj.name)
-    out_fmt   = OutputFormat.MD if fmt == "md" else OutputFormat.TXT
+    out_fmt, md_pair = _parse_fmt(fmt)
     file_mb   = file_path.stat().st_size / 1_048_576
 
     # ── 텍스트 파일(.txt) — 이미 읽은 본문: OCR 없이 문장 정제·저장·기록만 한다 ──
@@ -1211,7 +1254,7 @@ def _run_ocr(
         yield from _run_digital_pdf(
             file_path, _text_pages(file_path.read_text(encoding="utf-8-sig")),
             out_fmt, cleanup, front_matter, start_time,
-            label="텍스트 파일 정제", page_fn=_finalize_text,
+            label="텍스트 파일 정제", page_fn=_finalize_text, md_pair=md_pair,
         )
         return
 
@@ -1223,7 +1266,7 @@ def _run_ocr(
         if _info and _info.is_digital:
             yield from _run_digital_pdf(
                 file_path, _info.pages, out_fmt, cleanup, front_matter, start_time,
-                label=label,
+                label=label, md_pair=md_pair,
                 garbled_pages=_info.garbled_pages, noisy_pages=_info.noisy_pages,
                 repaired_lines=_info.repaired_lines,
                 read_page=_page_reader(file_path, lang, no_preprocess, no_fallback, no_figure,
@@ -1420,6 +1463,7 @@ def _run_ocr(
                     [p.corrected_text for p in content_pages])):
                 page.corrected_text = text
             out_path = writer.write(result, tmp_dir, out_fmt)
+        md_src = _md_pair_source(file_path, result, tmp_dir, cleaned_text or None) if md_pair else None
     except Exception as e:
         if ckpt is not None:
             ckpt.close()   # 중간 저장분(_정제중)은 회수용으로 남긴다
@@ -1442,7 +1486,7 @@ def _run_ocr(
     total_el     = elapsed()
 
     # ── 02_결과/ 확정 — 이력에 경로를 남기려고 기록보다 먼저 ──────────────────────
-    results_path = _finalize_results(ckpt, cleaned_text, out_path, file_path.stem, step_logs)
+    results_path = _finalize_results(ckpt, cleaned_text, out_path, file_path.stem, step_logs, md_src)
     ocr_ckpt.close()
     if results_path is not None:          # 확정됐을 때만 OCR 복구본을 지운다
         ocr_ckpt.path.unlink(missing_ok=True)
@@ -1480,7 +1524,8 @@ def _run_ocr(
     _LAST_REVIEW.clear()
     if review_count:
         _LAST_REVIEW.update(file=str(file_path), result=result, cleanup=cleanup,
-                            front_matter=front_matter, out_fmt=out_fmt, lang=lang, total=total)
+                            front_matter=front_matter, out_fmt=out_fmt, md_pair=md_pair,
+                            lang=lang, total=total)
 
     summary = [
         f"✅ 완료  |  전체 {total}p → OCR 처리 {ocr_count}p  |  총 소요: {total_el}",
@@ -1500,7 +1545,7 @@ def _run_ocr(
                        elapsed_str=total_el, done=True),
         "\n".join(summary),
         preview,
-        str(results_path or out_path),
+        _result_files(results_path) or str(out_path),
         gr.update(visible=False),
         None,
     )
@@ -1562,8 +1607,11 @@ def reread_review_pages(file_obj):
         text = writer.place_tables(text, result.pages)
         out_path = writer.write_plain(file_path, text, tmp_dir, st["out_fmt"])
     else:
+        text = None
         out_path = writer.write(result, tmp_dir, st["out_fmt"])
     results_path = _publish_to_results(out_path, file_path.stem)
+    if st.get("md_pair"):
+        _place_md_pair(results_path, _md_pair_source(file_path, result, tmp_dir, text), logs)
 
     vision_count = sum(1 for p in result.pages
                        if p.engine in (OCREngine.GEMINI, OCREngine.CLAUDE_VISION, OCREngine.OLLAMA))
@@ -1582,7 +1630,7 @@ def reread_review_pages(file_obj):
         _LAST_REVIEW.clear()
     status = "\n".join([f"✅ 검토 필요 쪽 다시 읽기: {fixed}쪽 교체 · 남은 검토 필요 {left}쪽",
                         f"   📁 저장 위치: {results_path}", *logs[-5:]])
-    return status, _build_preview(result), str(results_path), _review_btn_update()
+    return status, _build_preview(result), _result_files(results_path), _review_btn_update()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1662,7 +1710,7 @@ def build_ui() -> gr.Blocks:
                                         choices=["kor+eng", "kor", "eng", "kor+eng+chi_sim"],
                                         value=cfg.get("default_lang", "kor+eng"),
                                     )
-                                    fmt_input = gr.Radio(label="저장 형식", choices=["txt", "md"],
+                                    fmt_input = gr.Radio(label="저장 형식", choices=["txt", "md", "txt+md"],
                                                          value=cfg.get("default_format", "txt"))
                                 no_preprocess = gr.Checkbox(label="이미지 전처리 끄기", value=False)
                                 no_fallback   = gr.Checkbox(label="흐린 쪽 자동 재인식(폴백) 끄기",
@@ -1737,7 +1785,7 @@ def build_ui() -> gr.Blocks:
                             )
                             cfg_fmt = gr.Radio(
                                 label="기본 저장 형식",
-                                choices=["txt", "md"],
+                                choices=["txt", "md", "txt+md"],
                                 value=cfg.get("default_format", "txt"),
                             )
                             cfg_fallback = gr.Checkbox(
@@ -1822,7 +1870,7 @@ def build_ui() -> gr.Blocks:
                                     value="결과 파일 (텍스트)",
                                 )
                                 dl_btn = gr.Button("다운로드", variant="primary")
-                            dl_out = gr.File(label="다운로드 파일")
+                            dl_out = gr.File(label="다운로드 파일", file_count="multiple")
                             dl_msg = gr.Markdown("")
                             with gr.Row():
                                 del_files_chk = gr.Checkbox(label="저장된 파일도 함께 삭제 (02_결과 포함)", value=False)
@@ -2141,6 +2189,10 @@ def build_ui() -> gr.Blocks:
             if not entry.get(key) or not path.exists():
                 kind = "결과" if "결과" in dl_type_str else "원본"
                 return None, f"{kind} 파일이 남아 있지 않습니다. (삭제되었거나 보관하지 않음)"
+            if key == "result_path":   # txt+md 로 저장한 기록은 .md 짝도 같이
+                files = _result_files(path)
+                if isinstance(files, list):
+                    return files, f"준비됨: {path.name} + {Path(files[1]).name}"
             return str(path), f"준비됨: {path.name}"
 
         dl_btn.click(
