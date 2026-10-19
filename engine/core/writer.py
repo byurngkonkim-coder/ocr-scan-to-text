@@ -2,6 +2,7 @@
 import re
 from pathlib import Path
 
+from core.figure_detector import TABLE_TOKEN_RE, table_token
 from core.types import FileResult, OutputFormat
 
 PAGE_SEPARATOR_TXT = "─" * 60
@@ -63,11 +64,12 @@ def _build_txt(result: FileResult) -> str:
             header += f"  {REVIEW_MARKER_TXT} {page.review_reason}"
         parts.append(header)
         parts.append(PAGE_SEPARATOR_TXT)
-        parts.append(_clean(page.corrected_text))
-        if page.figures:
+        parts.append(place_tables(page.corrected_text, [page]))
+        others = _non_tables(page)
+        if others:
             parts.append("")
             parts.append("── 비텍스트 영역 ──")
-            for ph in page.figures:
+            for ph in others:
                 parts.append(ph)
         parts.append("")
     return "\n".join(parts).strip() + "\n"
@@ -146,18 +148,15 @@ def _build_md(result: FileResult) -> str:
                 "",
             ]
 
-        parts.append(_clean(page.corrected_text))
+        parts.append(place_tables(page.corrected_text, [page]))
         parts.append("")
 
-        if page.figures:
+        others = _non_tables(page)
+        if others:
             parts.append("> **비텍스트 영역**")
             parts.append(">")
-            for ph in page.figures:
-                if ph.startswith("[표") and "\n|" in ph:
-                    header, table = ph.split("\n", 1)
-                    parts += [f"> {header}", "", table, ""]
-                else:
-                    parts.append(f"> {ph}")
+            for ph in others:
+                parts.append(f"> {ph}")
             parts.append("")
 
         parts.append(PAGE_SEPARATOR_MD)
@@ -175,6 +174,47 @@ def _review_summary_md(review_pages, total: int) -> list[str]:
         ">",
         "> 정확도 향상: `python ocr_tool.py setup` 으로 Vision(고정확) 폴백 엔진을 활성화하세요.",
     ]
+
+
+_TABLE_PH = re.compile(r"\[표 (\d+)\]\n")
+
+
+def _page_tables(page) -> dict[str, str]:
+    """쪽의 표 자리표시 '[표 N]\\n| … |' → {본문 표지: Markdown 표}"""
+    out = {}
+    for ph in page.figures:
+        m = _TABLE_PH.match(ph)
+        if m:
+            out[table_token(page.page_num, int(m.group(1)))] = ph[m.end():]
+    return out
+
+
+def _non_tables(page) -> list[str]:
+    """표로 바꾼 것(본문에 들어감)을 뺀 비텍스트 자리표시 — 그림·수식·못 읽은 표"""
+    return [ph for ph in page.figures if not _TABLE_PH.match(ph)]
+
+
+def place_tables(text: str, pages) -> str:
+    """본문의 표 자리 표지를 Markdown 표로 바꾼다. 표지가 사라진 표(Vision 으로 다시 읽은 쪽·정제가 지운 표지)는
+    글자를 잃지 않게 끝에 「[표 N (p.쪽)]」로 붙인다."""
+    tables: dict[str, str] = {}
+    for p in pages:
+        tables.update(_page_tables(p))
+    used: set[str] = set()
+
+    def sub(m: re.Match) -> str:
+        md = tables.get(m.group(0))
+        if md is None:
+            return ""
+        used.add(m.group(0))
+        return f"\n\n{md}\n\n"
+
+    text = TABLE_TOKEN_RE.sub(sub, text)
+    rest = [f"[표 {TABLE_TOKEN_RE.match(t).group(2)} (p.{TABLE_TOKEN_RE.match(t).group(1)})]\n{md}"
+            for t, md in tables.items() if t not in used]
+    if rest:
+        text = text.rstrip() + "\n\n" + "\n\n".join(rest)
+    return _clean(text)
 
 
 def _clean(text: str) -> str:

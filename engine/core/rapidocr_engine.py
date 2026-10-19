@@ -416,7 +416,19 @@ def _join_sentence_wraps(lines: list[str], boxes) -> tuple[list[str], list]:
     return out_l, out_b
 
 
-def run(image: Image.Image, lang: str = "kor+eng", fast: bool = False, refine: bool = True) -> OCRResult:
+def _insert_anchors(lines: list[str], boxes, height: int, anchors: list[tuple[float, str]]) -> list[str]:
+    """표 자리 표지를 그 높이(쪽 높이 대비 비율 — 전처리의 확대·여백과 무관)에 오는 줄 앞에 끼운다.
+    표지는 앞뒤 빈 줄로 따로 세워 줄 잇기에 붙지 않게 한다. 상자가 없으면 끝에 붙인다."""
+    out = list(lines)
+    tops = [min(p[1] for p in b) / height for b in boxes] if boxes is not None else []
+    for frac, token in sorted(anchors, reverse=True):   # 아래 표부터 끼워 앞 표지의 위치가 밀리지 않게
+        i = next((k for k, t in enumerate(tops) if t > frac), len(out))
+        out[i:i] = ["", token, ""]
+    return out
+
+
+def run(image: Image.Image, lang: str = "kor+eng", fast: bool = False, refine: bool = True,
+        anchors: list[tuple[float, str]] | None = None) -> OCRResult:
     """
     이미지에 RapidOCR(ONNX)을 실행하고 OCRResult 반환.
 
@@ -444,7 +456,7 @@ def run(image: Image.Image, lang: str = "kor+eng", fast: bool = False, refine: b
 
     if result is None or getattr(result, "txts", None) is None or not result.txts:
         return OCRResult(
-            text="",
+            text="\n\n".join(t for _f, t in sorted(anchors or [])),   # 표만 있는 쪽
             confidence=100.0,
             engine=OCREngine.RAPIDOCR,
             has_jamo_split=False,
@@ -468,7 +480,10 @@ def run(image: Image.Image, lang: str = "kor+eng", fast: bool = False, refine: b
         if ordered == lines:
             ordered, ordered_boxes = _lift_side_headings(lines, line_boxes)
         lines, line_boxes = _drop_page_footer(ordered, ordered_boxes)
-    marked, _ = _join_sentence_wraps(_mark_paragraph_starts(lines, line_boxes), line_boxes)
+    marked, marked_boxes = _join_sentence_wraps(_mark_paragraph_starts(lines, line_boxes), line_boxes)
+    if anchors:   # 표 자리 표지 — 줄을 이은 뒤의 줄·상자로 높이를 맞춘다
+        marked = _insert_anchors(marked, marked_boxes if len(marked_boxes) == len(marked) else None,
+                                 image_rgb.height, anchors)
     full_text = "\n".join(marked)
     avg_conf = sum(confs) / len(confs) if confs else 0.0
 
@@ -493,7 +508,8 @@ def run(image: Image.Image, lang: str = "kor+eng", fast: bool = False, refine: b
     )
 
 
-def smart_run(image: Image.Image, default_lang: str = "kor+eng", fast: bool = False, refine: bool = True) -> OCRResult:
+def smart_run(image: Image.Image, default_lang: str = "kor+eng", fast: bool = False, refine: bool = True,
+              anchors: list[tuple[float, str]] | None = None) -> OCRResult:
     """
     로컬 OCR 진입점 — 한 번 읽고, 거의 영문인 쪽만 영문 모델로 다시 읽는다.
 
@@ -501,12 +517,14 @@ def smart_run(image: Image.Image, default_lang: str = "kor+eng", fast: bool = Fa
     RapidOCR 이 없거나 실패하면 빈 결과(신뢰도 0)를 돌려준다 — 처리를 멈추지 않고,
     호출부가 저신뢰 쪽처럼 Vision 폴백하거나 '검토 필요'로 남긴다.
     """
+    extra = {"anchors": anchors} if anchors else {}   # 표가 있는 쪽만 — 표 자리 표지(본문 제자리 배치)
+
     def once():
-        res = run(image, lang=default_lang, fast=fast, refine=refine)
+        res = run(image, lang=default_lang, fast=fast, refine=refine, **extra)
         # 한글이 한 줄이라도 있으면 다시 읽지 않는다 — 영문 모델은 한글을 못 읽어, 영문이 대부분인
         # 참고문헌 쪽의 한글 항목이 통째로 사라졌다(실측: 한글 74자 → 0자). 한국어 모델도 영문을 읽는다
         if default_lang != "eng" and _mostly_english(res.text) and not re.search(r"[가-힣]{2}", res.text):
-            res = run(image, lang="eng", fast=fast, refine=refine)
+            res = run(image, lang="eng", fast=fast, refine=refine, **extra)
         return res
     try:
         return once()
