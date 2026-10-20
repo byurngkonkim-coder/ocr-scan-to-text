@@ -29,6 +29,7 @@ from core import config, usage_tracker, blank_detector, storage_manager
 from core import text_cleaner
 from core import pdf_text_layer
 from core import margin_detector
+from core import noise_rules, toc_headings
 import batch_runner
 from core.types import FileResult, OutputFormat, PageResult, OCREngine
 
@@ -305,6 +306,67 @@ def _finalize_results(ckpt: "_CleanCheckpoint | None", cleaned_text: str | None,
         if logs is not None:
             logs.append(f"  ⚠ 02_결과 폴더에 결과를 저장하지 못했습니다(아래 경로는 임시 사본): {e}")
         return None
+
+
+def _toc_prepass(content_pages: list[PageResult]) -> tuple[list[str], dict | None]:
+    """정제 전 차례 기준 장·절 정비 — (정제에 넣을 쪽 글들, iter_clean 의 toc 인자).
+
+    쪽 교정(_correct_text 의 postprocessor 줄 잇기)이 차례 줄('1. 혼돈에서 탈출한다·15 2. 신뢰할 수 있는…')과
+    본문 제목 줄('스펜서 존슨 자신의 길을 찾는다')을 앞뒤 줄에 붙여 버리므로, 줄이 살아 있는 OCR 원문(raw_text)에서
+    차례를 읽고 제목을 '# 제목' 으로 표시한 뒤 그 쪽만 교정을 다시 한다(제목 줄은 줄 잇기에서 보호).
+    차례 쪽은 결과 맨 앞 목록(MD)으로 옮기므로 차례 항목을 빼고 함께 실린 문장만 남긴다.
+    차례가 없으면 (교정본 그대로, None)."""
+    texts = [p.corrected_text for p in content_pages]
+    # 쪽 머리글('I.자신의 길을 찾는다 17')을 먼저 뗀다 — 남아 있으면 장 제목이 그 줄에 먼저 붙는다(정제가 할 일을 앞당김)
+    raws = text_cleaner.strip_running_headers([p.raw_text or "" for p in content_pages])
+    raws, _ = noise_rules.strip_fuzzy_headers(raws)
+    entries, toc_idx = toc_headings.extract_toc_text(raws)
+    if not entries:
+        return texts, None
+    stats: dict = {}
+    marked = toc_headings.mark_headings(raws, entries, toc_idx, stats)
+    for i, (p, before, after) in enumerate(zip(content_pages, raws, marked)):
+        if after == before and i not in toc_idx:
+            continue
+        if p.raw_text == p.corrected_text:    # txt 입력은 교정이 따로 없다
+            texts[i] = after
+            continue
+        # 쪽 교정은 '#' 을 지운다 — 제목 줄은 그대로 두고 그 사이 본문 덩어리만 교정한다
+        texts[i] = text_cleaner.keep_headings(lambda t, p=p: _recorrect(t, p), after)
+    return texts, {"entries": entries, "stats": stats}
+
+
+def _recorrect(text: str, page: PageResult) -> str:
+    """쪽 원문 조각을 처음 읽을 때와 같은 교정 체인으로(_finalize·_finalize_digital — LLM 교정은 빼고)."""
+    if page.engine == OCREngine.PDF_TEXT:
+        return postprocessor.process_full(text, engine=OCREngine.PDF_TEXT.value)
+    text = char_normalizer.normalize_all(text)
+    try:
+        from core.korean_corrector import refine_korean_text
+        text = refine_korean_text(text)
+    except Exception:
+        pass
+    text, _ = user_typos.apply(text)
+    if spellcheck.is_available():
+        text = spellcheck.correct_safe(text)
+    return postprocessor.process_full(text, engine=page.engine.value)
+
+
+def _structured_text(text: str | None, crep: dict | None, out_fmt: OutputFormat,
+                     logs: list[str]) -> str | None:
+    """정제본 → 저장할 글. 정제가 차례를 찾았으면(toc_headings) MD 는 맨 앞 차례 목록 + '#' 장·절 제목,
+    TXT 는 같은 글에서 '#'·목록 기호만 뺀다. 차례가 없으면 정제본 그대로(예전과 같다)."""
+    if not text:
+        return text
+    note = (crep or {}).get("toc_note")
+    if note:
+        logs.append(f"  📑 {note}")
+    entries = (crep or {}).get("toc_entries") or []
+    if not entries:
+        return text
+    if out_fmt == OutputFormat.MD:
+        return toc_headings.to_markdown(text.strip(), entries) + "\n"
+    return toc_headings.to_text(text.strip(), entries) + "\n"
 
 
 def _save_review(results_path: Path | None, content_pages: list, cleaned_text: str | None,
@@ -876,7 +938,7 @@ def _run_digital_pdf(file_path: Path, pages_text: list[str], out_fmt: OutputForm
     if cleanup and content_pages and text_cleaner.is_available(local=local_clean):
         ckpt = _CleanCheckpoint(file_path.stem, out_fmt)
         crep: dict = {}     # 이 실행의 정제 보고서(여러 파일 동시 처리 시 전역 보고서는 섞인다)
-        pages_in = [p.corrected_text for p in content_pages]
+        pages_in, toc = _toc_prepass(content_pages)   # 차례 기준 장·절 제목('#') — 쪽 줄 잇기 전 원문에서
         if local_clean and page_fn is _finalize_digital:   # txt 는 이미 교정된 본문 — 두 번 돌리지 않는다
             # 내장 글자는 OCR 경로(_finalize)의 한글 교정기를 거치지 않았다 → 여기서 1번만
             from core.korean_corrector import refine_korean_text
@@ -889,6 +951,7 @@ def _run_digital_pdf(file_path: Path, pages_text: list[str], out_fmt: OutputForm
             local=local_clean,
             # 장절 책(성경)은 줄 잇기 전 원문 줄로 장·절을 세운다(R-15) — 디지털 PDF 만
             raw_pages=[p.raw_text for p in content_pages] if page_fn is _finalize_digital else None,
+            toc=toc,
         )
         try:
             while True:
@@ -918,6 +981,7 @@ def _run_digital_pdf(file_path: Path, pages_text: list[str], out_fmt: OutputForm
             step_logs.append(f"  ⚠️ {clean_note}")
         if _crep:   # 부속물 제거·지어낸 문장 등 확인할 경고 — 강등 건은 위 개수 줄로 대신한다
             step_logs.extend(f"  ⚠ {w}" for w in _crep["warnings"] if "강등" not in w)
+        cleaned_text = _structured_text(cleaned_text, _crep, out_fmt, step_logs)
 
     # ── 저장 ───────────────────────────────────────────────────────────────────
     yield (
@@ -1501,12 +1565,14 @@ def _run_ocr(
     if cleanup and content_pages and text_cleaner.is_available(local=True):
         ckpt = _CleanCheckpoint(out_stem, out_fmt)
         crep: dict = {}     # 이 실행의 정제 보고서(여러 파일 동시 처리 시 전역 보고서는 섞인다)
+        pages_in, toc = _toc_prepass(content_pages)   # 차례 기준 장·절 제목('#') — 쪽 줄 잇기 전 원문에서
         clean_gen = text_cleaner.iter_clean(
-            [p.corrected_text for p in content_pages],
+            pages_in,
             drop_front_matter=front_matter,
             on_chunk=ckpt.append,
             report_out=crep,
             local=True,                 # 내장 규칙(유료 API 0)
+            toc=toc,
         )
         try:
             while True:
@@ -1537,6 +1603,7 @@ def _run_ocr(
             step_logs.append(f"  ⚠️ {clean_note}")
         if _crep:   # 부속물 제거·지어낸 문장 등 확인할 경고 — 강등 건은 위 개수 줄로 대신한다
             step_logs.extend(f"  ⚠ {w}" for w in _crep["warnings"] if "강등" not in w)
+        cleaned_text = _structured_text(cleaned_text, _crep, out_fmt, step_logs)
     elif cleanup:
         step_logs.append("  ⚠ 정제 건너뜀 — Ollama 텍스트 모델(exaone3.5) 응답 없음 — Ollama 실행 확인")
 

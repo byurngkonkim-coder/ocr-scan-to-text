@@ -29,6 +29,7 @@ from core import gemini_vision as _gemini
 from core import ollama_vision as _ollama
 from core import noise_rules
 from core import spacing, verse_rules
+from core import toc_headings
 from core.postprocessor import _PAGE_FOOTER_LINE
 
 # 페이지 경계 센티넬 — 입력에 실제로 등장할 가능성이 없는 문자열
@@ -165,7 +166,7 @@ def clean_pages(pages: list[str], progress_cb=None, drop_front_matter: bool = Fa
 
 def iter_clean(pages: list[str], drop_front_matter: bool = False, on_chunk=None,
                report_out: dict | None = None, local: bool = False,
-               raw_pages: list[str] | None = None):
+               raw_pages: list[str] | None = None, toc: dict | None = None):
     """
     제너레이터: 청크 처리마다 (done_chunks, total_chunks) 를 yield 하고,
     마지막에 정제된 전체 본문을 return(StopIteration.value)한다.
@@ -217,9 +218,12 @@ def iter_clean(pages: list[str], drop_front_matter: bool = False, on_chunk=None,
     # 비용 우선(내장 규칙) — LLM 이 대신 걸러 주지 않으므로 OCR 잡음을 규칙으로 먼저 걷는다
     # (2026-10-16 명언집 5권 실측: 잡음 줄·기호·전각 부호·깨진 머리글이 결과에 그대로 남음)
     header_notes: list[str] = []
-    if rules_mode:
-        pages = [noise_rules.clean_page(p) for p in pages]
-    # 청크만 보는 LLM은 책 전체에 반복되는 머리글을 알아보지 못한다 → 문서 단위로 선제거
+    if rules_mode:   # 잡음 기호 제거가 '#' 을 지운다 — 장·절 제목 줄(toc_headings)은 피해서
+        pages = [keep_headings(noise_rules.clean_page, p) for p in pages]
+    # 청크만 보는 LLM은 책 전체에 반복되는 머리글을 알아보지 못한다 → 문서 단위로 선제거.
+    # 장·절 제목 줄은 숨겨 둔다 — 장 표제지의 '# I.자신의 길을 찾는다' 를 머리글 'I.자신의 길을 찾는다 17' 과
+    # 같은 글자로 보고 지웠다(1분의사결정 스캔본 실측)
+    pages, hidden = _hide_headings(pages)
     pages = strip_running_headers(pages)
     if rules_mode:
         pages, n_hdr = noise_rules.strip_fuzzy_headers(pages)
@@ -231,16 +235,34 @@ def iter_clean(pages: list[str], drop_front_matter: bool = False, on_chunk=None,
         pages, _ = noise_rules.group_attributed_quotes(pages)
         if n_hdr:
             header_notes.append(f"깨져 읽힌 머리글 {n_hdr}곳 자동 제거 (정제 전 원문 사본에서 확인 가능)")
+    pages = _show_headings(pages, hidden)
     matter_notes: list[str] = []
     # 머리글을 뗀 뒤라야 잡음 쪽이 짧아져 후보가 된다. 지운 잡음 쪽은 빈 자리로 남겨
     # 부속물 보고와 같은 쪽 번호 기준(내용 있는 쪽 순서)을 유지하고, 부속물 제거 뒤에 걸러 낸다
     noise_notes: list[str] = []
     pages = drop_noise_pages(pages, noise_notes)
+    # 차례 기준 장·절 정비(toc_headings — MyOCR 와 같은 파일): 머리글을 뗀 뒤, 줄 잇기 전에 차례 제목과 같은
+    # 본문 줄을 '# 제목' 으로. 차례 쪽은 결과 맨 앞 목록으로 옮기므로 본문에서 뺀다 — 부속물 제거가 차례 쪽을
+    # 기준으로 본문 시작을 잡으므로 차례 쪽은 그 뒤에 뺀다
+    # toc: 호출부(ocr_gradio._toc_prepass)가 쪽마다 줄 잇기 전 원문으로 이미 정비했으면 {entries, stats} —
+    # 쪽 교정(postprocessor)이 차례 줄·제목 줄을 앞뒤 줄에 이어 붙이기 전에 해야 찾을 수 있다
+    toc_entries, toc_idx = (toc["entries"], []) if toc else toc_headings.extract_toc_text(pages)
+    toc_stats: dict = toc["stats"] if toc else {}
+    toc_pages_text: dict[str, str] = {}
+    if toc_entries and not toc:
+        pages = toc_headings.mark_headings(pages, toc_entries, [], toc_stats)
+        toc_pages_text = {pages[i]: toc_headings.toc_page_leftover(pages[i], toc_entries) for i in toc_idx}
     if drop_front_matter:
         if rules_mode:   # LLM 문단 분류를 못 쓰니 표지·저자 소개·광고·저작권·차례를 규칙으로 먼저 고른다
+            before = pages
             pages = noise_rules.drop_book_matter_rules(pages, noise_notes)
+            # 장 표제지('# I.자신의 길을 찾는다' 한 줄)는 짧아 '표지·제목' 쪽으로 지워진다 — 제목 줄은 되살린다
+            pages = [p if p.strip() or not b.strip() else
+                     "\n\n".join(l for l in b.split("\n") if _MD_HEADING_RE.match(l))
+                     for p, b in zip(pages, before)]
         pages, matter_notes = strip_book_matter(pages)
-    pages = [p for p in pages if p.strip()]
+    # 차례 쪽은 차례 항목을 빼고 함께 실린 문장만 남긴다(toc_page_leftover)
+    pages = [q for p in pages if (q := toc_pages_text.get(p, p)).strip()]
     if not pages:
         return ""
     matter_notes = header_notes + noise_notes + matter_notes
@@ -250,7 +272,9 @@ def iter_clean(pages: list[str], drop_front_matter: bool = False, on_chunk=None,
     chunks = _chunk_pages(pages, soft, hard)
     total = len(chunks)
 
-    report = {"chunks": total, "fallback_api": 0, "fallback_guard": 0, "warnings": list(matter_notes)}
+    report = {"chunks": total, "fallback_api": 0, "fallback_guard": 0, "warnings": list(matter_notes),
+              # 저장 단계가 MD 맨 앞 차례 목록·TXT 변환에 쓴다(ocr_gradio._structured_texts)
+              "toc_entries": toc_entries, "toc_note": toc_headings.report(toc_entries, toc_stats)}
     out_parts: list[str] = []
 
     def merge(res: _ChunkResult) -> None:
@@ -324,6 +348,8 @@ def iter_clean(pages: list[str], drop_front_matter: bool = False, on_chunk=None,
         if n_sp:
             report["warnings"].append(f"붙어 쓴 낱말 띄어쓰기 {n_sp}곳 교정 (정제 전 원문 사본에서 확인 가능)")
     text = unify_paragraph_breaks(text)
+    if toc_entries:
+        text = toc_headings.space_headings(text)   # 장·절 제목 줄 앞뒤 빈 줄(R-18)
 
     return (text + "\n") if text else ""
 
@@ -447,6 +473,52 @@ def _dropped_run(cleaned: str, source: str) -> str | None:
     return None
 
 
+_MD_HEADING_RE = re.compile(r'^#{1,6} \S')
+
+
+_HIDDEN_HEADING_RE = re.compile(r'⟨HEAD(\d+)⟩')
+
+
+def _hide_headings(pages: list[str]) -> tuple[list[str], list[str]]:
+    """장·절 제목 줄을 ⟨HEADn⟩ 표지로 바꿔 둔다(머리글 제거 규칙이 제목을 머리글로 보지 않게)."""
+    store: list[str] = []
+
+    def sub(m):
+        store.append(m.group(0))
+        return f"⟨HEAD{len(store) - 1}⟩"
+    return [re.sub(r'(?m)^#{1,6} \S.*$', sub, p) for p in pages], store
+
+
+def _show_headings(pages: list[str], store: list[str]) -> list[str]:
+    if not store:
+        return pages
+    return [_HIDDEN_HEADING_RE.sub(lambda m: store[int(m.group(1))], p) for p in pages]
+
+
+def keep_headings(fn, text: str) -> str:
+    """text 의 장·절 제목 줄('# 제목')은 그대로 두고, 그 사이 본문 덩어리에만 fn 을 적용한다.
+    쪽 교정·잡음 제거(postprocessor·noise_rules.clean_page)는 '#' 을 기호로 보고 지운다."""
+    if "#" not in text:
+        return fn(text)
+    blocks, body = [], []
+
+    def flush():
+        if any(b.strip() for b in body):
+            fixed = fn("\n".join(body)).strip("\n")
+            if fixed.strip():
+                blocks.append(fixed)
+        body.clear()
+
+    for line in text.split("\n"):
+        if _MD_HEADING_RE.match(line):
+            flush()
+            blocks.append(line)
+        else:
+            body.append(line)
+    flush()
+    return "\n\n".join(blocks)
+
+
 def rejoin_split_sentences(text: str) -> tuple[str, int]:
     """문장이 끝나지 않은 긴 줄과 이어지는 한글 줄을 한 문장으로 잇는다. (텍스트, 이은 수)."""
     lines = text.split("\n")
@@ -462,6 +534,8 @@ def rejoin_split_sentences(text: str) -> tuple[str, int]:
             if j >= len(lines):
                 break
             s, nxt = cur.rstrip(), lines[j].strip()
+            if _MD_HEADING_RE.match(s) or _MD_HEADING_RE.match(nxt):   # 장·절 제목 줄(toc_headings)
+                break
             bound = bool(s) and re.search(r'[가-힣]$', s) is not None and _starts_bound(nxt)
             if bound:   # 끊긴 어미·조사 — 한 단어가 잘린 것이니 공백 없이 잇는다
                 cur = s + nxt
@@ -582,6 +656,10 @@ def post_process_pagebreaks(text: str) -> str:
 
     def _repl(match):
         before, ws_before, ws_after, after = match.groups()
+        line_start = match.string.rfind("\n", 0, match.start()) + 1
+        # 앞 쪽 끝 줄이나 다음 쪽 첫 줄이 장·절 제목(toc_headings)이면 잇지 않는다
+        if re.fullmatch(r'#{1,6}', after) or _MD_HEADING_RE.match(match.string[line_start:match.end(1)]):
+            return before + "\n\n" + after
         # 다음 쪽이 항목(2. ② 나. 제2조 …)으로 시작하면 앞 쪽 끝에 붙이지 않는다
         if "\n" in ws_before + ws_after and is_item_start(match.string[match.start(4):], letters):
             return before + "\n" + after

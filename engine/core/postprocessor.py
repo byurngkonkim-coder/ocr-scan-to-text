@@ -242,6 +242,9 @@ def remove_noise_lines(text: str) -> str:
     return '\n'.join(result)
 
 
+_MD_HEADING_RE = re.compile(r'^#{1,6} \S')
+
+
 def join_broken_lines(text: str) -> str:
     """
     단락 내 줄바꿈 복원.
@@ -275,6 +278,8 @@ def join_broken_lines(text: str) -> str:
             nxt = lines[i + 1]
             if not nxt.strip():
                 break  # 빈 줄 → 연결 중단
+            if _MD_HEADING_RE.match(cur) or _MD_HEADING_RE.match(nxt):
+                break  # 장·절 제목 줄(toc_headings)은 본문에 붙이지 않는다
             # 지금까지 이은 줄이 아니라 '현재 물리적 줄'(lines[i])이 끝까지 찼는지를 본다
             last = not any(l.strip() for l in lines[i + 2:])
             if (len(lines[i].strip()) >= full and not is_item_start(nxt, letters)
