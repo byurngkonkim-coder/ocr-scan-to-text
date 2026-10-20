@@ -61,7 +61,7 @@ def test_other_file_is_refused(env):
 
 
 def test_state_cleared_mid_reread_does_not_lose_paid_result(env, monkeypatch):
-    # 다시 읽는 도중 ④ 일괄 작업이 책을 끝내며 _LAST_REVIEW 를 비우면 KeyError 로 유료 결과를 잃었다
+    # 다시 읽는 도중 ② 일괄 작업이 책을 끝내며 _LAST_REVIEW 를 비우면 KeyError 로 유료 결과를 잃었다
     def run_and_clear(img, lang_hint="kor+eng"):
         ocr_gradio._LAST_REVIEW.clear()
         return OCRResult(text="비전으로 다시 읽은 본문입니다.", confidence=95.0, engine=OCREngine.GEMINI)

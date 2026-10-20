@@ -1,4 +1,4 @@
-"""④ 일괄·① 탭 txt 입력 — 메모장 ANSI(cp949)·유니코드(UTF-16) 저장본이 UnicodeDecodeError 로 '실패'하던 것(감사 30번)."""
+"""② 일괄·① 탭 txt 입력 — 메모장 ANSI(cp949)·유니코드(UTF-16) 저장본이 UnicodeDecodeError 로 '실패'하던 것(감사 30번)."""
 import pytest
 
 ocr_gradio = pytest.importorskip("ocr_gradio")

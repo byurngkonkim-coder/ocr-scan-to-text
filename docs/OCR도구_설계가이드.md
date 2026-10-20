@@ -178,7 +178,7 @@ target: 04_처리엔진 (구 ocr-tool-Claude — 2026-09-26 폴더 정비로 이
 - `writer.write(result, dir, fmt)` → `.txt`/`.md` 생성(페이지 구분 `[페이지 N]`, 검토필요·그림 플레이스홀더 포함). **정제 OFF** 시 사용.
 - `writer.write_plain(src, text, dir, fmt)` → **마커 없는 정제본** 저장(단락=빈 줄). **정제 ON**(기본) 시 사용.
 - 사용자 결과 → 맨 위 **`02_결과/`**(`ocr_gradio.RESULTS_DIR`, 정제 중간본 `_정제중.txt` 포함).
-- `storage_manager` → `04_처리엔진/storage/results/`(결과 사본·`_원문.txt`), `storage/uploads/`(원본), `storage/history.json`(이력). 웹 **③ 처리 기록** 탭에서 재다운로드. 저장 경로(`storage_path`)는 비워 두고 기본값을 쓴다(절대경로 저장 시 보관소가 갈라짐 — RETRO 오류 7).
+- `storage_manager` → `04_처리엔진/storage/results/`(결과 사본·`_원문.txt`), `storage/uploads/`(원본), `storage/history.json`(이력). 웹 **④ 처리 기록** 탭에서 재다운로드. 저장 경로(`storage_path`)는 비워 두고 기본값을 쓴다(절대경로 저장 시 보관소가 갈라짐 — RETRO 오류 7).
 
 ---
 

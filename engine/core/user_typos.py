@@ -1,4 +1,4 @@
-"""사용자 오타 사전 — ④ 탭 의심 목록에서 사람이 확인해 등록한 '틀린 말 → 고칠 말'만 적용한다.
+"""사용자 오타 사전 — ② 탭 의심 목록에서 사람이 확인해 등록한 '틀린 말 → 고칠 말'만 적용한다.
 
 korean_corrector.TYPO_DICT 는 MyOCR·파일형식변환기_MD 와 같은 파일로 동기화돼 있어 손대지 않고,
 01_OCR 에서만 쓰는 사전을 따로 둔다(intent 2026-10-17-로컬-맞춤법-자동교정).
@@ -15,7 +15,7 @@ import re
 from pathlib import Path
 
 PATH = Path(__file__).resolve().parent.parent / "user_typos.tsv"
-_HEADER = "# 사용자 오타 사전 — 틀린 말<TAB>고칠 말. ④ 일괄 처리 탭 '의심 목록'에서 등록한다.\n"
+_HEADER = "# 사용자 오타 사전 — 틀린 말<TAB>고칠 말. ② 일괄 처리 탭 '의심 목록'에서 등록한다.\n"
 _MIN_LEN = 2
 
 _cache: dict[Path, tuple[float, dict[str, str], re.Pattern | None]] = {}

@@ -29,7 +29,7 @@ target: 04_처리엔진 (구 ocr-tool-Claude) / core/text_cleaner.py
 | 붙어 쓴 낱말 띄어쓰기 R-17(`인류에게하나밖에없는`) | Kiwi `core/spacing.py` | — | ✅ | 정제를 켤 때만 |
 | 사용자 오타 사전(`흘륨한`→`훌륭한`) | `core/user_typos.py` · `engine/user_typos.tsv` | ✅ | ✅ | 2026-10-18. ④ 의심 목록에서 사람이 등록한 것만. 공유 `korean_corrector` 는 건드리지 않는다 |
 | 한자 읽기(빈 괄호 `축도()`→`축도(縮圖)`, `무경칠서武經七書`) | `core/hanja_reader.py` (로컬 OCR 판독 단계) | ✅ | ✅ | 2026-10-18. 한글 모델이 못 읽은 자리를 중국어 모델로 다시 읽어 확실한 것만 넣는다 — 표본 56곳 틀림 0. 설정 `hanja_reading` |
-| 의심 목록(Kiwi 오타 모드 후보) | `core/typo_suspects.py` | — | — | **본문 미적용** — ④ 일괄 처리·다시 교정 때 `02_결과/_의심목록/` 에 목록만 |
+| 의심 목록(Kiwi 오타 모드 후보) | `core/typo_suspects.py` | — | — | **본문 미적용** — ② 일괄 처리·다시 교정 때 `02_결과/_의심목록/` 에 목록만 |
 | 일반 띄어쓰기 C-04(`좀더`) · 문맥 오타 C-05 · 괄호 짝 C-06 | Gemini `CLEAN_PROMPT` | — | — | **미사용** — 2026-10-15 사용자 결정으로 모든 정제 호출이 `local=True` |
 | 맞춤법 검사기 L2(hanspell) | `core/spellcheck.py` | — | — | **미사용** — 패키지 설치 실패로 2026-09-27 제외. `auto_spellcheck` 설정은 효과 없음 |
 

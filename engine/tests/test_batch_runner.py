@@ -1,4 +1,4 @@
-"""④ 일괄 처리 대기열 — 차례 처리·중단·① 탭 처리와 겹치지 않기·01_입력 목록."""
+"""② 일괄 처리 대기열 — 차례 처리·중단·① 탭 처리와 겹치지 않기·01_입력 목록."""
 import time
 
 import pytest
@@ -106,7 +106,7 @@ def test_batch_never_uses_vision_fallback(monkeypatch, tmp_path):
 
 
 def test_review_log_noted_in_detail(monkeypatch, tmp_path):
-    # 처리 중 남긴 검수기록이 있으면 ④ 상세에 위치를 알린다(intent 2026-10-18 정제 순서 5단계)
+    # 처리 중 남긴 검수기록이 있으면 ② 상세에 위치를 알린다(intent 2026-10-18 정제 순서 5단계)
     from core import typo_suspects
     result = tmp_path / "책A.txt"
     result.write_text("본문", encoding="utf-8")

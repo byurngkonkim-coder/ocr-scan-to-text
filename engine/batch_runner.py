@@ -1,4 +1,4 @@
-"""④ 일괄 처리 — 입력 폴더 목록과 백그라운드 대기열.
+"""② 일괄 처리 — 입력 폴더 목록과 백그라운드 대기열.
 
 화면(브라우저)과 분리된 작업 스레드들이 대기열을 처리한다. 브라우저를 닫아도
 처리는 계속되고, 화면은 주기적으로 status_html() 을 읽어 보여 준다.
@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 
-INPUT_DIR = Path(__file__).resolve().parent.parent / "01_입력"   # 기본값 — ④ 탭에서 다른 폴더로 바꿀 수 있다
+INPUT_DIR = Path(__file__).resolve().parent.parent / "01_입력"   # 기본값 — ② 탭에서 다른 폴더로 바꿀 수 있다
 _EXTS = {".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".txt"}   # .txt 는 OCR 없이 문장 정제만
 _PARTIAL_RE = re.compile(r"_(?:정제중|OCR중)(?:_\d{8}_\d{6}(?:_\d+)?)?$|_미완$")   # 중간 저장분·앞부분만 읽은 결과
 # process_full 위치 인자(lang, fmt, no_preprocess, no_fallback, …) 중 no_fallback 자리.

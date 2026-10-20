@@ -41,7 +41,7 @@ _DEFAULTS: dict = {
     "enable_cleanup": True,               # 기본 켬 — 정제가 내장 규칙(무료)이 된 뒤 끌 이유가 없다(2026-10-17). 예전엔 Gemini 비용의 94%라 껐다
     "cleanup_chunk_chars": 4000,          # 정제 1회 호출당 목표 문자 수(페이지 누적)
     "parallel_workers": 4,                # 한 파일 안에서 동시에 보내는 정제 구간·Vision 쪽 수(1=차례대로)
-    "batch_workers": 2,                   # ④ 일괄 처리에서 동시에 처리하는 파일 수(1=한 건씩)
+    "batch_workers": 2,                   # ② 일괄 처리에서 동시에 처리하는 파일 수(1=한 건씩)
     "remove_front_matter": False,         # 표제지·판권·차례 등 앞뒤 부속물까지 제거(기본 보존)
     # ── 여백 마진 제거 필터 ──────────────────────────────────────────────────
     "enable_margin_filter": False,        # 머리글·바닥글·쪽번호 영역 물리 필터 활성화 여부
@@ -272,7 +272,7 @@ def get_parallel_workers() -> int:
 
 
 def get_batch_workers() -> int:
-    """④ 일괄 처리 동시 파일 수. 1~4, 기본 2. 동시 Gemini 호출 = 이 값 × parallel_workers."""
+    """② 일괄 처리 동시 파일 수. 1~4, 기본 2. 동시 Gemini 호출 = 이 값 × parallel_workers."""
     try:
         return min(4, max(1, int(load().get("batch_workers", 2))))
     except (TypeError, ValueError):
@@ -294,7 +294,7 @@ def get_remove_front_matter() -> bool:
 
 # ── 여백 마진 제거 필터 게터 ──────────────────────────────────────────────────
 
-# ④ 일괄 작업은 시작할 때의 여백 설정으로 끝까지 간다 — ① 탭에서 처리 버튼을 누를 때마다 여백 설정이
+# ② 일괄 작업은 시작할 때의 여백 설정으로 끝까지 간다 — ① 탭에서 처리 버튼을 누를 때마다 여백 설정이
 # config.json 에 저장되는데, 돌고 있는 일괄 작업의 다음 쪽부터 바로 적용됐다(감사 19번)
 _margin_pin: contextvars.ContextVar = contextvars.ContextVar("margin_pin", default=None)
 

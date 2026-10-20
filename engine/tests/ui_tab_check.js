@@ -4,7 +4,7 @@
 // 사용 (Git Bash, 시험 서버를 먼저 띄운 뒤):
 //   NODE_PATH="$(npm root -g)" timeout 110 node tests/ui_tab_check.js http://127.0.0.1:7871 [시험.pdf]
 //   EDGE=1 ... → 실제 Edge 창으로 실행
-// pdf 를 주면 '전체 처리' 후 ③ 탭 표에 그 파일 기록이 보이는지까지 확인한다.
+// pdf 를 주면 '전체 처리' 후 ④ 처리 기록 탭 표에 그 파일 기록이 보이는지까지 확인한다.
 // 시험 pdf 는 텍스트 레이어 60자 이상(pdf_text_layer.MIN_DOC_CHARS) — 모자라면 스캔본으로
 // 판정돼 Vision API 가 호출된다.
 // 시험 기록은 끝난 뒤 storage_manager.delete_entry(id, delete_files=True) 와
@@ -52,8 +52,8 @@ const aiOff = page => page.evaluate(() => {
       out.processed = true;
     }
 
-    out.tab2 = (await openTab(page, '②')) ? 'OK' : 'FREEZE';
-    if (out.tab2 === 'OK') out.tab3 = (await openTab(page, '③')) ? 'OK' : 'FREEZE';
+    out.tab2 = (await openTab(page, '③')) ? 'OK' : 'FREEZE';
+    if (out.tab2 === 'OK') out.tab3 = (await openTab(page, '④')) ? 'OK' : 'FREEZE';
     if (out.tab3 === 'OK') {
       await page.waitForTimeout(1500);  // 탭 select 갱신 응답 대기
       out.tab3_after_refresh = (await alive(page)) ? 'OK' : 'FREEZE';
