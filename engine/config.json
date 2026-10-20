@@ -14,7 +14,7 @@
   "gemini_disable_thinking": true,
   "default_lang": "kor+eng",
   "default_dpi": 150,
-  "default_format": "txt",
+  "default_format": "txt+md",
   "confidence_threshold": 85.0,
   "auto_fallback": true,
   "auto_spellcheck": true,
