@@ -344,7 +344,15 @@ def iter_clean(pages: list[str], drop_front_matter: bool = False, on_chunk=None,
         text, _ = noise_rules.redistribute_number_stacks(text)   # 여백 번호가 몰려 읽힌 것부터 제자리로
         text, _ = noise_rules.paragraph_entries(text)
     if rules_mode:   # 맨 끝 — 줄이 다 자리 잡은 뒤 붙어 쓴 한글만 띄운다(R-17, 넣기만 함)
-        text, n_sp = spacing.fix_spacing(text)
+        # 장·절 제목 줄(R-18)은 빼고 — 맨 앞 차례 목록과 제목 글자가 달라지지 않게
+        n_sp = 0
+
+        def _fix(t: str) -> str:
+            nonlocal n_sp
+            t, k = spacing.fix_spacing(t)
+            n_sp += k
+            return t
+        text = keep_headings(_fix, text) if toc_entries else _fix(text)
         if n_sp:
             report["warnings"].append(f"붙어 쓴 낱말 띄어쓰기 {n_sp}곳 교정 (정제 전 원문 사본에서 확인 가능)")
     text = unify_paragraph_breaks(text)

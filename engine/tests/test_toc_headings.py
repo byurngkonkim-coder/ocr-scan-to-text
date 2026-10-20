@@ -46,6 +46,7 @@ def test_iter_clean_marks_toc_headings(monkeypatch):
         i = lines.index(h)                                   # 제목 줄이 본문에 붙지 않았다
         assert lines[i - 1] == "" and lines[i + 1] == ""     # 앞뒤 빈 줄
     assert "·머리말/3" not in out                            # 차례 쪽은 본문에서 빠진다(MD 맨 앞 목록으로)
+    # 띄어쓰기 교정(R-17, kiwi)은 제목 줄을 건드리지 않는다 — 차례 목록과 같은 글자('기업경영이다')
 
 
 def test_iter_clean_without_toc_unchanged(monkeypatch):
