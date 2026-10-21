@@ -313,6 +313,10 @@ def _finalize_results(ckpt: "_CleanCheckpoint | None", cleaned_text: str | None,
     return final
 
 
+# ①·② 탭 저장 형식 선택지 — (화면 표시, 값). 기본은 txt, MD 가 필요하면 짝(txt+md)이나 MD만.
+_FMT_CHOICES = [("텍스트 (.txt)", "txt"), ("텍스트 + MD (.txt·.md 짝)", "txt+md"), ("MD만 (.md)", "md")]
+
+
 def _parse_fmt(fmt: str) -> tuple[OutputFormat, bool]:
     """저장 형식 선택 → (주 결과 형식, .md 짝도 만들지). 'txt+md' 는 .txt 가 주 결과(처리 기록)."""
     if fmt == "txt+md":
@@ -1950,6 +1954,8 @@ def build_ui() -> gr.Blocks:
                                 value=bool(config.get("remove_front_matter", False)),
                                 info="문장 정제가 켜져 있을 때만 동작합니다. 끄면(기본) 부속물을 그대로 둡니다.",
                             )
+                            fmt_input = gr.Radio(label="저장 형식", choices=_FMT_CHOICES,
+                                                 value=cfg.get("default_format", "txt"))
                             with gr.Accordion("고급 설정 — 보통은 그대로 두세요", open=False):
                                 with gr.Row():
                                     lang_input = gr.Dropdown(
@@ -1957,8 +1963,6 @@ def build_ui() -> gr.Blocks:
                                         choices=["kor+eng", "kor", "eng", "kor+eng+chi_sim"],
                                         value=cfg.get("default_lang", "kor+eng"),
                                     )
-                                    fmt_input = gr.Radio(label="저장 형식", choices=["txt", "md", "txt+md"],
-                                                         value=cfg.get("default_format", "txt"))
                                 no_preprocess = gr.Checkbox(label="이미지 전처리 끄기", value=False)
                                 no_fallback   = gr.Checkbox(label="흐린 쪽 자동 재인식(폴백) 끄기",
                                                             value=False)
@@ -2030,6 +2034,8 @@ def build_ui() -> gr.Blocks:
                             value=bool(config.get("remove_front_matter", False)),
                             info="문장 정제가 켜져 있을 때만 동작합니다. 차례·판권(간기)을 규칙으로 지웁니다.",
                         )
+                    batch_fmt = gr.Radio(label="저장 형식", choices=_FMT_CHOICES,
+                                         value=cfg.get("default_format", "txt"))
 
                 with gr.Column(elem_classes="step-card"):
                     gr.HTML(_step_head(None, "입력 폴더",
@@ -2354,7 +2360,7 @@ def build_ui() -> gr.Blocks:
 
         batch_inputs = [
             batch_list,
-            lang_input, fmt_input, no_preprocess, no_fallback, no_figure,
+            lang_input, batch_fmt, no_preprocess, no_fallback, no_figure,
             llm_correct, llm_budget, api_key_input,
             batch_vision_first,
             batch_cleanup_chk,

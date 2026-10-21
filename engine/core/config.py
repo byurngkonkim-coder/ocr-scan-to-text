@@ -27,7 +27,7 @@ _DEFAULTS: dict = {
     "gemini_disable_thinking": True,      # OCR엔 추론 불필요 → 끄면 지연·토큰↓ (2.5-flash 전용)
     "default_lang": "kor+eng",
     "default_dpi": 200,                   # Vision은 내부 축소 → 200이면 충분(속도·메모리·네트워크↓)
-    "default_format": "txt+md",
+    "default_format": "txt",
     "confidence_threshold": 85.0,   # 하루명화 보정: 깨진 쪽 63~84, 본문 88+ (QA 2026-10-03)
     "auto_fallback": True,
     "vision_max_ratio": 0.1,        # 비용 우선: 문서당 Vision 폴백 쪽 상한(비율, 최소 3쪽)
