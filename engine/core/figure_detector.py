@@ -82,6 +82,13 @@ def detect(image: Image.Image, lang: str = "kor+eng") -> DetectionResult:
     found = _detect_tables(img_cv)
     table_boxes = [_expand_to_border(img_cv, b, [o for o in found if o != b]) for b in found]
     for (x, y, bw, bh) in table_boxes:
+        matrix = _matrix_markdown(image, img_cv, (x, y, bw, bh), lang)
+        if matrix:
+            md, (x, y, bw, bh) = matrix
+            regions.append(Region(kind="table", index=tab_idx, x=x, y=y, w=bw, h=bh,
+                                  crop=image.crop((x, y, x + bw, y + bh)), table_md=md))
+            tab_idx += 1
+            continue
         crop = image.crop((x, y, x + bw, y + bh))
         md = _extract_table_markdown(crop, lang)
         # 쪽 가장자리 선·도식이 격자로 잡혀 본문 조각을 표로 다시 썼다(예측기계 54·107·133·135쪽) —
@@ -295,6 +302,148 @@ def _extract_table_markdown(crop: Image.Image, lang: str) -> str:
     return _rows_markdown(crop, lang)
 
 
+# ── 2×2 매트릭스 그림 (2x2Matrix 알렉스로위, 2026-10-21) ──────────────────────
+# 바깥 상자 + 십자선 하나로 4분면을 나누고 축 이름·양 끝 값은 상자 밖(왼쪽은 세로쓰기, 아래는 가로)에 있다.
+# 표 구조 모델은 한 칸 안 여러 줄을 행으로 쪼갰고(그림1.5·6.4), 상자 밖 축 글자는 본문으로 새어
+# 세로쓰기가 「R영올」 같은 잡음이 됐다 → 4분면은 글자 가운데 위치로 나누고, 축은 띠를 따로 읽는다.
+_MATRIX_BAND = 0.16        # 축 글자를 찾을 띠 폭(상자 크기 대비) — 10장 실측 축 글자는 상자에서 3~12% 거리
+_MATRIX_EDGE = 0.06        # 상자 변에서 이만큼 안쪽 선은 바깥 테두리로 본다
+# 축 띠 글자 신뢰도 — 일반 표 옆 본문을 돌려 읽은 잡음은 낮다. 세로쓰기 끝 값은 0.69(그림1.5 「놀다」)까지 나왔다
+_AXIS_MIN_SCORE = 0.5
+_AXIS_WORD_RE = re.compile(r"[가-힣]{2,}")   # 띠마다 이런 낱말이 하나는 있어야 매트릭스 축으로 본다
+_AXIS_END = 0.3            # 띠 길이의 양 끝 30% 안 글자는 끝 값(낮다·높다), 가운데는 축 이름
+_ROMAN_RE = re.compile(r"^[IVXlT1|Ⅰ-Ⅻ\s]{1,6}$")   # 4분면 번호(그림1.5 가운데 I II III IV)
+# 한글 없이 3자 이하이면서 낱말에 안 쓰는 기호가 섞인 조각 — 선·번호를 읽은 잡음(그림1.5 「Lπ」·「d:V」).
+# 「GM」·「A&P」·「IBM」 같은 짧은 이름은 남는다
+_JUNK_RE = re.compile(r"^(?=[^가-힣]{1,3}$).*[^A-Za-z0-9&]")
+# 축·칸 글자는 본문보다 작다 — 2배에선 「충격」→「층격」, 4분면 번호가 「Lπ」로 읽혔고 3배에서 바로 읽혔다(10장 실측)
+_MATRIX_OCR_SCALE = 3.0
+_MATRIX_BORDER = 6         # 4분면을 읽을 때 상자 안쪽으로 들일 폭(px) — 테두리 선 두께 4~5px(150dpi 실측)
+# 축 양 끝은 짝말이다 — 한쪽이 짝말 그대로 읽히고 다른 쪽이 한 글자만 틀리면 짝으로 고친다
+# (그림1.5 세로축 위 「높다」를 세로쓰기 판독이 3·4·5배 모두 「놀다」로 읽었다)
+_AXIS_PAIRS = (("높다", "낮다"), ("높음", "낮음"), ("예", "아니오"), ("신규", "기존"))
+
+
+def _inner_splits(gray: np.ndarray) -> tuple[int, int] | None:
+    """상자 안 십자선 위치 (세로선 x, 가로선 y). 안쪽 선이 한 방향에 둘 이상이면 일반 격자 표 → None.
+    선이 끊겨 못 찾은 방향(그림0.1 세로선·6.24 가운데 상자)은 가운데로 본다."""
+    h, w = gray.shape
+    binary = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, 25, 10)
+
+    def runs(mask, axis_len, size):
+        pos = np.where(mask >= axis_len * 0.6)[0]
+        pos = [p for p in pos if size * _MATRIX_EDGE < p < size * (1 - _MATRIX_EDGE)]
+        groups: list[list[int]] = []
+        for p in pos:
+            if groups and p - groups[-1][-1] <= 3:
+                groups[-1].append(p)
+            else:
+                groups.append([p])
+        return [round(sum(g) / len(g)) for g in groups]
+
+    v = cv2.morphologyEx(binary, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (1, h // 3)))
+    hz = cv2.morphologyEx(binary, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (w // 3, 1)))
+    vs, hs = runs(v.sum(0) / 255, h, w), runs(hz.sum(1) / 255, w, h)
+    if len(vs) > 1 or len(hs) > 1:
+        return None
+    return (vs[0] if vs else w // 2), (hs[0] if hs else h // 2)
+
+
+def _axis_labels(boxes, length: int) -> tuple[str, str, str]:
+    """축 띠 글자 → (낮은 쪽 끝 값, 축 이름, 높은 쪽 끝 값). 띠 방향 좌표(x)가 겹치는 상자는 한 덩어리
+    (두 줄 끝 값 「소매상에 / 잘 알려짐」), 덩어리 가운데가 띠 양 끝 30% 안이면 끝 값."""
+    groups: list[list] = []
+    for t, b in sorted(boxes, key=lambda tb: tb[1][0]):
+        if groups and b[0] < groups[-1][0]:
+            groups[-1][0] = max(groups[-1][0], b[0] + b[2])
+            groups[-1][1].append((t, b))
+        else:
+            groups.append([b[0] + b[2], [(t, b)]])
+    low, name, high = [], [], []
+    for _end, items in groups:
+        text = " ".join(t for t, _b in sorted(items, key=lambda tb: (tb[1][1], tb[1][0])))
+        cx = sum(b[0] + b[2] / 2 for _t, b in items) / len(items)
+        (low if cx < length * _AXIS_END else high if cx > length * (1 - _AXIS_END) else name).append(text)
+    return " ".join(low), " ".join(name), " ".join(high)
+
+
+def _pair_fix(end: str, other: str) -> str:
+    """축 끝 값 end 가 반대쪽 끝 other 의 짝말과 한 글자만 다르면 짝말로."""
+    for a, b in _AXIS_PAIRS + tuple((b, a) for a, b in _AXIS_PAIRS):
+        if other == b and end != a and len(end) == len(a) and sum(p != q for p, q in zip(end, a)) == 1:
+            return a
+    return end
+
+
+def _matrix_markdown(image: Image.Image, gray: np.ndarray, box: tuple[int, int, int, int],
+                     lang: str) -> tuple[str, tuple[int, int, int, int]] | None:
+    """2×2 매트릭스면 (Markdown 표, 축 띠까지 넓힌 상자). 축 글자가 왼쪽·아래 띠 모두에 없으면 None.
+
+    표 모양: 첫 행 = 「세로축 \\ 가로축 | 왼쪽 끝 값 | 오른쪽 끝 값」, 첫 열 = 세로축 위·아래 끝 값."""
+    x, y, w, h = box
+    splits = _inner_splits(gray[y:y + h, x:x + w])
+    if splits is None:
+        return None
+    vx, hy = splits
+    H, W = gray.shape
+    mw, mh = int(w * _MATRIX_BAND), int(h * _MATRIX_BAND)
+    lx0, ly0, ly1 = max(0, x - mw), max(0, y - 8), min(H, y + h + 8)
+    bx0, bx1, by1 = max(0, x - mw), min(W, x + w + mw // 2), min(H, y + h + mh)
+    if x - lx0 < 10 or by1 - (y + h) < 10:
+        return None
+    # 세로쓰기(아래→위)는 시계 방향 90° 돌리면 가로 — 돌린 띠의 x 가 작을수록 원래 아래쪽
+    left = _read_table_boxes(image.crop((lx0, ly0, x, ly1)).transpose(Image.ROTATE_270), lang,
+                             _AXIS_MIN_SCORE, _MATRIX_OCR_SCALE)
+    bottom = _read_table_boxes(image.crop((bx0, y + h, bx1, by1)), lang, _AXIS_MIN_SCORE, _MATRIX_OCR_SCALE)
+    if not any(_AXIS_WORD_RE.search(t) for t, _b in left) or not any(_AXIS_WORD_RE.search(t) for t, _b in bottom):
+        return None
+    v_low, v_name, v_high = _axis_labels(left, ly1 - ly0)
+    h_low, h_name, h_high = _axis_labels([(t, (bx - (x - bx0), by, bw, bh)) for t, (bx, by, bw, bh) in bottom], w)
+
+    v_low, v_high = _pair_fix(v_low, v_high), _pair_fix(v_high, v_low)
+    h_low, h_high = _pair_fix(h_low, h_high), _pair_fix(h_high, h_low)
+
+    cells = {k: [] for k in ("tl", "tr", "bl", "br")}
+    # 바깥 테두리를 빼고 읽는다 — 상자가 1px 만 넓게 잡혀도 모서리 선이 「Lπ」로 읽혔다(그림1.5)
+    i = _MATRIX_BORDER
+    for t, (cx, cy, cw, ch) in _read_table_boxes(image.crop((x + i, y + i, x + w - i, y + h - i)), lang,
+                                                 scale=_MATRIX_OCR_SCALE):
+        if _ROMAN_RE.match(t) or _JUNK_RE.match(t):
+            continue
+        cx, cy = cx + i, cy + i
+        k = ("t" if cy + ch / 2 < hy else "b") + ("l" if cx + cw / 2 < vx else "r")
+        cells[k].append((t, (cx, cy, cw, ch)))
+
+    def join(items) -> str:
+        if not items:
+            return ""
+        unit = sorted(b[3] for _t, b in items)[len(items) // 2]
+        return _correct_cell(" ".join(" ".join(t for t, _b in sorted(its, key=lambda tb: tb[1][0]))
+                                      for _cy, its in _text_lines(items, unit)))
+
+    corner = f"{v_name} \\ {h_name}" if v_name and h_name else v_name or h_name
+    md = _grid_to_markdown([[corner, h_low, h_high],
+                            [v_high, join(cells["tl"]), join(cells["tr"])],
+                            [v_low, join(cells["bl"]), join(cells["br"])]])
+    # 축 글자가 든 띠까지 넓혀 본문에서 지운다 — 그래야 「R영올」·「낮다 높다 품질」이 본문에 안 남는다
+    left_x = lx0 + min(b[1] for _t, b in left) - _TEXT_BOX_PAD
+    bottom_y = y + h + max(b[1] + b[3] for _t, b in bottom) + _TEXT_BOX_PAD
+    right_x = max(x + w, bx0 + max(b[0] + b[2] for _t, b in bottom) + _TEXT_BOX_PAD)
+    nx0 = max(0, min(x, left_x))
+    return md, (nx0, y, min(W, right_x) - nx0, min(H, bottom_y) - y)
+
+
+def _correct_cell(text: str) -> str:
+    """칸 글자에 본문과 같은 로컬 교정(한국어 정제 + 사람이 등록한 오타)을 건다 — 표는 정제 뒤에 본문에
+    끼워져 교정을 거치지 않았다(그림6.30 「경명사」)."""
+    from core.korean_corrector import refine_korean_text   # 맨 위에 두면 순환 import
+    from core import user_typos
+    try:
+        return user_typos.apply(refine_korean_text(text))[0].strip()
+    except Exception:
+        return text
+
+
 def _looks_like_table(md: str) -> bool:
     """글자 있는 칸이 2개 이상인 행이 절반 이상이어야 표다.
 
@@ -352,11 +501,12 @@ def _rows_markdown(crop: Image.Image, lang: str) -> str:
 _TABLE_OCR_SCALE = 2.0
 
 
-def _read_table_boxes(crop: Image.Image, lang: str) -> list[tuple[str, tuple[int, int, int, int]]]:
-    s = _TABLE_OCR_SCALE
+def _read_table_boxes(crop: Image.Image, lang: str, min_score: float = 0.0,
+                      scale: float = 0.0) -> list[tuple[str, tuple[int, int, int, int]]]:
+    s = scale or _TABLE_OCR_SCALE
     big = crop.resize((round(crop.width * s), round(crop.height * s)), Image.LANCZOS)
     return [(t.strip(), (round(x / s), round(y / s), round(w / s), round(h / s)))
-            for t, _sc, (x, y, w, h) in _read_framed(big, lang) if t and t.strip()]
+            for t, sc, (x, y, w, h) in _read_framed(big, lang) if t and t.strip() and sc >= min_score]
 
 
 def _grid_segments(gray: np.ndarray, unit: int) -> tuple[list[tuple[int, int, int]], list[int]]:

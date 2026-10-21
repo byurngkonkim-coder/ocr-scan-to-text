@@ -244,6 +244,10 @@ def remove_noise_lines(text: str) -> str:
 
 
 _MD_HEADING_RE = re.compile(r'^#{1,6} \S')
+# 그림 제목 줄 '◆ 그림 0.1 이익 계획 매트릭스'·'그림5.5경쟁력 인지 지도' — 글머리 ◆ 는 OCR 이 빠뜨리기도 한다.
+# 줄 첫머리 본문 참조('그림 5.6의 구매 가능성은…'·'그림 5.4).')는 번호에 조사·괄호가 붙어 제외
+_FIGURE_CAPTION_RE = re.compile(
+    r'^[◆❖◇◈♦]?\s*그림\s*\d+\s*[.,]\s*\d+(?:\s+[^\s)]|(?![의에은는을를과와로도이가])[^\s\d).,])')
 
 
 def join_broken_lines(text: str) -> str:
@@ -281,6 +285,8 @@ def join_broken_lines(text: str) -> str:
                 break  # 빈 줄 → 연결 중단
             if _MD_HEADING_RE.match(cur) or _MD_HEADING_RE.match(nxt):
                 break  # 장·절 제목 줄(toc_headings)은 본문에 붙이지 않는다
+            if _FIGURE_CAPTION_RE.match(nxt.strip()):
+                break  # 그림 제목 줄 — 마침표 없이 끊긴 앞 문단에 붙었다('…욕심 그림0.1 이익 계획 매트릭스')
             # 지금까지 이은 줄이 아니라 '현재 물리적 줄'(lines[i])이 끝까지 찼는지를 본다
             last = not any(l.strip() for l in lines[i + 2:])
             if (len(lines[i].strip()) >= full and not is_item_start(nxt, letters)
