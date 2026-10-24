@@ -29,7 +29,7 @@ from core import config, usage_tracker, blank_detector, storage_manager
 from core import text_cleaner
 from core import pdf_text_layer
 from core import margin_detector
-from core import noise_rules, toc_headings, page_marks
+from core import noise_rules, toc_headings, page_marks, notebooklm
 import batch_runner
 from core.types import FileResult, OutputFormat, PageResult, OCREngine
 
@@ -344,6 +344,25 @@ def _place_md_pair(final: Path, md_src: Path | None, logs: list[str] | None) -> 
     except Exception as e:   # 짝이 없다는 걸 숨기면 .md 를 찾다 헤맨다 — 표면화
         if logs is not None:
             logs.append(f"  ⚠ .md 짝 파일을 만들지 못했습니다(.txt 는 저장됨): {e}")
+
+
+def _save_notebooklm_parts(final: Path | None, md: str | None, logs: list[str]) -> None:
+    """NotebookLM 소스 한도를 넘는 큰 책 — 결과 옆 '{결과이름}_NotebookLM분할/' 에 장 경계로 나눈 MD 조각.
+    결과 파일은 그대로 둔다(처리 기록·재교정·원문 사본이 결과 파일 1개 기준)."""
+    if final is None or not md:
+        return
+    parts = notebooklm.split_parts(md, notebooklm.MAX_WORDS)
+    if not parts:
+        return
+    d = final.parent / f"{final.stem}_NotebookLM분할"
+    try:
+        d.mkdir(exist_ok=True)
+        for i, p in enumerate(parts, 1):
+            (d / f"{final.stem}_{i}of{len(parts)}.md").write_text(p, encoding="utf-8")
+        logs.append(f"  📚 NotebookLM 한도(소스당 약 50만 단어)를 넘어 {len(parts)}개로 나눔 — "
+                    f"NotebookLM 에는 {d.name}/ 의 파일을 올리세요")
+    except Exception as e:   # 조각이 없다는 걸 숨기면 큰 파일을 그대로 올려 뒷부분이 빠진다 — 표면화
+        logs.append(f"  ⚠ NotebookLM 용 나눈 파일을 만들지 못했습니다(결과 파일은 저장됨): {e}")
 
 
 def _result_files(path: Path | None) -> list[str] | str | None:
@@ -1164,6 +1183,7 @@ def _run_digital_pdf(file_path: Path, pages_text: list[str], out_fmt: OutputForm
 
     # ── 02_결과/ 확정 — 이력에 경로를 남기려고 기록보다 먼저 ──────────────────────
     results_path = _finalize_results(ckpt, cleaned_text, out_path, file_path.stem, step_logs, md_src)
+    _save_notebooklm_parts(results_path, cleaned_md, step_logs)
 
     # ── storage: 결과 파일 영구 저장 + 이력 기록 ───────────────────────────────
     try:
@@ -1802,6 +1822,7 @@ def _run_ocr(
 
     # ── 02_결과/ 확정 — 이력에 경로를 남기려고 기록보다 먼저 ──────────────────────
     results_path = _finalize_results(ckpt, cleaned_text, out_path, out_stem, step_logs, md_src)
+    _save_notebooklm_parts(results_path, cleaned_md, step_logs)
     ocr_ckpt.close()
     if results_path is not None and render_err is None:   # 다 읽고 확정됐을 때만 OCR 복구본을 지운다
         ocr_ckpt.path.unlink(missing_ok=True)
