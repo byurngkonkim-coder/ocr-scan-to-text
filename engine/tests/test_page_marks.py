@@ -80,3 +80,34 @@ def test_structured_texts_adds_marks_to_md_and_txt():
     assert "[p.3]" in txt and "[p.4]" in txt and txt == md
     # 쪽 정보가 없으면(txt 입력) 지금처럼 그대로
     assert ocr_gradio._structured_texts(clean, {"toc_entries": []}, OutputFormat.TXT, []) == (clean, clean)
+
+
+# ── 문서 정보 머리말(intent 작업 4) ──────────────────────────────────────────────
+def test_book_name_from_filename():
+    """파일명 '책제목_저자' — 끝의 날짜·상태 표시는 뗀다. 칸이 하나면 저자 없음."""
+    import ocr_gradio
+    assert ocr_gradio._book_name("20261024_062842_NextSociety_피터드러커.pdf") == ("NextSociety", "피터드러커")
+    assert ocr_gradio._book_name("1001가지기독교명언_론로즈_20240302.pdf") == ("1001가지기독교명언", "론로즈")
+    assert ocr_gradio._book_name("1Q84_MurakamiHaruki_기울기 보정.pdf") == ("1Q84", "MurakamiHaruki")
+    assert ocr_gradio._book_name("2천년의강의_사마천의생각경영법_김원중.pdf") == ("2천년의강의 사마천의생각경영법", "김원중")
+    assert ocr_gradio._book_name("BCG의6가지성공전략_원문.pdf") == ("BCG의6가지성공전략", "")
+    assert ocr_gradio._book_name("GameTheory.pdf") == ("GameTheory", "")
+
+
+def test_structured_texts_doc_header_md_and_txt():
+    """맨 앞 문서 정보 — 책·저자(파일명 기준 추정)·원본 파일·쪽 수·처리일·장절 결과·쪽 표지 뜻. MD 는 인용 블록,
+    TXT 는 같은 줄에서 기호만 뺀다. 본문(차례·쪽 표지)은 그 뒤에 그대로."""
+    import ocr_gradio
+    clean = f"{_P1}\n\n{_P2}\n"
+    rep = {"toc_entries": [], "toc_note": "차례를 찾지 못해 장·절 정비 없이 정제"}
+    info = {"name": "NextSociety_피터드러커.pdf", "pages": 374}
+    txt, md = ocr_gradio._structured_texts(clean, rep, OutputFormat.TXT, [], [(3, _P1), (4, _P2)], info)
+    head, body = md.split("\n\n", 1)
+    assert head.startswith("> **문서 정보**") and all(l.startswith(">") for l in head.split("\n"))
+    for s in ("NextSociety", "피터드러커", "파일명 기준", "NextSociety_피터드러커.pdf", "PDF 374쪽", "처리일",
+              "차례를 찾지 못해", "[p.N]"):
+        assert s in head
+    assert body.startswith("[p.3]\n" + _P1)
+    t_head, t_body = txt.split("\n\n", 1)
+    assert ">" not in t_head and "**" not in t_head and "NextSociety_피터드러커.pdf" in t_head
+    assert t_body == body

@@ -400,11 +400,36 @@ def _recorrect(text: str, page: PageResult) -> str:
     return "\n\n".join(out)
 
 
+_NAME_STAMP_RE = re.compile(r'^\d{8}_\d{6}_')                     # 02_결과 시각 접두
+_NAME_TAIL_RE = re.compile(r'^(?:\d{8}|원문|미완|OCR중|정제중|정제완료|기울기 보정)$')   # 파일명 끝의 날짜·상태 칸
+
+
+def _book_name(file_name: str) -> tuple[str, str]:
+    """파일명 '책제목_저자' → (책 제목, 저자). 끝의 날짜·상태 칸은 떼고, 칸이 하나면 저자는 ''."""
+    parts = _NAME_STAMP_RE.sub("", Path(file_name).stem).split("_")
+    while len(parts) > 1 and _NAME_TAIL_RE.match(parts[-1].strip()):
+        parts.pop()
+    return (" ".join(parts[:-1]), parts[-1]) if len(parts) > 1 else (parts[0], "")
+
+
+def _doc_header(info: dict, note: str | None) -> list[str]:
+    """맨 앞 문서 정보 줄(기호 없이) — NotebookLM 이 출처·쪽 표지 뜻을 알게. 지어낸 내용은 넣지 않는다."""
+    title, author = _book_name(info["name"])
+    pages = f" · PDF {info['pages']}쪽" if info.get("pages") else ""
+    return ["스캔본 OCR 텍스트 전문(요약·생성 문장 없음)",
+            f"책: {title}" + (f" · 저자: {author}" if author else "") + " (파일명 기준 추정)",
+            f"원본 파일: {info['name']}{pages} · 처리일 {time.strftime('%Y-%m-%d')}"]\
+        + ([f"장·절: {note}"] if note else []) \
+        + (["쪽 표지: [p.N] 줄 뒤의 글은 원본 PDF N쪽 내용"] if info.get("pages") else [])
+
+
 def _structured_texts(text: str | None, crep: dict | None, out_fmt: OutputFormat,
-                      logs: list[str], pages: list[tuple[int, str]] | None = None) -> tuple[str | None, str | None]:
+                      logs: list[str], pages: list[tuple[int, str]] | None = None,
+                      info: dict | None = None) -> tuple[str | None, str | None]:
     """정제본 → (주 결과 글, .md 짝 글). 정제가 차례를 찾았으면(toc_headings) MD 는 맨 앞 차례 목록 + '#' 장·절
     제목, TXT 는 같은 글에서 '#'·목록 기호만 뺀다. 차례가 없으면 둘 다 정제본 그대로(예전과 같다).
-    pages(PDF 쪽번호, 쪽 원문)가 있으면 쪽이 바뀌는 자리마다 [p.N] 표지 — MD·TXT 같게(page_marks)."""
+    pages(PDF 쪽번호, 쪽 원문)가 있으면 쪽이 바뀌는 자리마다 [p.N] 표지 — MD·TXT 같게(page_marks).
+    info({name: 원본 파일명, pages: PDF 쪽 수})가 있으면 맨 앞에 문서 정보 — MD 는 인용 블록, TXT 는 기호 없이."""
     if not text:
         return text, text
     if pages:
@@ -415,10 +440,16 @@ def _structured_texts(text: str | None, crep: dict | None, out_fmt: OutputFormat
     if note:
         logs.append(f"  📑 {note}")
     entries = (crep or {}).get("toc_entries") or []
-    if not entries:
-        return text, text
-    md = toc_headings.to_markdown(text.strip(), entries) + "\n"
-    return (md if out_fmt == OutputFormat.MD else toc_headings.to_text(text.strip(), entries) + "\n"), md
+    if entries:
+        md = toc_headings.to_markdown(text.strip(), entries) + "\n"
+        txt = toc_headings.to_text(text.strip(), entries) + "\n"
+    else:
+        md = txt = text
+    if info:
+        head = _doc_header(info, note)
+        md = "\n".join([f"> **문서 정보** — {head[0]}"] + [f"> - {l}" for l in head[1:]]) + "\n\n" + md
+        txt = "\n".join([f"문서 정보 — {head[0]}"] + head[1:]) + "\n\n" + txt
+    return (md if out_fmt == OutputFormat.MD else txt), md
 
 
 def _save_review(results_path: Path | None, content_pages: list, cleaned_text: str | None,
@@ -1085,7 +1116,8 @@ def _run_digital_pdf(file_path: Path, pages_text: list[str], out_fmt: OutputForm
         cleaned_text, cleaned_md = _structured_texts(
             cleaned_text, _crep, out_fmt, step_logs,
             # txt 입력의 '쪽'은 문단 묶음일 뿐이라 쪽 표지를 넣지 않는다
-            None if page_fn is _finalize_text else [(p.page_num, p.corrected_text) for p in content_pages])
+            None if page_fn is _finalize_text else [(p.page_num, p.corrected_text) for p in content_pages],
+            {"name": file_path.name, "pages": None if page_fn is _finalize_text else result.total_pages})
 
     # ── 저장 ───────────────────────────────────────────────────────────────────
     yield (
@@ -1715,7 +1747,8 @@ def _run_ocr(
         if _crep:   # 부속물 제거·지어낸 문장 등 확인할 경고 — 강등 건은 위 개수 줄로 대신한다
             step_logs.extend(f"  ⚠ {w}" for w in _crep["warnings"] if "강등" not in w)
         cleaned_text, cleaned_md = _structured_texts(cleaned_text, _crep, out_fmt, step_logs,
-                                                     [(p.page_num, p.corrected_text) for p in content_pages])
+                                                     [(p.page_num, p.corrected_text) for p in content_pages],
+                                                     {"name": file_path.name, "pages": result.total_pages})
     elif cleanup:
         step_logs.append("  ⚠ 정제 건너뜀 — Ollama 텍스트 모델(exaone3.5) 응답 없음 — Ollama 실행 확인")
 
