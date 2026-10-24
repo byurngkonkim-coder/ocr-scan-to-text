@@ -37,16 +37,16 @@ def test_iter_clean_marks_toc_headings(monkeypatch):
     monkeypatch.setattr(config, "get_local_cleanup_engine", lambda: "rules")
     rep: dict = {}
     out = _clean(_book(), rep)
-    assert [e["title"] for e in rep["toc_entries"]][:3] == ["머리말", "제1장 새로운 경영 패러다임", "1.경영은 기업경영이다"]
+    # 제목도 본문과 같은 띄어쓰기(R-17) — 차례 목록과 본문 제목이 같은 글자(2026-10-24)
+    assert [e["title"] for e in rep["toc_entries"]][:3] == ["머리말", "제1장 새로운 경영 패러다임", "1.경영은 기업 경영이다"]
     # 본문에 '제2장 전략' 줄이 없다 — 그 장의 첫 절 앞에 넣는다(추정 1)
     assert rep["toc_note"].startswith("차례 8항목 중 7개를 본문 제목으로 정비(+못 찾은 장 제목 1개")
     lines = out.split("\n")
-    for h in ("# 머리말", "# 제1장 새로운 경영 패러다임", "## 1.경영은 기업경영이다", "## 2.단 하나의 올바른 조직",
+    for h in ("# 머리말", "# 제1장 새로운 경영 패러다임", "## 1.경영은 기업 경영이다", "## 2.단 하나의 올바른 조직",
               "# 제2장 전략", "## 1.감소하는 출산율", "# 감사의말"):
         i = lines.index(h)                                   # 제목 줄이 본문에 붙지 않았다
         assert lines[i - 1] == "" and lines[i + 1] == ""     # 앞뒤 빈 줄
     assert "·머리말/3" not in out                            # 차례 쪽은 본문에서 빠진다(MD 맨 앞 목록으로)
-    # 띄어쓰기 교정(R-17, kiwi)은 제목 줄을 건드리지 않는다 — 차례 목록과 같은 글자('기업경영이다')
 
 
 def test_iter_clean_without_toc_unchanged(monkeypatch):
@@ -162,3 +162,64 @@ def test_shared_module_identical_to_myocr():
     if other.exists():
         assert hashlib.md5(mine.replace(b"\r\n", b"\n")).hexdigest() == \
             hashlib.md5(other.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+
+
+# ── 2026-10-24 차례 품질(intent NotebookLM용 MD 구조개선 작업 2) ──────────────────────
+def test_label_only_toc_row_merges_with_title():
+    """번호표만 따로 읽힌 장('제1장' / '다음 사회의 모습 28')은 한 항목 — 같은 단계(NextSociety 실측)."""
+    toc = ("차례\n제1장\n다음 사회의 모습 28\n제2장\n새로운 인구 구조 41\n제3장\n새로운 노동력 63\n"
+           "제4장\n제조업의 역설 85\n제5장\n최고경영자의 미래 101")
+    entries, _ = toc_headings.extract_toc_text([toc] + [_BODY] * 20)
+    assert [(e["level"], e["title"], e["page"]) for e in entries][:2] == \
+        [(1, "제1장 다음 사회의 모습", 28), (1, "제2장 새로운 인구 구조", 41)]
+
+
+def test_rematch_headings_after_clean():
+    """줄 잇기 전 원문에서 못 찾은 차례 제목이 정제본에 따로 선 줄로 있으면 제목으로(DrivingSalesmanPowerSkill 실측).
+    본문 문장 속에 같은 말이 있어도 제목으로 바꾸지 않는다."""
+    entries = [{"level": 1, "title": "03 이제세일즈를해볼까", "page": 21},
+               {"level": 1, "title": "04 첫실적을보장하는약속", "page": 30}]
+    text = ("앞에서 말한 03 이제 세일즈를 해 볼까 라는 이야기는 길게 이어지는 본문 문장의 일부일 뿐이다.\n\n"
+            "03 이제 세일즈를 해 볼까\n\n그날 나는 처음으로 고객을 만났다.\n\n"
+            "# 04 첫실적을보장하는약속\n\n약속은 지켜야 한다.")
+    stats = {"found": 1, "inferred": 0, "missing": ["03 이제세일즈를해볼까"]}
+    out = text_cleaner.rematch_headings(text, entries, stats, respace=False)
+    lines = out.split("\n")
+    # 본문 줄 글자 그대로 '#' 만 붙이고, 차례 목록도 그 글자로 맞춘다(무손실)
+    assert "# 03 이제 세일즈를 해 볼까" in lines and "# 04 첫실적을보장하는약속" in lines
+    assert entries[0]["title"] == "03 이제 세일즈를 해 볼까"
+    assert lines[0].startswith("앞에서 말한 03")
+    assert out.replace("# 03 이제", "03 이제") == text
+    assert stats == {"found": 2, "inferred": 0, "missing": []}
+
+
+def test_rematch_headings_matches_front_of_merged_toc_row():
+    """차례 OCR 이 두 항목·저자를 한 줄로 붙여 읽어도('다이렉트경영 마이클델', CEO의책꽃이) 본문에 따로 선
+    앞부분 줄을 제목으로. 짧은 줄(6자 미만·항목의 40% 미만)은 아니다."""
+    entries = [{"level": 1, "title": "다이렉트경영 마이클델", "page": 40},
+               {"level": 1, "title": "나의 인생과 일 헨리 포드 그리고 자동차 왕국의 탄생 이야기", "page": 50}]
+    text = "그림6.3 다이렉트 경영\n\n앞 이야기.\n\n다이렉트 경영\n\n델은 직접 판다.\n\n나의 인생\n\n포드는 차를 만들었다."
+    st = {"found": 0, "inferred": 0, "missing": [e["title"] for e in entries]}
+    out = text_cleaner.rematch_headings(text, entries, st, respace=False)
+    assert "# 다이렉트 경영" in out.split("\n") and "# 나의 인생" not in out
+    assert st["found"] == 1
+
+
+def test_rematch_headings_never_drops_or_duplicates_lines():
+    """정제본 다시 찾기는 줄을 지우거나 이미 있는 제목을 또 넣지 않는다(NextSociety '피터 드러커' 줄 소실 회귀)."""
+    entries = [{"level": 1, "title": "책머리에", "page": 9},
+               {"level": 1, "title": "제4부 변화하는 세계 경제", "page": 290},
+               {"level": 2, "title": "제1장 대규모 조직의 등장", "page": 297}]
+    text = ("# 책머리에\n\n피터 드러커\n\n본문 문장이다.\n\n# 제4부 변화하는 세계 경제\n\n"
+            "## 제1장 대규모 조직의 등장\n\n조직은 커졌다.")
+    out = text_cleaner.rematch_headings(text, entries, {"found": 3, "inferred": 0, "missing": []}, respace=False)
+    assert out == text
+
+
+def test_rematch_headings_respaces_titles_and_list():
+    """respace: 제목을 본문과 같은 띄어쓰기로 — 차례 목록(entries)과 본문 제목 줄이 같은 글자."""
+    entries = [{"level": 1, "title": "03 이제세일즈를해볼까", "page": 21}]
+    out = text_cleaner.rematch_headings("# 03 이제세일즈를해볼까\n\n본문이다.", entries,
+                                        {"found": 1, "inferred": 0, "missing": []}, respace=True)
+    assert entries[0]["title"] == "03 이제 세일즈를 해 볼까"
+    assert "# 03 이제 세일즈를 해 볼까" in out.split("\n") and "이제세일즈" not in out

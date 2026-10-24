@@ -23,6 +23,7 @@ import re
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
+from difflib import SequenceMatcher
 
 from core import config
 from core import gemini_vision as _gemini
@@ -30,7 +31,7 @@ from core import ollama_vision as _ollama
 from core import noise_rules
 from core import spacing, verse_rules
 from core import toc_headings
-from core.postprocessor import _PAGE_FOOTER_LINE
+from core.postprocessor import _PAGE_FOOTER_LINE, _FIGURE_CAPTION_RE
 
 # 페이지 경계 센티넬 — 입력에 실제로 등장할 가능성이 없는 문자열
 PAGEBREAK = "⟨PAGEBREAK⟩"
@@ -357,6 +358,10 @@ def iter_clean(pages: list[str], drop_front_matter: bool = False, on_chunk=None,
             report["warnings"].append(f"붙어 쓴 낱말 띄어쓰기 {n_sp}곳 교정 (정제 전 원문 사본에서 확인 가능)")
     text = unify_paragraph_breaks(text)
     if toc_entries:
+        text = rematch_headings(text, toc_entries, toc_stats, respace=rules_mode)
+        report["toc_note"] = toc_headings.report(toc_entries, toc_stats)
+        if report_out is not None:
+            report_out["toc_note"] = report["toc_note"]
         text = toc_headings.space_headings(text)   # 장·절 제목 줄 앞뒤 빈 줄(R-18)
 
     return (text + "\n") if text else ""
@@ -501,6 +506,73 @@ def _show_headings(pages: list[str], store: list[str]) -> list[str]:
     if not store:
         return pages
     return [_HIDDEN_HEADING_RE.sub(lambda m: store[int(m.group(1))], p) for p in pages]
+
+
+def rematch_headings(text: str, entries: list[dict], stats: dict, respace: bool) -> str:
+    """정제 뒤 한 번 더 — 줄 잇기 전 원문에서 못 찾은 차례 제목이 정제본에 따로 선 줄로 남아 있으면 제목으로
+    (DrivingSalesmanPowerSkill '03 이제 세일즈를 해 볼까' 등 19곳, 2026-10-24 실측).
+    무손실: 한 줄만, 앞뒤로 찾은 차례 제목 줄 사이에서만 찾고, 그 줄 글자 그대로 '#' 만 붙인다 — 차례 목록 제목을
+    그 줄 글자로 맞춘다. mark_headings 를 다시 쓰면 여러 줄 잇기가 옆 본문 줄('피터 드러커')을 지우고 이미 넣은
+    장 제목을 또 넣었다(NextSociety). 본문 문장 속 같은 말은 줄이 길어 걸리지 않는다.
+    stats(found·inferred·missing)를 최종 결과로 고친다. respace: 제목도 본문과 같은 띄어쓰기(R-17) —
+    차례 목록(entries)과 본문 제목 줄을 함께 바꿔 같은 글자로 둔다."""
+    lines = text.split("\n")
+    at: list[int | None] = []          # 차례 항목마다 본문 제목 줄 번호(없으면 None) — 차례 순서대로
+    pos = 0
+    for e in entries:
+        h = toc_headings._heading(e)
+        k = next((i for i in range(pos, len(lines)) if lines[i] == h), None)
+        at.append(k)
+        if k is not None:
+            pos = k + 1
+    for ei, e in enumerate(entries):
+        if at[ei] is not None:
+            continue
+        lo = max((k for k in at[:ei] if k is not None), default=-1) + 1
+        hi = min((k for k in at[ei + 1:] if k is not None), default=len(lines))
+        k = _title_line(lines, lo, hi, e["title"])
+        if k is not None:
+            e["title"] = lines[k].strip()
+            lines[k] = toc_headings._heading(e)
+            at[ei] = k
+    text = "\n".join(lines)
+    heads = {l for l in lines if _MD_HEADING_RE.match(l)}
+    missing = [e["title"] for e in entries if toc_headings._heading(e) not in heads]
+    inferred = stats.get("inferred", 0)
+    stats.update(found=len(entries) - len(missing) - inferred, inferred=inferred, missing=missing)
+    if respace:
+        renamed = {}
+        for e in entries:
+            old = toc_headings._heading(e)
+            e["title"] = spacing.fix_spacing(e["title"])[0]
+            renamed[old] = toc_headings._heading(e)
+        text = "\n".join(renamed.get(l, l) for l in text.split("\n"))
+    return text
+
+
+def _title_line(lines: list[str], lo: int, hi: int, title: str) -> int | None:
+    """lines[lo:hi] 에서 차례 제목과 같은 따로 선 짧은 줄(제목 줄·표 줄 제외). 번호표를 뗀 제목으로도 본다.
+    차례 OCR 이 두 항목·저자를 한 줄로 붙여 읽은 항목('다이렉트경영 마이클델', CEO의책꽃이 실측)은 그 앞부분과
+    같은 줄도 — 6자 이상·항목의 40% 이상일 때만."""
+    han = bool(re.search(r'[가-힣]', title))
+    norm = toc_headings._norm_hangul if han else toc_headings._norm
+    targets = [t for t in dict.fromkeys([norm(title), norm(toc_headings._LABEL_RE.sub("", title))]) if len(t) >= 4]
+    for i in range(lo, hi):
+        l = lines[i].strip()
+        if not l or _MD_HEADING_RE.match(l) or l.startswith("|") or len(l) > len(title) * 1.4 + 5:
+            continue
+        if _FIGURE_CAPTION_RE.match(l):     # 그림 설명('그림6.37 영향력-불확실성 매트릭스', 2x2Matrix)은 제목 아님
+            continue
+        n = norm(l)
+        if any(SequenceMatcher(None, n, t).ratio() >= toc_headings._MATCH_MIN
+               or (len(n) >= _FRONT_MIN and len(n) >= len(t) * _FRONT_RATIO
+                   and SequenceMatcher(None, n, t[:len(n)]).ratio() >= toc_headings._MATCH_MIN) for t in targets):
+            return i
+    return None
+
+
+_FRONT_MIN = 6
+_FRONT_RATIO = 0.4
 
 
 def keep_headings(fn, text: str) -> str:
