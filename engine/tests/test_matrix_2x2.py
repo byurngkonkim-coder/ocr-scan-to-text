@@ -38,6 +38,12 @@ TRUTH = {
           ["고객경쟁사", "혁신대인관계문제", "팀워크물류리더십", "가족"]),
     287: ("규율의문화\\기업가윤리", ["낮다", "높다"], ["높다", "낮다"],
           ["계층조직", "위대한조직크로커", "A&P관료조직", "창업조직"]),
+    # 전체 재처리에서 찾은 회귀(2026-10-21): 긴 세로축 이름의 양 끝 낱말이 끝 값이 됨(4.1),
+    # 넓은 가로축 이름이 양 끝 값을 삼킴(6.6)
+    106: ("가치제안에서의중요성\\개발의난이도", ["낮다", "높다"], ["크다", "작다"],
+          ["자체개발", "인수", "계약", "전략적파트너십"]),
+    171: ("가치요소에대한영향력\\공급사슬에대한고객접근성", ["간접적", "직접적"], ["높다", "낮다"],
+          ["조언받는전문가", "프로슈머", "일반소비자", "효율성추구자"]),
 }
 
 
@@ -65,7 +71,7 @@ def test_axis_labels_in_header(grids):
           if grids[p] and _nospace(grids[p][0][0]) == corner
           and [_nospace(c) for c in grids[p][0][1:]] == cols
           and [_nospace(grids[p][1][0]), _nospace(grids[p][2][0])] == rows]
-    assert len(ok) >= 8, ok
+    assert len(ok) >= len(TRUTH) - 2, ok   # 정답 10장 기준 8장 이상(흐린 6.30 은 엔진 판독 한계)
 
 
 def test_cell_text_f1(grids):
@@ -100,6 +106,13 @@ def test_figure_caption_not_joined_to_paragraph(caption):
     body = "그러나 두려움, 욕심 이런 것들이 판단을 흐리게 만들어 결국 사업을 위태롭게 하는 경우가 많고 많다"
     out = postprocessor.join_broken_lines(f"{body}\n{body}\n{caption}").splitlines()
     assert out[-1] == caption
+
+
+def test_figure_caption_at_page_start_not_joined():
+    """쪽 첫 줄 그림 제목이 앞 쪽 끝 문장에 붙었다('…커다 그림 3.8 컨텐트와 프로세스 매트릭스')."""
+    from core.text_cleaner import PAGEBREAK, post_process_pagebreaks
+    out = post_process_pagebreaks(f"달콤한 말에도 불구하고 커다\n{PAGEBREAK}\n그림 3.8 컨텐트와 프로세스 매트릭스")
+    assert out.splitlines()[-1] == "그림 3.8 컨텐트와 프로세스 매트릭스"
 
 
 def test_figure_reference_line_still_joined():

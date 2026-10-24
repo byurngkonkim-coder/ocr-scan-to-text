@@ -81,8 +81,9 @@ def detect(image: Image.Image, lang: str = "kor+eng") -> DetectionResult:
     # ── 1. 표 감지 ──────────────────────────────────────────────────────────────
     found = _detect_tables(img_cv)
     table_boxes = [_expand_to_border(img_cv, b, [o for o in found if o != b]) for b in found]
-    for (x, y, bw, bh) in table_boxes:
-        matrix = _matrix_markdown(image, img_cv, (x, y, bw, bh), lang)
+    for raw, (x, y, bw, bh) in zip(found, table_boxes):
+        # 매트릭스 테두리는 굵어 넓힐 필요가 없다 — 넓히면 바깥 화살표 선을 테두리로 잡았다(그림6.16)
+        matrix = _matrix_markdown(image, img_cv, raw, lang)
         if matrix:
             md, (x, y, bw, bh) = matrix
             regions.append(Region(kind="table", index=tab_idx, x=x, y=y, w=bw, h=bh,
@@ -311,7 +312,11 @@ _MATRIX_EDGE = 0.06        # 상자 변에서 이만큼 안쪽 선은 바깥 테
 # 축 띠 글자 신뢰도 — 일반 표 옆 본문을 돌려 읽은 잡음은 낮다. 세로쓰기 끝 값은 0.69(그림1.5 「놀다」)까지 나왔다
 _AXIS_MIN_SCORE = 0.5
 _AXIS_WORD_RE = re.compile(r"[가-힣]{2,}")   # 띠마다 이런 낱말이 하나는 있어야 매트릭스 축으로 본다
-_AXIS_END = 0.3            # 띠 길이의 양 끝 30% 안 글자는 끝 값(낮다·높다), 가운데는 축 이름
+# 축 끝 값(낮다·높다)은 축 이름보다 글자가 작고 상자 양 끝에 붙어 있다. 위치만으로 가르면 긴 축 이름
+# (「가치 제안에서의 중요성」, 그림4.1)의 양 끝 낱말이 끝 값이 됐다 → 글자 높이가 가장 큰 덩어리의 80% 미만이거나
+# 상자 양 끝 15% 안이면 끝 값, 나머지는 이름. 10장 실측: 끝 값 높이는 이름의 0.5~0.89배
+_AXIS_END_HEIGHT = 0.8
+_AXIS_END_EDGE = 0.15
 _ROMAN_RE = re.compile(r"^[IVXlT1|Ⅰ-Ⅻ\s]{1,6}$")   # 4분면 번호(그림1.5 가운데 I II III IV)
 # 한글 없이 3자 이하이면서 낱말에 안 쓰는 기호가 섞인 조각 — 선·번호를 읽은 잡음(그림1.5 「Lπ」·「d:V」).
 # 「GM」·「A&P」·「IBM」 같은 짧은 이름은 남는다
@@ -346,24 +351,41 @@ def _inner_splits(gray: np.ndarray) -> tuple[int, int] | None:
     vs, hs = runs(v.sum(0) / 255, h, w), runs(hz.sum(1) / 255, w, h)
     if len(vs) > 1 or len(hs) > 1:
         return None
-    return (vs[0] if vs else w // 2), (hs[0] if hs else h // 2)
+    # 상자가 바깥 화살표 선까지 넓게 잡히면(그림6.16 왼쪽 세로 화살표) 그 선이 안쪽 선으로 보인다 —
+    # 십자선은 가운데 근처(20~80%)에 있다. 벗어나면 가운데로 본다
+    mid = lambda ps, size: ps[0] if ps and 0.2 * size < ps[0] < 0.8 * size else size // 2
+    return mid(vs, w), mid(hs, h)
 
 
-def _axis_labels(boxes, length: int) -> tuple[str, str, str]:
-    """축 띠 글자 → (낮은 쪽 끝 값, 축 이름, 높은 쪽 끝 값). 띠 방향 좌표(x)가 겹치는 상자는 한 덩어리
-    (두 줄 끝 값 「소매상에 / 잘 알려짐」), 덩어리 가운데가 띠 양 끝 30% 안이면 끝 값."""
+def _axis_labels(boxes, start: float, length: int, split: float) -> tuple[str, str, str]:
+    """축 띠 글자 → (낮은 쪽 끝 값, 축 이름, 높은 쪽 끝 값). 위아래로 쌓인 같은 크기 글자 줄은 한 덩어리
+    (두 줄 끝 값 「소매상에 / 잘 알려짐」). 상자는 띠 좌표 start 에서 length 만큼, 끝 값은 십자선 split 의
+    어느 쪽인지로 낮은·높은 쪽을 정한다.
+    x 범위가 겹친다는 것만으로 묶으면 넓은 축 이름(「——— 비전의 완성도 ———」)이 양 끝 값을 다 삼켰다(그림6.6·6.15)."""
+    def stacked(a, b) -> bool:
+        overlap = min(a[0] + a[2], b[0] + b[2]) - max(a[0], b[0])
+        centered = abs((a[0] + a[2] / 2) - (b[0] + b[2] / 2)) <= 0.3 * max(a[2], b[2])   # 두 줄 끝 값은 가운데 맞춤
+        return (overlap >= 0.5 * min(a[2], b[2]) and centered and min(a[3], b[3]) >= 0.7 * max(a[3], b[3])
+                and abs(a[1] - b[1]) <= 1.6 * max(a[3], b[3]))
+
     groups: list[list] = []
-    for t, b in sorted(boxes, key=lambda tb: tb[1][0]):
-        if groups and b[0] < groups[-1][0]:
-            groups[-1][0] = max(groups[-1][0], b[0] + b[2])
-            groups[-1][1].append((t, b))
+    for t, b in sorted(boxes, key=lambda tb: (tb[1][1], tb[1][0])):
+        g = next((g for g in groups if any(stacked(b, gb) for _t, gb in g)), None)
+        if g is None:
+            groups.append([(t, b)])
         else:
-            groups.append([b[0] + b[2], [(t, b)]])
+            g.append((t, b))
     low, name, high = [], [], []
-    for _end, items in groups:
+    top = max(boxes, key=lambda tb: tb[1][3])[1]    # 가장 큰 글자 = 축 이름의 한 낱말
+    for items in sorted(groups, key=lambda g: min(b[0] for _t, b in g)):
         text = " ".join(t for t, _b in sorted(items, key=lambda tb: (tb[1][1], tb[1][0])))
         cx = sum(b[0] + b[2] / 2 for _t, b in items) / len(items)
-        (low if cx < length * _AXIS_END else high if cx > length * (1 - _AXIS_END) else name).append(text)
+        pos = (cx - start) / length
+        # 이름과 다른 줄(그림6.16: 끝 값 줄 아래에 이름 줄)도 끝 값 — 글자 높이 차가 0.78~0.85 로 애매했다
+        other_row = all(abs((b[1] + b[3] / 2) - (top[1] + top[3] / 2)) > top[3] * 0.5 for _t, b in items)
+        end = (max(b[3] for _t, b in items) < top[3] * _AXIS_END_HEIGHT or other_row
+               or pos < _AXIS_END_EDGE or pos > 1 - _AXIS_END_EDGE)
+        (name if not end else low if cx < split else high).append(text)
     return " ".join(low), " ".join(name), " ".join(high)
 
 
@@ -397,8 +419,10 @@ def _matrix_markdown(image: Image.Image, gray: np.ndarray, box: tuple[int, int, 
     bottom = _read_table_boxes(image.crop((bx0, y + h, bx1, by1)), lang, _AXIS_MIN_SCORE, _MATRIX_OCR_SCALE)
     if not any(_AXIS_WORD_RE.search(t) for t, _b in left) or not any(_AXIS_WORD_RE.search(t) for t, _b in bottom):
         return None
-    v_low, v_name, v_high = _axis_labels(left, ly1 - ly0)
-    h_low, h_name, h_high = _axis_labels([(t, (bx - (x - bx0), by, bw, bh)) for t, (bx, by, bw, bh) in bottom], w)
+    # 돌린 왼쪽 띠의 x = ly1 - (원래 y) — 상자 아래 끝·가로선 위치도 같은 좌표로
+    v_low, v_name, v_high = _axis_labels(left, ly1 - (y + h), h, ly1 - (y + hy))
+    h_low, h_name, h_high = _axis_labels([(t, (bx - (x - bx0), by, bw, bh)) for t, (bx, by, bw, bh) in bottom],
+                                         0, w, vx)
 
     v_low, v_high = _pair_fix(v_low, v_high), _pair_fix(v_high, v_low)
     h_low, h_high = _pair_fix(h_low, h_high), _pair_fix(h_high, h_low)
@@ -429,8 +453,8 @@ def _matrix_markdown(image: Image.Image, gray: np.ndarray, box: tuple[int, int, 
     left_x = lx0 + min(b[1] for _t, b in left) - _TEXT_BOX_PAD
     bottom_y = y + h + max(b[1] + b[3] for _t, b in bottom) + _TEXT_BOX_PAD
     right_x = max(x + w, bx0 + max(b[0] + b[2] for _t, b in bottom) + _TEXT_BOX_PAD)
-    nx0 = max(0, min(x, left_x))
-    return md, (nx0, y, min(W, right_x) - nx0, min(H, bottom_y) - y)
+    nx0 = int(max(0, min(x, left_x)))
+    return md, (nx0, y, int(min(W, right_x)) - nx0, int(min(H, bottom_y)) - y)
 
 
 def _correct_cell(text: str) -> str:

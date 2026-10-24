@@ -779,7 +779,7 @@ def post_process_pagebreaks(text: str) -> str:
     if not text:
         return ""
 
-    from core.postprocessor import is_item_start, item_letters
+    from core.postprocessor import is_item_start, item_letters, _FIGURE_CAPTION_RE
     letters = item_letters(text.replace(PAGEBREAK, "\n").splitlines())
 
     def _repl(match):
@@ -791,6 +791,9 @@ def post_process_pagebreaks(text: str) -> str:
         # 다음 쪽이 항목(2. ② 나. 제2조 …)으로 시작하면 앞 쪽 끝에 붙이지 않는다
         if "\n" in ws_before + ws_after and is_item_start(match.string[match.start(4):], letters):
             return before + "\n" + after
+        # 다음 쪽이 그림 제목으로 시작하면 문단 경계('…커다 그림 3.8 컨텐트와 프로세스 매트릭스', 2x2Matrix)
+        if _FIGURE_CAPTION_RE.match(match.string[match.start(4):]):
+            return before + "\n\n" + after
         # 다음 쪽이 제목('4 / 지난 일은 지나가게 두라')이나 들여 쓴 문단으로 시작하면 문단 경계다.
         # 장 끝 요약 문구는 마침표 없이 끝나('…터득하는 것이다') 아래 규칙만으로는 제목을 앞 문단에 붙였다
         # (인생잠언 21쪽 등, 2026-10-19)
