@@ -607,8 +607,9 @@ def infer_chapters(text: str) -> tuple[str, list[dict]]:
             continue
         no = int(m.group())
         # 건너뛰기는 첫 장을 찾은 뒤에만 — 부 뒤 주석 구간의 '2장 …' 소제목이 첫 장으로 잡혔다(Alignment)
+        # 장 번호가 1로 돌아오면 — 부 뒤, 또는 장을 3개 넘게 찾은 뒤(권 표시 줄 없이 권마다 1장부터: 성경)
         if (no == expect[kind] or (expect[kind] > 1 and no == expect[kind] + 1)
-                or (kind == 1 and no == 1 and picks and picks[-1][1] == 0)):
+                or (kind == 1 and no == 1 and picks and (picks[-1][1] == 0 or expect[1] > _CHAPTER_MIN + 1))):
             picks.append((i, kind))
             expect[kind] = no + 1
     if sum(k == 1 for _, k in picks) < _CHAPTER_MIN and sum(k == 0 for _, k in picks) < _CHAPTER_MIN:

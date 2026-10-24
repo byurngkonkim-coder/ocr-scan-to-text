@@ -248,6 +248,9 @@ def test_infer_chapters_book_parts_gap_and_parts_only():
     assert [(e["level"], e["title"]) for e in entries] == \
         [(1, "BOOK 1 APRIL-JUNE"), (2, "1장_정보Hack"), (2, "3장_정리 Hack"), (2, "4장_오감Hack"),
          (1, "BOOK 2 JULY"), (2, "CHAPTER 1")]
+    # 권 표시 없이 권마다 1장부터(성경) — 장을 3개 넘게 찾은 뒤 1장이면 다시 센다
+    bible = "\n\n".join([f"제 {n} 장\n\n{_P}" for n in (1, 2, 3, 4, 1, 2, 3)])
+    assert len(text_cleaner.infer_chapters(bible)[1]) == 7
     parts = "\n\n".join(["1부", _P, "2부", _P, "CHAPTER9", _P, "3부", _P, "4부", _P, "2장 주석의 소제목", _P])
     assert [e["title"] for e in text_cleaner.infer_chapters(parts)[1]] == ["1부", "2부", "3부", "4부"]
 

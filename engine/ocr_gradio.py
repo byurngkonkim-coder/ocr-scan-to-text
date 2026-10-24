@@ -25,6 +25,7 @@ from core import rapidocr_engine, char_normalizer, postprocessor, writer
 # 기존 호출부 호환을 위해 claude_vision 이름으로 import 한다.
 from core import vision as claude_vision
 from core import spellcheck, figure_detector, llm_corrector, user_typos, reclean, typo_suspects, review_log
+from core import remake_md
 from core import config, usage_tracker, blank_detector, storage_manager
 from core import text_cleaner
 from core import pdf_text_layer
@@ -548,6 +549,33 @@ def _reclean_run(names):
     last = next((r["path"].stem for r in reversed(done) if r["suspects"]), None)
     yield (f"<div class='note ok'>다시 교정 완료 {len(done)}개<ul>{''.join(lines)}</ul>{tail}</div>",
            gr.update(choices=books, value=last or (books[0] if books else None)))
+
+
+def _remake_choices() -> list[tuple[str, str]]:
+    """NotebookLM용 다시 만들기 목록 — (화면 표시, 파일 이름). 정제 안 한 쪽 단위 결과는 뺀다."""
+    return [(r["path"].name + ("" if r["raw"] else " — 쪽 표지 없음(원문 사본 없음)"), r["path"].name)
+            for r in remake_md.list_targets(RESULTS_DIR) if not r["skip"]]
+
+
+def _remake_run(names):
+    if not names:
+        yield "<div class='note info'>다시 만들 결과를 먼저 고르세요.</div>"
+        return
+    backup = remake_md.BACKUP_ROOT / f"재변환_{time.strftime('%Y%m%d_%H%M%S')}"
+    lines = []
+    for i, name in enumerate(names, 1):
+        yield f"<div class='note info'>다시 만드는 중 {i}/{len(names)} — {html.escape(name)}</div>"
+        try:
+            r = remake_md.remake(RESULTS_DIR / name, backup)
+        except Exception as e:   # 한 권 실패로 나머지를 멈추지 않는다 — 원본은 바꾸기 전에 _백업 에 있다
+            lines.append(f"<li>{html.escape(name)} — ⚠ 실패: {html.escape(f'{type(e).__name__}: {e}')}</li>")
+            continue
+        what = f"쪽 표지 {r['marks']}개" if r["raw"] else "쪽 표지 없음(원문 사본 없음)"
+        extra = "".join(f" · {html.escape(l.strip())}" for l in r["logs"] if "나눔" in l)
+        lines.append(f"<li>{html.escape(name)} — {html.escape(r['status'])} · {what} · "
+                     f"{html.escape(r['toc'])}{extra}</li>")
+    yield (f"<div class='note ok'>다시 만들기 {len(names)}개<ul>{''.join(lines)}</ul>"
+           f"<div>원본 보관: {html.escape(str(backup))}</div></div>")
 
 
 def _suspect_rows(book):
@@ -2203,6 +2231,17 @@ def build_ui() -> gr.Blocks:
                                 reclean_note = gr.HTML("")
                                 reclean_list = gr.CheckboxGroup(show_label=False, choices=[], value=[],
                                                                 elem_classes="batch-list")
+                                gr.HTML(_step_head(3, "NotebookLM용 MD 다시 만들기",
+                                        "예전에 처리한 결과에 새 구조(장·절 제목·쪽 표지 [p.N]·문서 정보·큰 책 나누기)를 입힙니다. "
+                                        "본문 글자는 그대로이고 OCR·API 를 다시 쓰지 않습니다. 원본은 _백업 폴더에 보관합니다. "
+                                        "'쪽 표지 없음'은 정제 전 원문 사본이 없어 쪽번호만 못 넣는 결과입니다."))
+                                with gr.Row():
+                                    remake_run_btn = gr.Button("선택 결과 다시 만들기 ▶", variant="primary", scale=2)
+                                    remake_all_btn = gr.Button("전체 선택", size="sm")
+                                    remake_refresh_btn = gr.Button("새로고침", size="sm")
+                                remake_note = gr.HTML("")
+                                remake_list = gr.CheckboxGroup(show_label=False, choices=[], value=[],
+                                                               elem_classes="batch-list")
                 batch_timer = gr.Timer(3)
 
             # ══════════════════════════════════════════════════════════════════
@@ -2564,6 +2603,11 @@ def build_ui() -> gr.Blocks:
                               outputs=[reclean_list])
         reclean_run_btn.click(fn=_reclean_run, inputs=[reclean_list],
                               outputs=[reclean_note, suspect_book])
+        _remake_view = lambda: gr.update(choices=_remake_choices(), value=[])     # noqa: E731
+        batch_tab.select(fn=_remake_view, outputs=[remake_list])
+        remake_refresh_btn.click(fn=_remake_view, outputs=[remake_list])
+        remake_all_btn.click(fn=lambda: gr.update(value=[v for _, v in _remake_choices()]), outputs=[remake_list])
+        remake_run_btn.click(fn=_remake_run, inputs=[remake_list], outputs=[remake_note])
         suspect_book.change(fn=_suspect_rows, inputs=[suspect_book], outputs=[suspect_table, suspect_note])
         suspect_add_btn.click(fn=_suspect_register, inputs=[suspect_book, suspect_table],
                               outputs=[suspect_table, suspect_note])
