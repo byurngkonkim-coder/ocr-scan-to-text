@@ -1,0 +1,82 @@
+"""쪽 경계 표지 [p.N] — 정제본을 쪽별 원문과 대조해 원본 PDF 쪽을 되살린다
+(intent docs/intents/2026-10-24-NotebookLM용-MD-구조개선.md, 작업 1)."""
+import re
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from core import page_marks
+from core.types import OutputFormat
+
+_P1 = "경영자는 조직의 성과를 책임지는 사람이다. 그 성과는 조직 바깥에서 고객이 판정한다."
+_P2 = "그러므로 내부의 노력만으로는 충분하다고 말할 수 없다. 시장이 마지막 심판이기 때문이다."
+_P3 = "지식 근로자는 생산 수단을 머릿속에 지니고 다닌다. 이것이 새로운 사회의 바탕이다."
+
+
+def _strip(text: str) -> str:
+    """표지 줄을 뺀 글 — 무손실 확인용(문장 뒤에 넣은 표지는 그 자리 띄어쓰기가 줄바꿈으로 남는다)."""
+    return re.sub(r'\[p\.\d+\]\n', '', text)
+
+
+def test_marks_each_page_in_order_without_losing_text():
+    clean = f"{_P1}\n\n{_P2}\n\n{_P3}"
+    out, st = page_marks.mark_pages(clean, [(5, _P1), (6, _P2), (7, _P3)])
+    assert re.findall(r'^\[p\.(\d+)\]$', out, re.M) == ["5", "6", "7"]
+    assert out.startswith("[p.5]\n" + _P1)
+    assert _strip(out) == clean
+    assert st == {"found": 3, "missing": []}
+
+
+def test_page_turning_mid_sentence_puts_mark_after_sentence_end():
+    """쪽이 문장 중간에서 바뀌면 그 문장이 끝난 뒤 줄에 — 문장을 끊지 않는다."""
+    a = "경영자는 조직의 성과를 책임지는 사람이다. 그 성과는 조직 바깥에서"
+    b = "고객이 판정한다. 그러므로 내부의 노력만으로는 충분하다고 말할 수 없다."
+    clean = "경영자는 조직의 성과를 책임지는 사람이다. 그 성과는 조직 바깥에서 고객이 판정한다. " \
+            "그러므로 내부의 노력만으로는 충분하다고 말할 수 없다."
+    out, _ = page_marks.mark_pages(clean, [(1, a), (2, b)])
+    assert "바깥에서 고객이 판정한다.\n[p.2]\n그러므로" in out
+    assert _strip(out).replace("\n", " ") == clean
+
+
+def test_removed_page_is_skipped():
+    """정제가 지운 쪽(표지·광고)은 표지를 넣지 않고 못 찾은 쪽으로 보고한다."""
+    ad = "이 출판사의 다른 책들을 만나 보세요 경영 시리즈 전 열두 권 절찬 판매 중입니다"
+    clean = f"{_P1}\n\n{_P3}"
+    out, st = page_marks.mark_pages(clean, [(1, _P1), (2, ad), (3, _P3)])
+    assert re.findall(r'\[p\.(\d+)\]', out) == ["1", "3"]
+    assert st["missing"] == [2]
+
+
+def test_spacing_and_typo_fixes_still_match():
+    """정제가 띄어쓰기를 넣고 글자 한두 개를 고쳐도 같은 쪽으로 찾는다."""
+    raw2 = "그러므로내부의노력만으로는충분하다고말할수없다.시장이마지막심판이기때문이다."
+    clean = f"{_P1}\n\n{_P2}"
+    out, st = page_marks.mark_pages(clean, [(1, _P1), (2, raw2)])
+    assert st["found"] == 2 and "\n[p.2]\n" + _P2 in out
+
+
+def test_mark_goes_after_heading_line():
+    """쪽이 장 제목으로 시작하면 표지는 제목 다음 줄 — 그 장 본문의 쪽이 된다."""
+    clean = f"{_P1}\n\n# 제2장 지식 사회\n\n{_P3}"
+    out, _ = page_marks.mark_pages(clean, [(1, _P1), (2, "제2장 지식 사회\n" + _P3)])
+    assert "# 제2장 지식 사회\n\n[p.2]\n" + _P3 in out
+
+
+def test_mark_not_inside_markdown_table():
+    """쪽 시작이 표 안이면 표가 끝난 뒤에 — 표를 깨지 않는다."""
+    table = "| 구분 | 낮음 | 높음 |\n| --- | --- | --- |\n| 가치 | 시장점유율이 낮은 사업부 | 성장률이 높은 사업부 |"
+    clean = f"{_P1}\n\n{table}\n\n{_P3}"
+    out, _ = page_marks.mark_pages(clean, [(1, _P1), (2, "시장점유율이 낮은 사업부 성장률이 높은 사업부\n" + _P3)])
+    assert table in out and "\n[p.2]\n" in out.split(table)[1]
+
+
+def test_structured_texts_adds_marks_to_md_and_txt():
+    """txt+md 짝 — 두 파일 모두 같은 쪽 표지(사용자 결정 2026-10-24)."""
+    import ocr_gradio
+    clean = f"{_P1}\n\n{_P2}\n"
+    pages = [(3, _P1), (4, _P2)]
+    txt, md = ocr_gradio._structured_texts(clean, {"toc_entries": []}, OutputFormat.TXT, [], pages)
+    assert "[p.3]" in txt and "[p.4]" in txt and txt == md
+    # 쪽 정보가 없으면(txt 입력) 지금처럼 그대로
+    assert ocr_gradio._structured_texts(clean, {"toc_entries": []}, OutputFormat.TXT, []) == (clean, clean)

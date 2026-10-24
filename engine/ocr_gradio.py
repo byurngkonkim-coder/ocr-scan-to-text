@@ -29,7 +29,7 @@ from core import config, usage_tracker, blank_detector, storage_manager
 from core import text_cleaner
 from core import pdf_text_layer
 from core import margin_detector
-from core import noise_rules, toc_headings
+from core import noise_rules, toc_headings, page_marks
 import batch_runner
 from core.types import FileResult, OutputFormat, PageResult, OCREngine
 
@@ -397,11 +397,16 @@ def _recorrect(text: str, page: PageResult) -> str:
 
 
 def _structured_texts(text: str | None, crep: dict | None, out_fmt: OutputFormat,
-                      logs: list[str]) -> tuple[str | None, str | None]:
+                      logs: list[str], pages: list[tuple[int, str]] | None = None) -> tuple[str | None, str | None]:
     """정제본 → (주 결과 글, .md 짝 글). 정제가 차례를 찾았으면(toc_headings) MD 는 맨 앞 차례 목록 + '#' 장·절
-    제목, TXT 는 같은 글에서 '#'·목록 기호만 뺀다. 차례가 없으면 둘 다 정제본 그대로(예전과 같다)."""
+    제목, TXT 는 같은 글에서 '#'·목록 기호만 뺀다. 차례가 없으면 둘 다 정제본 그대로(예전과 같다).
+    pages(PDF 쪽번호, 쪽 원문)가 있으면 쪽이 바뀌는 자리마다 [p.N] 표지 — MD·TXT 같게(page_marks)."""
     if not text:
         return text, text
+    if pages:
+        text, st = page_marks.mark_pages(text, pages)
+        logs.append(f"  📄 쪽 표지 {st['found']}개"
+                    + (f" · 못 찾은 쪽 {len(st['missing'])}개(정제에서 지운 표지·광고 쪽 등)" if st["missing"] else ""))
     note = (crep or {}).get("toc_note")
     if note:
         logs.append(f"  📑 {note}")
@@ -1047,7 +1052,10 @@ def _run_digital_pdf(file_path: Path, pages_text: list[str], out_fmt: OutputForm
             step_logs.append(f"  ⚠️ {clean_note}")
         if _crep:   # 부속물 제거·지어낸 문장 등 확인할 경고 — 강등 건은 위 개수 줄로 대신한다
             step_logs.extend(f"  ⚠ {w}" for w in _crep["warnings"] if "강등" not in w)
-        cleaned_text, cleaned_md = _structured_texts(cleaned_text, _crep, out_fmt, step_logs)
+        cleaned_text, cleaned_md = _structured_texts(
+            cleaned_text, _crep, out_fmt, step_logs,
+            # txt 입력의 '쪽'은 문단 묶음일 뿐이라 쪽 표지를 넣지 않는다
+            None if page_fn is _finalize_text else [(p.page_num, p.corrected_text) for p in content_pages])
 
     # ── 저장 ───────────────────────────────────────────────────────────────────
     yield (
@@ -1676,7 +1684,8 @@ def _run_ocr(
             step_logs.append(f"  ⚠️ {clean_note}")
         if _crep:   # 부속물 제거·지어낸 문장 등 확인할 경고 — 강등 건은 위 개수 줄로 대신한다
             step_logs.extend(f"  ⚠ {w}" for w in _crep["warnings"] if "강등" not in w)
-        cleaned_text, cleaned_md = _structured_texts(cleaned_text, _crep, out_fmt, step_logs)
+        cleaned_text, cleaned_md = _structured_texts(cleaned_text, _crep, out_fmt, step_logs,
+                                                     [(p.page_num, p.corrected_text) for p in content_pages])
     elif cleanup:
         step_logs.append("  ⚠ 정제 건너뜀 — Ollama 텍스트 모델(exaone3.5) 응답 없음 — Ollama 실행 확인")
 
