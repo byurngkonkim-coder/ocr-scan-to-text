@@ -1,5 +1,6 @@
 """② 일괄 처리 대기열 — 차례 처리·중단·① 탭 처리와 겹치지 않기·01_입력 목록."""
 import time
+from pathlib import Path
 
 import pytest
 
@@ -334,6 +335,62 @@ def test_stop_then_immediate_resubmit_still_stops_running_job(monkeypatch, tmp_p
     assert br.submit([a], ("kor+eng",), {}) == 1          # 다시 넣은 것은 대기열에 들어간다
     _wait_idle(10)
     assert br._jobs[0].state == "중단"
+
+
+def _held_queue(monkeypatch, tmp_path, names, order):
+    # ① 탭 처리 중 표시로 작업자를 붙잡아 두고 대기 항목만 만든다
+    monkeypatch.setattr(ocr_gradio, "process_full", _fake_process(order))
+    br.direct_running.set()
+    br.submit([tmp_path / n for n in names], (), {})
+    return {j.path.name: j.id for j in br._jobs}
+
+
+def _waiting_names():
+    return [j.path.name for j in br._jobs if j.state == "대기"]
+
+
+def test_to_front_runs_picked_jobs_next(monkeypatch, tmp_path):
+    order = []
+    ids = _held_queue(monkeypatch, tmp_path, ["a.pdf", "b.pdf", "c.pdf", "d.pdf"], order)
+    assert br.to_front([ids["d.pdf"], ids["c.pdf"]]) == 2
+    assert _waiting_names() == ["c.pdf", "d.pdf", "a.pdf", "b.pdf"]   # 고른 것끼리는 원래 순서
+    br.direct_running.clear()
+    _wait_idle()
+    assert [Path(p).name for p in order] ==["c.pdf", "d.pdf", "a.pdf", "b.pdf"]
+
+
+def test_move_up_and_down_among_waiting(monkeypatch, tmp_path):
+    ids = _held_queue(monkeypatch, tmp_path, ["a.pdf", "b.pdf", "c.pdf"], [])
+    br.move([ids["c.pdf"]], -1)
+    assert _waiting_names() == ["a.pdf", "c.pdf", "b.pdf"]
+    br.move([ids["a.pdf"], ids["c.pdf"]], +1)
+    assert _waiting_names() == ["b.pdf", "a.pdf", "c.pdf"]
+    assert br.move([ids["b.pdf"]], -1) == 0                          # 이미 맨 위
+
+
+def test_cancel_only_picked(monkeypatch, tmp_path):
+    ids = _held_queue(monkeypatch, tmp_path, ["a.pdf", "b.pdf", "c.pdf"], [])
+    assert br.cancel([ids["b.pdf"]]) == 1
+    assert [j.state for j in br._jobs] == ["대기", "취소", "대기"]
+
+
+def test_retry_requeues_failed_at_end(monkeypatch, tmp_path):
+    order = []
+    ids = _held_queue(monkeypatch, tmp_path, ["a.pdf", "b.pdf"], order)
+    br.cancel([ids["a.pdf"]])
+    assert br.retry([ids["b.pdf"]]) == 0                             # 대기 중인 것은 다시 시도 대상 아님
+    assert br.retry([ids["a.pdf"]]) == 1
+    assert [(j.path.name, j.state) for j in br._jobs] == [("b.pdf", "대기"), ("a.pdf", "대기")]
+    br.direct_running.clear()
+    _wait_idle()
+    assert [j.state for j in br._jobs] == ["완료", "완료"]
+
+
+def test_queue_choices_number_waiting(monkeypatch, tmp_path):
+    ids = _held_queue(monkeypatch, tmp_path, ["a.pdf", "b.pdf"], [])
+    br.cancel([ids["a.pdf"]])
+    labels = [lab for lab, _ in br.queue_choices()]
+    assert labels == ["– 취소 · a.pdf", "· 대기 1번째 · b.pdf"]
 
 
 def test_submit_while_last_worker_is_exiting_does_not_stall(monkeypatch, tmp_path):

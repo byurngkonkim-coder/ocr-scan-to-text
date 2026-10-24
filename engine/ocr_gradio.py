@@ -149,6 +149,10 @@ button.label-wrap span { font-weight:500; }
         background:var(--ocr-field); color:var(--ocr-ink); border:1px solid var(--ocr-line-strong); }
 .note.info { background:var(--ocr-accent-soft); color:var(--ocr-accent); border-color:transparent; }
 .batch-list .wrap { flex-direction:column; align-items:stretch; }   /* ② 탭 파일 목록: 한 줄에 하나 */
+/* ② 탭 목록: 페이지 대신 목록 상자 안에서만 스크롤 — 버튼은 목록 위에 있어 내려가지 않아도 된다 */
+.batch-list .wrap:not(.default) { max-height:max(220px, calc(100vh - 680px)); overflow-y:auto; flex-wrap:nowrap; }
+.queue-list .wrap:not(.default) { max-height:max(160px, calc(50vh - 240px)); }
+.queue-status { max-height:max(140px, calc(50vh - 280px)); overflow-y:auto; }
 .record-pick .wrap:not(.default) { max-height:360px; overflow-y:auto; flex-wrap:nowrap; }   /* ④ 기록 삭제 목록: 길면 스크롤 */
 .note.ok   { background:var(--ocr-ok-bg);   color:var(--ocr-ok);   border-color:transparent; }
 .note.warn { background:var(--ocr-warn-bg); color:var(--ocr-warn); border-color:transparent; }
@@ -430,6 +434,32 @@ def _save_review(results_path: Path | None, content_pages: list, cleaned_text: s
     except Exception as e:
         return f"   ⚠ 검수기록을 남기지 못했습니다: {type(e).__name__}: {e}"
     return f"   🧾 검수기록: {path.parent.name}/{path.name}"
+
+
+# ── ② 일괄 처리 파일 고르기 · 대기열 ─────────────────────────────────────────
+
+def _batch_visible(rows, query, status) -> list[dict]:
+    """검색어(이름 일부)·상태 필터로 좁힌 목록. '전체'는 대기·처리 중도 보인다."""
+    q = (query or "").strip().lower()
+    return [r for r in rows if q in r["name"].lower() and status in ("전체", r["status"])]
+
+
+def _batch_sel_html(rows, sel) -> str:
+    picked = [r for r in rows if r["name"] in set(sel)]
+    if not picked:
+        return "<div class='note'>고른 파일 없음</div>"
+    pages = sum(r["pages"] or 0 for r in picked)
+    unknown = sum(not r["pages"] for r in picked)
+    tail = f" (쪽수 모름 {unknown}개 제외)" if unknown else ""
+    return f"<div class='note info'><b>{len(picked)}개 · {pages:,}쪽</b> 선택{tail}</div>"
+
+
+def _queue_view(sel, note=""):
+    """대기열 체크 목록 갱신 — 남아 있는 항목의 체크는 유지한다."""
+    choices = batch_runner.queue_choices()
+    ids = {v for _, v in choices}
+    return (gr.update(choices=choices, value=[v for v in (sel or []) if v in ids]), choices,
+            batch_runner.status_html(), note)
 
 
 # ── ④ 결과 파일 다시 교정 · 의심 목록─────────────────────────────────────────
@@ -2023,74 +2053,102 @@ def build_ui() -> gr.Blocks:
                             folder_msg = gr.Markdown("")
 
             # ══════════════════════════════════════════════════════════════════
-            # 탭 2: 일괄 처리 — 입력 폴더에서 골라 대기열로 차례 처리
+            # 탭 2: 일괄 처리 — 하위 탭 [처리]·[교정], 각각 왼쪽→오른쪽 흐름(intent 2026-10-24)
             # ══════════════════════════════════════════════════════════════════
             with gr.Tab("② 일괄 처리") as batch_tab:
-                with gr.Column(elem_classes="step-card"):
-                    gr.HTML(_step_head(None, "일괄 처리 방식",
-                            "파일 종류를 보고 자동으로 처리합니다. 일괄 처리는 로컬 전용이라 API 요금이 생기지 않습니다."))
-                    # 일괄은 로컬 전용 — 비용 우선 고정(2026-10-15) + API 다시 읽기 끔(batch_runner.submit, 2026-10-18)
-                    batch_vision_first = gr.State(BATCH_MODE)
-                    batch_vision_note = gr.HTML(_batch_mode_note())
-                    with gr.Row():
-                        batch_cleanup_chk = gr.Checkbox(
-                            label="문장 정제 — 쪽번호·머리글 제거, 띄어쓰기·맞춤법 교정, 문단 복원",
-                            value=bool(cfg.get("enable_cleanup", True)),
-                            info=_cleanup_info(),
-                        )
-                        batch_front_matter_chk = gr.Checkbox(
-                            label="표지·판권·차례 같은 앞뒤 부속물도 삭제",
-                            value=bool(config.get("remove_front_matter", False)),
-                            info="문장 정제가 켜져 있을 때만 동작합니다. 차례·판권(간기)을 규칙으로 지웁니다.",
-                        )
-                    batch_fmt = gr.Radio(label="저장 형식", choices=_FMT_CHOICES,
-                                         value=cfg.get("default_format", "txt"))
+                with gr.Tabs():
+                    with gr.Tab("처리"):
+                        with gr.Row(equal_height=False):
+                            with gr.Column(scale=3, min_width=280, elem_classes="step-card"):
+                                gr.HTML(_step_head(1, "처리 방식",
+                                        "파일 종류를 보고 자동으로 처리합니다. 로컬 전용이라 API 요금이 생기지 않습니다."))
+                                # 일괄은 로컬 전용 — 비용 우선 고정(2026-10-15) + API 다시 읽기 끔(batch_runner.submit, 2026-10-18)
+                                batch_vision_first = gr.State(BATCH_MODE)
+                                batch_vision_note = gr.HTML(_batch_mode_note())
+                                batch_cleanup_chk = gr.Checkbox(
+                                    label="문장 정제 — 쪽번호·머리글 제거, 띄어쓰기·맞춤법 교정, 문단 복원",
+                                    value=bool(cfg.get("enable_cleanup", True)),
+                                    info=_cleanup_info(),
+                                )
+                                batch_front_matter_chk = gr.Checkbox(
+                                    label="표지·판권·차례 같은 앞뒤 부속물도 삭제",
+                                    value=bool(config.get("remove_front_matter", False)),
+                                    info="문장 정제가 켜져 있을 때만 동작합니다. 차례·판권(간기)을 규칙으로 지웁니다.",
+                                )
+                                batch_fmt = gr.Radio(label="저장 형식", choices=_FMT_CHOICES,
+                                                     value=cfg.get("default_format", "txt"))
 
-                with gr.Column(elem_classes="step-card"):
-                    gr.HTML(_step_head(None, "입력 폴더",
-                            "폴더에 넣은 파일을 골라 차례로 처리합니다. 위 처리 방식(비용 우선)으로 대기열에서 자동 실행됩니다."))
-                    with gr.Row():
-                        batch_dir = gr.Textbox(show_label=False, scale=5,
-                                               value=config.get("batch_input_dir") or str(batch_runner.INPUT_DIR),
-                                               placeholder="입력 폴더 경로 — 직접 입력 후 Enter")
-                        batch_dir_btn = gr.Button("폴더 선택…", size="sm", scale=1)
-                    batch_note = gr.HTML("")
-                    batch_list = gr.CheckboxGroup(show_label=False, choices=[], value=[],
-                                                  elem_classes="batch-list")
-                    with gr.Row():
-                        batch_refresh_btn = gr.Button("새로고침", size="sm")
-                        batch_pick_btn = gr.Button("미처리 전체 선택", size="sm")
-                        batch_run_btn = gr.Button("선택 파일 일괄 처리 ▶", variant="primary")
-                        batch_stop_btn = gr.Button("대기열 중단 ■", variant="stop", size="sm")
-                        batch_clear_btn = gr.Button("끝난 항목 지우기", size="sm")
-                with gr.Column(elem_classes="step-card"):
-                    gr.HTML(_step_head(None, "대기열", "결과는 02_결과 폴더에 저장되고 ④ 처리 기록에도 남습니다."))
-                    batch_status = gr.HTML(batch_runner.status_html())
-                with gr.Column(elem_classes="step-card"):
-                    gr.HTML(_step_head(None, "결과 파일 다시 교정",
-                            "02_결과의 txt 에 지금의 자동 교정(오타 사전·등록한 오타·붙은 낱말 띄어쓰기)을 다시 적용합니다. "
-                            "원본은 _백업 폴더에 보관하고 같은 이름으로 덮어씁니다. 의심 목록도 새로 만듭니다."))
-                    reclean_list = gr.CheckboxGroup(show_label=False, choices=[], value=[],
-                                                    elem_classes="batch-list")
-                    with gr.Row():
-                        reclean_refresh_btn = gr.Button("새로고침", size="sm")
-                        reclean_all_btn = gr.Button("전체 선택", size="sm")
-                        reclean_run_btn = gr.Button("선택 파일 다시 교정 ▶", variant="primary")
-                    reclean_note = gr.HTML("")
-                with gr.Column(elem_classes="step-card"):
-                    gr.HTML(_step_head(None, "의심 목록",
-                            "자동으로 고치지 않은 '틀렸을 수 있는 말'입니다(본문은 그대로). 맞는 것만 '등록'에 체크하고, "
-                            "제안이 틀리면 '고칠 말'을 직접 고친 뒤 등록하세요. 등록한 말은 다음 처리·다시 교정부터 자동으로 고칩니다."))
-                    suspect_book = gr.Dropdown(show_label=False, choices=[], value=None,
-                                               info="책을 고르세요 — 일괄 처리나 다시 교정을 하면 목록이 생깁니다")
-                    suspect_table = gr.Dataframe(
-                        headers=["등록", "틀린 말", "고칠 말", "바뀔 곳", "문맥"],
-                        datatype=["bool", "str", "str", "number", "str"],
-                        type="array", interactive=True, static_columns=[1, 3, 4],
-                        column_widths=["8%", "14%", "14%", "10%", "54%"], wrap=True)
-                    with gr.Row():
-                        suspect_add_btn = gr.Button("선택 항목 사전 등록", variant="primary")
-                    suspect_note = gr.HTML("")
+                            with gr.Column(scale=4, min_width=320, elem_classes="step-card"):
+                                gr.HTML(_step_head(2, "파일 고르기",
+                                        "입력 폴더의 파일을 골라 대기열에 넣습니다. 검색·필터로 좁혀도 고른 것은 유지됩니다."))
+                                with gr.Row():
+                                    batch_dir = gr.Textbox(show_label=False, scale=5,
+                                                           value=config.get("batch_input_dir") or str(batch_runner.INPUT_DIR),
+                                                           placeholder="입력 폴더 경로 — 직접 입력 후 Enter")
+                                    batch_dir_btn = gr.Button("폴더 선택…", size="sm", scale=1)
+                                with gr.Row():
+                                    batch_search = gr.Textbox(show_label=False, scale=3, placeholder="이름 검색")
+                                    batch_filter = gr.Radio(show_label=False, scale=3, choices=["전체", "미처리", "완료"],
+                                                            value="전체", container=False)
+                                batch_sel_note = gr.HTML(_batch_sel_html([], []))
+                                with gr.Row():
+                                    batch_run_btn = gr.Button("선택 파일 일괄 처리 ▶", variant="primary", scale=2)
+                                    batch_pick_btn = gr.Button("미처리 모두 선택", size="sm")
+                                    batch_none_btn = gr.Button("선택 해제", size="sm")
+                                    batch_refresh_btn = gr.Button("새로고침", size="sm")
+                                batch_note = gr.HTML("")
+                                batch_list = gr.CheckboxGroup(show_label=False, choices=[], value=[], interactive=True,
+                                                              elem_classes="batch-list")
+                                batch_rows = gr.State([])   # 폴더 전체 목록 — 검색·필터는 이것을 좁혀 보여 준다
+                                batch_sel = gr.State([])    # 고른 파일 이름 — 검색으로 숨겨도 유지
+
+                            with gr.Column(scale=4, min_width=320, elem_classes="step-card"):
+                                gr.HTML(_step_head(3, "대기열",
+                                        "항목을 체크하고 아래 버튼으로 순서를 바꾸거나 취소합니다. "
+                                        "결과는 02_결과 폴더에 저장되고 ④ 처리 기록에도 남습니다."))
+                                with gr.Row():
+                                    queue_front_btn = gr.Button("맨 앞으로", size="sm")
+                                    queue_up_btn = gr.Button("▲ 위로", size="sm")
+                                    queue_down_btn = gr.Button("▼ 아래로", size="sm")
+                                    queue_cancel_btn = gr.Button("선택 취소", size="sm")
+                                    queue_retry_btn = gr.Button("다시 시도", size="sm")
+                                queue_note = gr.HTML("")
+                                queue_pick = gr.CheckboxGroup(show_label=False, choices=batch_runner.queue_choices(),
+                                                              value=[], elem_classes=["batch-list", "queue-list"])
+                                queue_sig = gr.State(batch_runner.queue_choices())   # 바뀔 때만 목록을 다시 그린다
+                                with gr.Row():
+                                    batch_stop_btn = gr.Button("대기열 전체 중단 ■", variant="stop", size="sm")
+                                    batch_clear_btn = gr.Button("끝난 항목 지우기", size="sm")
+                                batch_status = gr.HTML(batch_runner.status_html(), elem_classes="queue-status")
+
+                    with gr.Tab("교정"):
+                        with gr.Row(equal_height=False):
+                            with gr.Column(scale=6, min_width=420, elem_classes="step-card"):
+                                gr.HTML(_step_head(1, "의심 목록",
+                                        "자동으로 고치지 않은 '틀렸을 수 있는 말'입니다(본문은 그대로). 맞는 것만 '등록'에 체크하고, "
+                                        "제안이 틀리면 '고칠 말'을 직접 고친 뒤 등록하세요. 등록한 말은 다음 처리·다시 교정부터 자동으로 고칩니다."))
+                                suspect_book = gr.Dropdown(show_label=False, choices=[], value=None,
+                                                           info="책을 고르세요 — 일괄 처리나 다시 교정을 하면 목록이 생깁니다")
+                                with gr.Row():
+                                    suspect_add_btn = gr.Button("선택 항목 사전 등록", variant="primary")
+                                suspect_note = gr.HTML("")
+                                suspect_table = gr.Dataframe(
+                                    headers=["등록", "틀린 말", "고칠 말", "바뀔 곳", "문맥"],
+                                    datatype=["bool", "str", "str", "number", "str"],
+                                    type="array", interactive=True, static_columns=[1, 3, 4],
+                                    column_widths=["8%", "14%", "14%", "10%", "54%"], wrap=True, max_height=480)
+
+                            with gr.Column(scale=4, min_width=320, elem_classes="step-card"):
+                                gr.HTML(_step_head(2, "결과 파일 다시 교정",
+                                        "왼쪽에서 등록한 오타를 결과 txt 에 반영합니다(오타 사전·등록한 오타·붙은 낱말 띄어쓰기). "
+                                        "원본은 _백업 폴더에 보관하고 같은 이름으로 덮어씁니다. 의심 목록도 새로 만듭니다."))
+                                with gr.Row():
+                                    reclean_run_btn = gr.Button("선택 파일 다시 교정 ▶", variant="primary", scale=2)
+                                    reclean_all_btn = gr.Button("전체 선택", size="sm")
+                                    reclean_refresh_btn = gr.Button("새로고침", size="sm")
+                                reclean_note = gr.HTML("")
+                                reclean_list = gr.CheckboxGroup(show_label=False, choices=[], value=[],
+                                                                elem_classes="batch-list")
                 batch_timer = gr.Timer(3)
 
             # ══════════════════════════════════════════════════════════════════
@@ -2308,10 +2366,12 @@ def build_ui() -> gr.Blocks:
 
         open_folder_btn.click(fn=_open_results_folder, outputs=[folder_msg])
 
-        # ② 일괄 처리
-        def _batch_list(folder: str, select_new: bool = False):
+        # ② 일괄 처리 — 파일 고르기 (검색·필터는 batch_rows 를 좁혀 보여 주고, 고른 것은 batch_sel 에 유지)
+        def _batch_load(folder: str, query: str, status: str, sel, select_new: bool = False):
             folder = Path((folder or "").strip() or batch_runner.INPUT_DIR)
-            rows = batch_runner.list_inputs(RESULTS_DIR, folder)
+            rows = [{"name": r["name"], "pages": r["pages"], "status": r["status"],
+                     "label": batch_runner.choice_label(r)}
+                    for r in batch_runner.list_inputs(RESULTS_DIR, folder)]
             if not folder.is_dir():
                 note = f'<div class="note info">{folder} 폴더가 없습니다. 경로를 확인하거나 <b>폴더 선택…</b>을 누르세요.</div>'
             elif not rows:
@@ -2320,21 +2380,38 @@ def build_ui() -> gr.Blocks:
             else:
                 todo = sum(r["status"] == "미처리" for r in rows)
                 note = f"<div>파일 {len(rows)}개 · 미처리 {todo}개</div>"
-            value = [r["name"] for r in rows if r["status"] == "미처리"] if select_new else []
-            return note, gr.update(choices=[(batch_runner.choice_label(r), r["name"]) for r in rows],
-                                   value=value)
+            names = {r["name"] for r in rows}
+            sel = [n for n in (sel or []) if n in names]
+            if select_new:
+                sel = [r["name"] for r in rows if r["status"] == "미처리"]
+            return note, _batch_shown(rows, query, status, sel), rows, sel, _batch_sel_html(rows, sel)
 
-        def _batch_view(folder: str, select_new: bool = False):
-            return _batch_list(folder, select_new)
+        def _batch_shown(rows, query, status, sel):
+            vis = _batch_visible(rows, query, status)
+            return gr.update(choices=[(r["label"], r["name"]) for r in vis],
+                             value=[r["name"] for r in vis if r["name"] in set(sel)])
 
-        def _batch_set_dir(folder: str):
+        def _batch_pick(rows, sel, evt: gr.SelectData):
+            # 누른 한 항목만 더하거나 뺀다 — 목록 전체 값을 읽으면, 빨리 누르고 바로 검색할 때
+            # 검색으로 바뀐 목록을 읽어 앞서 고른 것이 빠졌다
+            keep = set(sel or [])
+            (keep.add if evt.selected else keep.discard)(evt.value)
+            sel = [r["name"] for r in rows if r["name"] in keep]
+            return sel, _batch_sel_html(rows, sel)
+
+        def _batch_pick_new(rows, query, status, sel):
+            keep = set(sel or []) | {r["name"] for r in _batch_visible(rows, query, status) if r["status"] == "미처리"}
+            sel = [r["name"] for r in rows if r["name"] in keep]
+            return _batch_shown(rows, query, status, sel), sel, _batch_sel_html(rows, sel)
+
+        def _batch_set_dir(folder: str, query: str, status: str):
             folder = (folder or "").strip()
             # 기본 폴더면 빈 값으로 저장 — config.json 은 PC 간에 공유되므로 이 PC의 절대경로를 남기지 않는다
             is_default = not folder or Path(folder).resolve() == batch_runner.INPUT_DIR.resolve()
             config.save({"batch_input_dir": "" if is_default else folder})
-            return folder, *_batch_list(folder)
+            return folder, *_batch_load(folder, query, status, [])
 
-        def _batch_pick_dir(current: str):
+        def _batch_pick_dir(current: str, query: str, status: str):
             # 이 PC에서 도는 로컬 서버라 Windows 폴더 선택 창을 서버 쪽에서 띄운다.
             import tkinter as tk
             from tkinter import filedialog
@@ -2344,45 +2421,86 @@ def build_ui() -> gr.Blocks:
             chosen = filedialog.askdirectory(parent=root, title="입력 폴더 선택",
                                              initialdir=current if current and Path(current).is_dir() else None)
             root.destroy()
-            return _batch_set_dir(str(Path(chosen)) if chosen else current)
+            return _batch_set_dir(str(Path(chosen)) if chosen else current, query, status)
 
-        def _batch_submit(names, lang, fmt, no_pre, no_fb, no_fig, llm_c, llm_b, key, vf, cleanup, fm, folder):
+        def _batch_submit(names, lang, fmt, no_pre, no_fb, no_fig, llm_c, llm_b, key, vf, cleanup, fm, folder,
+                          query, status):
             if not names:
-                return "<div class='note info'>처리할 파일을 먼저 고르세요.</div>", *_batch_list(folder)[1:]
+                return ("<div class='note info'>처리할 파일을 먼저 고르세요.</div>",
+                        *_batch_load(folder, query, status, names))
             if key and key.strip():
                 claude_vision.set_session_key(key)
             base = Path((folder or "").strip() or batch_runner.INPUT_DIR)
-            batch_runner.submit([base / n for n in names],
-                                (lang, fmt, no_pre, no_fb, no_fig, llm_c, llm_b, key, BATCH_MODE),
-                                {"cleanup": cleanup, "front_matter": fm})
-            return batch_runner.status_html(), *_batch_list(folder)[1:]
+            n = batch_runner.submit([base / n for n in names],
+                                    (lang, fmt, no_pre, no_fb, no_fig, llm_c, llm_b, key, BATCH_MODE),
+                                    {"cleanup": cleanup, "front_matter": fm})
+            return (f"<div class='note ok'>{n}개를 대기열에 넣었습니다.</div>",
+                    *_batch_load(folder, query, status, []))
 
-        batch_view_io = {"inputs": [batch_dir], "outputs": [batch_note, batch_list]}
-        batch_tab.select(fn=_batch_view, **batch_view_io)
-        batch_refresh_btn.click(fn=_batch_view, **batch_view_io)
-        batch_pick_btn.click(fn=lambda d: _batch_view(d, select_new=True), **batch_view_io)
-        batch_dir_io = {"inputs": [batch_dir], "outputs": [batch_dir, batch_note, batch_list]}
+        batch_load_in = [batch_dir, batch_search, batch_filter, batch_sel]
+        batch_load_out = [batch_note, batch_list, batch_rows, batch_sel, batch_sel_note]
+        batch_tab.select(fn=_batch_load, inputs=batch_load_in, outputs=batch_load_out)
+        batch_refresh_btn.click(fn=_batch_load, inputs=batch_load_in, outputs=batch_load_out)
+        batch_dir_io = {"inputs": [batch_dir, batch_search, batch_filter], "outputs": [batch_dir, *batch_load_out]}
         batch_dir.submit(fn=_batch_set_dir, **batch_dir_io)
         batch_dir_btn.click(fn=_batch_pick_dir, **batch_dir_io)
+        # always_last — 기본값(once)은 앞 요청이 끝나기 전의 입력을 버린다
+        for ev in (batch_search.change, batch_filter.change):
+            ev(fn=_batch_shown, inputs=[batch_rows, batch_search, batch_filter, batch_sel], outputs=[batch_list],
+               trigger_mode="always_last")
+        batch_list.select(fn=_batch_pick, inputs=[batch_rows, batch_sel], outputs=[batch_sel, batch_sel_note],
+                          trigger_mode="multiple")   # 클릭마다 차례로 — 하나도 버리지 않는다
+        batch_pick_btn.click(fn=_batch_pick_new, inputs=[batch_rows, batch_search, batch_filter, batch_sel],
+                             outputs=[batch_list, batch_sel, batch_sel_note])
+        batch_none_btn.click(fn=lambda rows: (gr.update(value=[]), [], _batch_sel_html(rows, [])),
+                             inputs=[batch_rows], outputs=[batch_list, batch_sel, batch_sel_note])
 
         batch_tab.select(fn=_batch_mode_note, outputs=[batch_vision_note])   # 엔진·키 상태를 탭 열 때 다시 반영
 
         batch_inputs = [
-            batch_list,
+            batch_sel,
             lang_input, batch_fmt, no_preprocess, no_fallback, no_figure,
             llm_correct, llm_budget, api_key_input,
             batch_vision_first,
             batch_cleanup_chk,
             batch_front_matter_chk,
-            batch_dir
+            batch_dir, batch_search, batch_filter
         ]
-        batch_run_btn.click(fn=_batch_submit, inputs=batch_inputs,
-                            outputs=[batch_status, batch_list])
-        batch_stop_btn.click(fn=lambda: (batch_runner.stop(), batch_runner.status_html())[1],
-                             outputs=[batch_status])
-        batch_clear_btn.click(fn=lambda: (batch_runner.clear_finished(), batch_runner.status_html())[1],
-                              outputs=[batch_status])
-        batch_timer.tick(fn=batch_runner.status_html, outputs=[batch_status])
+        queue_io = {"inputs": [queue_pick], "outputs": [queue_pick, queue_sig, batch_status, queue_note]}
+        batch_run_btn.click(fn=_batch_submit, inputs=batch_inputs, outputs=[queue_note, *batch_load_out]
+                            ).then(fn=lambda sel: _queue_view(sel)[:3], inputs=[queue_pick],
+                                   outputs=[queue_pick, queue_sig, batch_status])
+
+        # ② 대기열 — 체크한 항목에 공통 버튼으로 조작 (intent 2026-10-24)
+        def _queue_op(op, done_msg, none_msg):
+            def run(sel):
+                n = op(sel or [])
+                note = (f"<div class='note ok'>{done_msg.format(n=n)}</div>" if n
+                        else f"<div class='note info'>{none_msg}</div>")
+                return _queue_view(sel, note)
+            return run
+
+        queue_front_btn.click(fn=_queue_op(batch_runner.to_front, "{n}개를 다음 차례로 올렸습니다.",
+                                           "대기 중인 항목을 체크하세요."), **queue_io)
+        queue_up_btn.click(fn=_queue_op(lambda s: batch_runner.move(s, -1), "한 칸 위로 옮겼습니다.",
+                                        "더 올릴 대기 항목이 없습니다."), **queue_io)
+        queue_down_btn.click(fn=_queue_op(lambda s: batch_runner.move(s, +1), "한 칸 아래로 옮겼습니다.",
+                                          "더 내릴 대기 항목이 없습니다."), **queue_io)
+        queue_cancel_btn.click(fn=_queue_op(batch_runner.cancel, "{n}개를 취소했습니다.",
+                                            "대기·처리 중인 항목을 체크하세요."), **queue_io)
+        queue_retry_btn.click(fn=_queue_op(batch_runner.retry, "{n}개를 대기열 끝에 다시 넣었습니다.",
+                                           "실패·취소·중단된 항목을 체크하세요."), **queue_io)
+        batch_stop_btn.click(fn=lambda sel: (batch_runner.stop(), _queue_view(sel))[1], **queue_io)
+        batch_clear_btn.click(fn=lambda sel: (batch_runner.clear_finished(), _queue_view(sel))[1], **queue_io)
+
+        def _queue_tick(sel, sig):
+            # 목록이 그대로면 다시 그리지 않는다 — 체크하는 도중에 화면이 바뀌어 체크가 풀리지 않게
+            if batch_runner.queue_choices() == sig:
+                return gr.skip(), gr.skip(), batch_runner.status_html()
+            return _queue_view(sel)[:3]
+
+        batch_timer.tick(fn=_queue_tick, inputs=[queue_pick, queue_sig],
+                         outputs=[queue_pick, queue_sig, batch_status])
 
         # ④ 결과 파일 다시 교정 · 의심 목록 (intent 2026-10-17-로컬-맞춤법-자동교정)
         reclean_view_io = {"outputs": [reclean_list, suspect_book]}

@@ -13,10 +13,11 @@ from __future__ import annotations
 
 import contextvars
 import html
+import itertools
 import re
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -40,8 +41,11 @@ class Job:
     started: float = 0.0
     ended: float = 0.0
     cancel: bool = False  # '중단'을 누른 작업 — 곧바로 다시 제출해 전체 중단 표시가 풀려도 멈춘다
+    id: int = field(default_factory=lambda: next(_ids))   # ② 대기열 체크 목록에서 고르는 값
 
 
+_ids = itertools.count(1)
+_ICON = {"대기": "·", "처리 중": "⏳", "완료": "✅", "실패": "❌", "중단": "■", "취소": "–"}
 _lock = threading.Lock()
 _jobs: list[Job] = []
 _stop = threading.Event()
@@ -59,7 +63,6 @@ def busy() -> bool:
 
 def submit(paths, args: tuple, kwargs: dict) -> int:
     """파일들을 대기열 끝에 넣고 작업 스레드를 띄운다. 이미 대기·처리 중인 파일은 건너뛴다."""
-    from core import config
     args = tuple(args)
     if len(args) > NO_FALLBACK_ARG:   # 일괄은 로컬 전용 — 저신뢰 쪽도 API 로 다시 읽지 않고 '검토 필요'로 남긴다
         args = (*args[:NO_FALLBACK_ARG], True, *args[NO_FALLBACK_ARG + 1:])
@@ -72,14 +75,92 @@ def submit(paths, args: tuple, kwargs: dict) -> int:
             if p not in active:
                 _jobs.append(Job(p, tuple(args), dict(kwargs)))
                 added += 1
-        _stop.clear()
-        _workers[:] = [w for w in _workers if w.is_alive()]
-        waiting = sum(j.state == "대기" for j in _jobs)
-        while len(_workers) < min(config.get_batch_workers(), waiting):
-            w = threading.Thread(target=_run, daemon=True, name=f"batch-runner-{len(_workers) + 1}")
-            _workers.append(w)
-            w.start()
+        _start_workers()
     return added
+
+
+def _start_workers() -> None:
+    """잠금 안에서 부른다 — 전체 중단 표시를 풀고 대기 수만큼(최대 batch_workers) 작업자를 띄운다."""
+    from core import config
+    _stop.clear()
+    _workers[:] = [w for w in _workers if w.is_alive()]
+    waiting = sum(j.state == "대기" for j in _jobs)
+    while len(_workers) < min(config.get_batch_workers(), waiting):
+        w = threading.Thread(target=_run, daemon=True, name=f"batch-runner-{len(_workers) + 1}")
+        _workers.append(w)
+        w.start()
+
+
+# ── 대기열 조작 (② 탭 대기열 체크 목록, intent 2026-10-24) ──────────────────────
+# 작업자는 _jobs 에서 앞쪽 '대기'부터 가져가므로, 순서 조작은 '대기' 항목끼리의 순서만 바꾼다.
+
+def cancel(ids) -> int:
+    """고른 항목만 취소 — 대기는 '취소', 처리 중은 그 파일만 중단."""
+    ids, n = set(ids), 0
+    with _lock:
+        for j in _jobs:
+            if j.id not in ids:
+                continue
+            if j.state == "대기":
+                j.state, n = "취소", n + 1
+            elif j.state == "처리 중" and not j.cancel:
+                j.cancel, n = True, n + 1
+    return n
+
+
+def to_front(ids) -> int:
+    """고른 대기 항목을 다음 차례로 — 고른 것끼리의 순서는 유지."""
+    ids = set(ids)
+    with _lock:
+        picked = [j for j in _jobs if j.id in ids and j.state == "대기"]
+        rest = [j for j in _jobs if j not in picked]
+        at = next((i for i, j in enumerate(rest) if j.state == "대기"), len(rest))
+        _jobs[:] = rest[:at] + picked + rest[at:]
+    return len(picked)
+
+
+def move(ids, step: int) -> int:
+    """고른 대기 항목을 대기 항목 사이에서 한 칸 위(step=-1)·아래(+1)로."""
+    ids, n = set(ids), 0
+    with _lock:
+        slots = [i for i, j in enumerate(_jobs) if j.state == "대기"]
+        order = [_jobs[i] for i in slots]
+        rng = range(1, len(order)) if step < 0 else range(len(order) - 2, -1, -1)
+        for k in rng:
+            o = k + step
+            if order[k].id in ids and order[o].id not in ids:
+                order[k], order[o] = order[o], order[k]
+                n += 1
+        for i, j in zip(slots, order):
+            _jobs[i] = j
+    return n
+
+
+def retry(ids) -> int:
+    """고른 실패·취소·중단 항목을 같은 설정으로 대기열 끝에 다시 넣는다(이미 대기·처리 중인 파일은 건너뜀)."""
+    ids, n = set(ids), 0
+    with _lock:
+        active = {j.path for j in _jobs if j.state in ("대기", "처리 중") and not j.cancel}
+        for j in [j for j in _jobs if j.id in ids and j.state in ("실패", "취소", "중단")]:
+            if j.path in active:
+                continue
+            _jobs.remove(j)
+            _jobs.append(Job(j.path, j.args, j.kwargs))
+            active.add(j.path)
+            n += 1
+        if n:
+            _start_workers()
+    return n
+
+
+def queue_choices() -> list[tuple[str, int]]:
+    """대기열 체크 목록 — (표시 문구, 작업 id). 표시가 같으면 화면을 다시 그리지 않는다."""
+    with _lock:
+        jobs = list(_jobs)
+    order = itertools.count(1)
+    return [(f"{_ICON.get(j.state, '')} {j.state}"
+             + (f" {next(order)}번째" if j.state == "대기" else "")
+             + f" · {j.path.name}", j.id) for j in jobs]
 
 
 def stop() -> None:
@@ -270,7 +351,7 @@ def status_html() -> str:
                 ' <b>선택 처리</b>를 누르세요. 처리는 ① 탭의 처리 방식 설정을 따릅니다.</div>')
     done = sum(j.state in ("완료", "실패", "중단", "취소") for j in jobs)
     now = time.time()
-    icon = {"대기": "·", "처리 중": "⏳", "완료": "✅", "실패": "❌", "중단": "■", "취소": "–"}
+    icon = _ICON
     rows = []
     for j in jobs:
         took = ""
