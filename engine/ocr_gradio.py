@@ -50,21 +50,22 @@ _LAST_REVIEW: dict = {}
 RESULTS_DIR = Path(__file__).resolve().parent.parent / "02_결과"
 
 _CSS = """
+/* 배색: 사용자 스타일 가이드 「미색 종이」(Raw/Skills/data/reference/web_style_guide.html) 토큰 */
 :root, .gradio-container {
-  --ocr-accent:#0f766e; --ocr-accent-soft:#e8f3f0; --ocr-ink:#1c1917; --ocr-muted:#6f6962;
-  --ocr-line:#e7e4df; --ocr-line-strong:#a8a29e; --ocr-rule:#1c1917; --ocr-card:#ffffff; --ocr-canvas:#f4f3ef;
-  --ocr-field:#faf9f7;
-  --ocr-ok-bg:#e9f3ec; --ocr-ok:#1f6b3a; --ocr-warn-bg:#faf2de; --ocr-warn:#7a4e0a;
-  --ocr-err-bg:#faeaea; --ocr-err:#8f2323;
-  --ocr-shadow:0 1px 2px rgba(41,37,36,.04), 0 10px 28px -16px rgba(41,37,36,.14);
+  --ocr-accent:#436186; --ocr-accent-soft:#eef2f6; --ocr-ink:#2f2b25; --ocr-title:#262320; --ocr-muted:#6b6458;
+  --ocr-line:#ded7c9; --ocr-line-strong:#c7beae; --ocr-rule:#ded7c9; --ocr-card:#fbf9f4; --ocr-canvas:#f3efe7;
+  --ocr-field:#f3efe7;
+  --ocr-ok-bg:#dae8dd; --ocr-ok:#345641; --ocr-warn-bg:#f3e6c6; --ocr-warn:#775426;
+  --ocr-err-bg:#f0ddd7; --ocr-err:#6e3b32;
+  /* 글자 크기 단계 — 탭 안에서는 이 넷만 쓴다 */
+  --fs-title:15px; --fs-body:13px; --fs-small:12px; --fs-btn:12.5px;
 }
 .dark {
-  --ocr-accent:#5fb8a8; --ocr-accent-soft:#16302b; --ocr-ink:#ece9e4; --ocr-muted:#a8a29e;
-  --ocr-line:#2f2c29; --ocr-line-strong:#6f6962; --ocr-rule:#e7e5e4; --ocr-card:#1c1a18; --ocr-canvas:#131211;
-  --ocr-field:#221f1d;
-  --ocr-ok-bg:#15291c; --ocr-ok:#8fd1a3; --ocr-warn-bg:#2d2413; --ocr-warn:#e5c07b;
-  --ocr-err-bg:#2e1616; --ocr-err:#efa3a3;
-  --ocr-shadow:0 1px 2px rgba(0,0,0,.3), 0 10px 28px -16px rgba(0,0,0,.5);
+  --ocr-accent:#7f9cbd; --ocr-accent-soft:#2c3038; --ocr-ink:#e3ddd1; --ocr-title:#f5f2eb; --ocr-muted:#a1988a;
+  --ocr-line:#3a352e; --ocr-line-strong:#433d35; --ocr-rule:#3a352e; --ocr-card:#262320; --ocr-canvas:#191714;
+  --ocr-field:#1f1d1a;
+  --ocr-ok-bg:#243a2d; --ocr-ok:#b8d3be; --ocr-warn-bg:#4d371f; --ocr-warn:#e8d29e;
+  --ocr-err-bg:#4a2a25; --ocr-err:#e2bdb3;
 }
 .gradio-container { max-width:none !important; margin:0 !important;
                     padding-left:28px !important; padding-right:28px !important; }
@@ -73,15 +74,15 @@ _CSS = """
 .app-head { display:flex; justify-content:space-between; align-items:center; gap:16px;
             flex-wrap:wrap; padding:6px 2px 6px; }
 .brand { display:flex; align-items:center; gap:12px; }
-.brand-mark { width:36px; height:36px; border-radius:10px; background:var(--ocr-accent);
+.brand-mark { width:34px; height:34px; border-radius:8px; background:var(--ocr-accent);
               display:grid; place-items:center; flex:none; }
 .brand-mark svg { width:18px; height:18px; }
-.app-title { font-size:1.45rem; font-weight:650; letter-spacing:-0.025em; color:var(--ocr-ink);
+.app-title { font-size:1.35rem; font-weight:700; letter-spacing:-0.025em; color:var(--ocr-title);
              line-height:1.2; }
-.app-sub   { color:var(--ocr-muted); font-size:0.86rem; margin-top:2px; }
+.app-sub   { color:var(--ocr-muted); font-size:var(--fs-small); margin-top:2px; }
 .chips { display:flex; gap:6px; flex-wrap:wrap; }
-.chip  { display:inline-flex; align-items:center; gap:6px; padding:5px 10px; border-radius:999px;
-         font-size:0.8rem; font-weight:500; border:1px solid var(--ocr-line-strong);
+.chip  { display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:999px;
+         font-size:var(--fs-small); font-weight:500; border:1px solid var(--ocr-line);
          color:var(--ocr-muted); background:var(--ocr-card); }
 .chip::before { content:""; width:6px; height:6px; border-radius:50%; background:currentColor; opacity:.7; }
 .chip.ok   { color:var(--ocr-ok); }
@@ -89,138 +90,189 @@ _CSS = """
 .chip.err  { color:var(--ocr-err); }
 
 /* ── 탭 ─────────────────────────────────────────────────── */
-.tab-wrapper { border-bottom:1px solid var(--ocr-rule) !important; margin-bottom:10px !important; }
-[role=tab] { font-weight:500 !important; }
+.tab-wrapper { border-bottom:1px solid var(--ocr-line) !important; margin-bottom:10px !important; }
+[role=tab] { font-weight:600 !important; font-size:var(--fs-body) !important; }
 
-/* ── 카드: 흰 면 + 1px 선 1개 + 옅은 그림자 ─────────────── */
-.step-card { border:1px solid var(--ocr-rule) !important; border-radius:16px !important;
-             background:var(--ocr-card) !important; box-shadow:var(--ocr-shadow) !important;
-             padding:16px 18px 18px !important; gap:12px !important; }
-.step-card .form { background:transparent !important; border:0 !important; gap:14px !important;
+/* ── 카드: 미색 면 + 1px 옅은 선 + 12px 모서리, 그림자 없음 ── */
+.step-card { border:1px solid var(--ocr-line) !important; border-radius:12px !important;
+             background:var(--ocr-card) !important; box-shadow:none !important;
+             padding:16px 18px 18px !important; gap:12px !important;
+             font-size:var(--fs-body); color:var(--ocr-ink); }
+.step-card .form { background:transparent !important; border:0 !important; gap:12px !important;
                    box-shadow:none !important; }
 .step-card .block { background:transparent !important; border:0 !important;
                     box-shadow:none !important; padding:0 !important; }
 .step-card .html-container { padding:0 !important; }
 
 /* 카드 제목 — 아래 1px 선 하나로 구획 */
-.step-top   { padding-bottom:10px; border-bottom:1px solid var(--ocr-rule); }
-.step-head  { display:flex; align-items:center; gap:10px; }
-.step-no    { width:24px; height:24px; border-radius:7px; background:var(--ocr-accent); color:#fff;
-              display:inline-grid; place-items:center; font-size:0.78rem; font-weight:600;
+.step-top   { padding-bottom:10px; border-bottom:1px solid var(--ocr-line); }
+.step-head  { display:flex; align-items:center; gap:8px; }
+.step-no    { width:20px; height:20px; border-radius:5px; background:var(--ocr-accent); color:#fbf9f4;
+              display:inline-grid; place-items:center; font-size:11px; font-weight:700;
               font-variant-numeric:tabular-nums; flex:none; }
-.step-title { font-size:1.05rem; font-weight:600; color:var(--ocr-ink); letter-spacing:-0.015em; }
-.step-hint  { font-size:0.85rem; color:var(--ocr-muted); margin:6px 0 0; max-width:62ch;
+.step-title { font-size:var(--fs-title); font-weight:700; color:var(--ocr-title); letter-spacing:-0.015em; }
+.step-hint  { font-size:var(--fs-small); color:var(--ocr-muted); margin:6px 0 0; max-width:62ch;
               line-height:1.6; text-wrap:pretty; }
 
-/* 선택지: 회색 알약 대신 1px 선 목록 */
+/* 칸 이름(읽는 방식·저장 형식 등)과 보조 설명 — 작은 글자 */
+.step-card [data-testid=block-info], .step-card .block-title { font-size:var(--fs-small) !important; }
+.step-card [data-testid=block-info] { color:var(--ocr-muted) !important; font-weight:600 !important; }
+.step-card .info, .step-card [data-testid=block-info] + p { font-size:var(--fs-small) !important; }
+
+/* 선택지·파일 목록: 항목마다 상자 없이 글자 목록 */
 .step-card fieldset label, .step-card .wrap > label {
-  background:var(--ocr-card) !important; border:1px solid var(--ocr-line-strong) !important;
-  border-radius:10px !important; box-shadow:none !important; }
+  background:transparent !important; border:0 !important; border-radius:0 !important; box-shadow:none !important;
+  padding:3px 2px !important; font-size:var(--fs-body) !important; }
 .step-card fieldset label.selected, .step-card .wrap > label.selected {
-  border-color:var(--ocr-accent) !important; background:var(--ocr-accent-soft) !important; }
-
-/* 입력칸·로그 */
-.step-card textarea, .step-card input[type=text], .step-card .secondary-wrap {
-  background:var(--ocr-field) !important; }
-.step-log textarea { font-size:0.82rem !important; line-height:1.65 !important; }
-.rec-table { border:1px solid var(--ocr-line); border-radius:8px; }
-.rec-table table { width:100%; border-collapse:collapse; font-size:0.8rem; color:var(--ocr-ink); }
-.rec-table th { position:sticky; top:0; background:var(--ocr-field); text-align:left;
-                font-weight:600; border-bottom:1px solid var(--ocr-line-strong); }
-.rec-table th, .rec-table td { padding:5px 8px; border-bottom:1px solid var(--ocr-line);
-                               white-space:nowrap; }
-
-/* 파일 올리는 곳: 점선 1px */
-.step-card button.boundedheight { border:1px dashed var(--ocr-line-strong) !important;
-                                  border-radius:12px !important; background:var(--ocr-field) !important; }
-.step-card button.boundedheight:hover { border-color:var(--ocr-accent) !important; }
-/* 비어 있는 결과 파일 칸: 큰 빈 상자 대신 한 줄 높이 */
-.step-card .empty.large { min-height:64px !important; height:64px !important;
-                          border:1px dashed var(--ocr-line-strong) !important; border-radius:10px !important; }
-
-/* 접이식(고급 설정 등): 카드 안에서는 위쪽 선 1개, 밖에서는 선 테두리 */
-.block:has(> button.label-wrap) { border:1px solid var(--ocr-rule) !important; border-radius:12px !important;
-                                  background:var(--ocr-card) !important; box-shadow:none !important; }
-.step-card .block:has(> button.label-wrap) { border:0 !important; border-top:1px solid var(--ocr-rule) !important;
-                                             border-radius:0 !important; padding-top:12px !important; }
-button.label-wrap span { font-weight:500; }
-
-/* ── 안내 상자 ───────────────────────────────────────────── */
-.note { padding:10px 12px; border-radius:10px; font-size:0.86rem; line-height:1.6;
-        background:var(--ocr-field); color:var(--ocr-ink); border:1px solid var(--ocr-line-strong); }
-.note.info { background:var(--ocr-accent-soft); color:var(--ocr-accent); border-color:transparent; }
-.batch-list .wrap { flex-direction:column; align-items:stretch; }   /* ② 탭 파일 목록: 한 줄에 하나 */
-/* ② 탭 목록: 페이지 대신 목록 상자 안에서만 스크롤 — 버튼은 목록 위에 있어 내려가지 않아도 된다 */
-.batch-list .wrap:not(.default) { max-height:max(220px, calc(100vh - 680px)); overflow-y:auto; flex-wrap:nowrap; }
+  background:transparent !important; color:var(--ocr-accent) !important; font-weight:600; }
+.batch-list .wrap { flex-direction:column; align-items:stretch; gap:0 !important;
+                    border-top:1px solid var(--ocr-line); border-bottom:1px solid var(--ocr-line); }
+.step-card .batch-list .wrap > label { font-size:var(--fs-small) !important; padding:5px 2px !important;
+                                       border-bottom:1px solid var(--ocr-line) !important; }
+.step-card .batch-list .wrap > label:last-child { border-bottom:0 !important; }
+.step-card .batch-list .wrap > label.selected { font-weight:500; }
+/* ② 탭 목록: 페이지 대신 목록 안에서만 스크롤 — 버튼은 목록 위에 있어 내려가지 않아도 된다 */
+.batch-list .wrap:not(.default) { max-height:max(220px, calc(100vh - 620px)); overflow-y:auto; flex-wrap:nowrap; }
 .queue-list .wrap:not(.default) { max-height:max(160px, calc(50vh - 240px)); }
 .queue-status { max-height:max(140px, calc(50vh - 280px)); overflow-y:auto; }
 .record-pick .wrap:not(.default) { max-height:360px; overflow-y:auto; flex-wrap:nowrap; }   /* ④ 기록 삭제 목록: 길면 스크롤 */
-.note.ok   { background:var(--ocr-ok-bg);   color:var(--ocr-ok);   border-color:transparent; }
-.note.warn { background:var(--ocr-warn-bg); color:var(--ocr-warn); border-color:transparent; }
-.note.err  { background:var(--ocr-err-bg);  color:var(--ocr-err);  border-color:transparent; }
-.note code { font-size:0.8rem; word-break:break-all; }
-.guide { font-size:0.88rem; line-height:1.7; color:var(--ocr-ink); }
-.guide ol { margin:10px 0 8px 1.3em; padding:0; }
-.guide li { margin:4px 0; }
-.guide .muted { color:var(--ocr-muted); font-size:0.82rem; }
+
+/* 입력칸·로그 — 입력이 필요한 칸만 상자 유지 */
+.step-card textarea, .step-card input[type=text], .step-card .secondary-wrap {
+  background:var(--ocr-field) !important; font-size:var(--fs-body) !important; }
+.step-log textarea { font-size:var(--fs-small) !important; line-height:1.65 !important; }
+
+/* 표(대기열 상태·기록·사용량): 바깥 상자 없이 줄만 */
+.rec-table, .rec-table table, .rec-table th, .rec-table td,
+.queue-status table, .queue-status th, .queue-status td { border-left:0 !important; border-right:0 !important; }
+.rec-table { border-top:0; }
+.rec-table table, .queue-status table { width:100%; border-collapse:collapse; font-size:var(--fs-small) !important;
+                                        color:var(--ocr-ink); }
+.rec-table th, .queue-status th { position:sticky; top:0; background:var(--ocr-card); text-align:left;
+                                  font-weight:600; color:var(--ocr-muted); border-bottom:1px solid var(--ocr-line-strong); }
+.rec-table th, .rec-table td, .queue-status th, .queue-status td {
+  padding:5px 8px; border-bottom:1px solid var(--ocr-line); }
+.rec-table th, .rec-table td, .queue-status th { white-space:nowrap; }
+
+/* 파일 올리는 곳: 점선 1px */
+.step-card button.boundedheight { border:1px dashed var(--ocr-line-strong) !important;
+                                  border-radius:8px !important; background:var(--ocr-field) !important;
+                                  font-size:var(--fs-small) !important; }
+.step-card button.boundedheight:hover { border-color:var(--ocr-accent) !important; }
+/* 비어 있는 결과 파일 칸: 큰 빈 상자 대신 한 줄 높이 */
+.step-card .empty.large { min-height:48px !important; height:48px !important;
+                          border:1px dashed var(--ocr-line) !important; border-radius:8px !important; }
+
+/* 접이식(고급 설정 등): 카드 안에서는 위쪽 선 1개, 밖에서는 카드와 같은 모양 */
+.block:has(> button.label-wrap) { border:1px solid var(--ocr-line) !important; border-radius:12px !important;
+                                  background:var(--ocr-card) !important; box-shadow:none !important; }
+.step-card .block:has(> button.label-wrap) { border:0 !important; border-top:1px solid var(--ocr-line) !important;
+                                             border-radius:0 !important; padding-top:12px !important; }
+button.label-wrap span { font-weight:600; font-size:var(--fs-body); }
+
+/* ── 안내 문구: 상자 없이 작은 글자, 상태는 글자색으로 ───── */
+.note { padding:0; border:0; background:transparent; font-size:var(--fs-small); line-height:1.6;
+        color:var(--ocr-muted); }
+.note.info { color:var(--ocr-muted); }
+.note.ok   { color:var(--ocr-ok); }
+.note.warn { color:var(--ocr-warn); font-weight:500; }
+.note.err  { color:var(--ocr-err);  font-weight:600; }
+.note b, .note strong { color:var(--ocr-ink); }
+.note.warn b, .note.err b, .note.ok b { color:inherit; }
+.note code { font-size:11.5px; word-break:break-all; }
+.note ul, .note ol { margin:2px 0 0; }
+.guide { font-size:var(--fs-small); line-height:1.7; color:var(--ocr-ink); }
+.guide ol { margin:8px 0 6px 1.3em; padding:0; }
+.guide li { margin:3px 0; }
+.guide .muted { color:var(--ocr-muted); font-size:var(--fs-small); }
 .guide a { color:var(--ocr-accent); font-weight:500; }
+.step-card .prose, .step-card .prose p { font-size:var(--fs-small) !important; }
 
 /* ── 진행바 ─────────────────────────────────────────────── */
 .prog { padding:2px 0; }
 .prog-top { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:8px;
-            font-size:0.9rem; color:var(--ocr-ink); font-weight:500; }
-.prog-top .muted { color:var(--ocr-muted); font-size:0.82rem; margin-left:8px; font-weight:400; }
+            font-size:var(--fs-body); color:var(--ocr-ink); font-weight:500; }
+.prog-top .muted { color:var(--ocr-muted); font-size:var(--fs-small); margin-left:8px; font-weight:400; }
 .prog-num { font-variant-numeric:tabular-nums; font-weight:600; }
 .prog-track { background:var(--ocr-line); border-radius:4px; height:6px; overflow:hidden; }
 .prog-fill  { height:100%; background:var(--ocr-accent); transition:width .4s ease; }
 .prog-fill.done { background:var(--ocr-ok); }
 .prog-idle { color:var(--ocr-muted); }
 
-/* ── 저장 현황 숫자 ─────────────────────────────────────── */
-.stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr));
-         border:1px solid var(--ocr-rule); border-radius:12px; overflow:hidden; }
-.stat  { padding:14px 16px; }
-.stat + .stat { border-left:1px solid var(--ocr-rule); }
-.stat b    { display:block; font-size:1.4rem; font-weight:600; color:var(--ocr-ink);
+/* ── 저장 현황 숫자: 바깥 상자 없이 세로 구분선만 ───────── */
+.stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); }
+.stat  { padding:4px 14px; }
+.stat:first-child { padding-left:0; }
+.stat + .stat { border-left:1px solid var(--ocr-line); }
+.stat b    { display:block; font-size:1.3rem; font-weight:700; color:var(--ocr-title);
              font-variant-numeric:tabular-nums; letter-spacing:-0.02em; }
-.stat span { font-size:0.8rem; color:var(--ocr-muted); }
+.stat span { font-size:var(--fs-small); color:var(--ocr-muted); }
 
-.warn-panel     { background:var(--ocr-warn-bg); border-radius:10px; padding:12px 14px; margin:4px 0; }
-.continue-panel { background:var(--ocr-ok-bg);   border-radius:10px; padding:12px 14px; margin:4px 0; }
+.warn-panel     { color:var(--ocr-warn); font-size:var(--fs-small); padding:0; margin:4px 0; }
+.continue-panel { color:var(--ocr-ok);   font-size:var(--fs-small); padding:0; margin:4px 0; }
 
-/* ── 버튼 ───────────────────────────────────────────────── */
-button { transition:transform .12s ease, background-color .2s ease, border-color .2s ease,
-         box-shadow .2s ease; }
+/* ── 버튼: 작게, 글자 폭만큼 — 한 줄의 버튼은 가로로 나열 ── */
+button { transition:background-color .2s ease, border-color .2s ease, box-shadow .2s ease; }
 button:active { transform:translateY(1px); }
 footer { display:none !important; }   /* Gradio 기본 하단 문구 — 스크롤만 늘린다 */
-button.primary:hover { box-shadow:0 6px 16px -8px rgba(15,118,110,.55); }
+.step-card button.lg, .step-card button.md, .step-card button.sm {
+  flex:0 0 auto !important; width:auto !important; min-width:0 !important; align-self:flex-start;
+  min-height:30px !important; padding:5px 12px !important; font-size:var(--fs-btn) !important;
+  font-weight:600 !important; border-radius:8px !important; white-space:nowrap; }
+.step-card .row:has(> button) { flex-wrap:wrap !important; gap:6px !important; align-items:center; }
+.step-card button.primary:hover { box-shadow:0 6px 14px -8px rgb(67 97 134 / .55); }
 """
 
 _THEME = gr.themes.Base(
-    primary_hue=gr.themes.colors.teal,
+    primary_hue=gr.themes.colors.slate,
     neutral_hue=gr.themes.colors.stone,
     radius_size=gr.themes.sizes.radius_md,
-    font=["Pretendard", "Malgun Gothic", "Apple SD Gothic Neo", "system-ui", "sans-serif"],
+    font=["Pretendard Variable", "Pretendard", "Malgun Gothic", "Apple SD Gothic Neo", "system-ui", "sans-serif"],
     font_mono=["D2Coding", "Consolas", "ui-monospace", "monospace"],
 ).set(
-    body_background_fill="#f4f3ef", body_background_fill_dark="#131211",
+    body_background_fill="#f3efe7", body_background_fill_dark="#191714",
+    body_text_color="#2f2b25", body_text_color_dark="#e3ddd1",
+    body_text_size="13px", input_text_size="13px", checkbox_label_text_size="13px",
+    block_label_text_size="12px", block_title_text_size="12px", block_info_text_size="12px",
+    block_title_text_color="#6b6458", block_title_text_color_dark="#a1988a",
+    block_info_text_color="#6b6458", block_info_text_color_dark="#a1988a",
+    color_accent="#436186", color_accent_soft="#eef2f6", color_accent_soft_dark="#2c3038",
+    border_color_accent="#436186", border_color_accent_dark="#7f9cbd",
+    border_color_primary="#ded7c9", border_color_primary_dark="#3a352e",
     block_border_width="0px", block_shadow="none", block_shadow_dark="none",
+    block_background_fill="#fbf9f4", block_background_fill_dark="#262320",
     form_gap_width="0px",
-    input_background_fill="#faf9f7", input_background_fill_dark="#221f1d",
-    input_border_color="#a8a29e", input_border_color_dark="#6f6962", input_border_width="1px",
-    checkbox_label_background_fill="#ffffff", checkbox_label_background_fill_dark="#1c1a18",
-    checkbox_label_background_fill_selected="#e8f3f0",
-    checkbox_label_background_fill_selected_dark="#16302b",
-    checkbox_label_border_color="#a8a29e", checkbox_label_border_color_dark="#6f6962",
-    checkbox_label_border_color_selected="#0f766e", checkbox_label_border_width="1px",
+    input_background_fill="#f3efe7", input_background_fill_dark="#1f1d1a",
+    input_border_color="#c7beae", input_border_color_dark="#433d35", input_border_width="1px",
+    input_border_color_focus="#436186", input_border_color_focus_dark="#7f9cbd",
+    checkbox_background_color_selected="#436186", checkbox_background_color_selected_dark="#7f9cbd",
+    checkbox_border_color_selected="#436186", checkbox_border_color_selected_dark="#7f9cbd",
+    checkbox_border_color="#c7beae", checkbox_border_color_dark="#433d35",
+    checkbox_label_background_fill="transparent", checkbox_label_background_fill_dark="transparent",
+    checkbox_label_background_fill_selected="transparent",
+    checkbox_label_background_fill_selected_dark="transparent",
+    checkbox_label_border_width="0px",
+    slider_color="#436186", slider_color_dark="#7f9cbd",
+    table_border_color="#ded7c9", table_border_color_dark="#3a352e",
+    table_even_background_fill="#fbf9f4", table_even_background_fill_dark="#262320",
+    table_odd_background_fill="#f3efe7", table_odd_background_fill_dark="#1f1d1a",
     button_border_width="1px",
-    button_primary_background_fill="#0f766e", button_primary_background_fill_hover="#0d6b63",
-    button_primary_background_fill_dark="#2f8f82",
-    button_secondary_background_fill="#ffffff", button_secondary_background_fill_dark="#1c1a18",
-    button_secondary_background_fill_hover="#f4f3ef",
-    button_secondary_background_fill_hover_dark="#26231f",
-    button_secondary_border_color="#d7d2ca", button_secondary_border_color_dark="#403c38",
-    button_secondary_border_color_hover="#b9b2a8",
+    button_large_text_size="12.5px", button_medium_text_size="12.5px", button_small_text_size="12.5px",
+    button_large_padding="5px 12px", button_medium_padding="5px 12px", button_small_padding="5px 12px",
+    button_primary_background_fill="#436186", button_primary_background_fill_hover="#364f6e",
+    button_primary_background_fill_dark="#56769c", button_primary_background_fill_hover_dark="#436186",
+    button_primary_text_color="#fbf9f4", button_primary_text_color_dark="#fbf9f4",
+    button_primary_border_color="#436186", button_primary_border_color_dark="#56769c",
+    button_secondary_background_fill="#fbf9f4", button_secondary_background_fill_dark="#262320",
+    button_secondary_background_fill_hover="#ece7dd",
+    button_secondary_background_fill_hover_dark="#322e28",
+    button_secondary_text_color="#2f2b25", button_secondary_text_color_dark="#e3ddd1",
+    button_secondary_border_color="#c7beae", button_secondary_border_color_dark="#433d35",
+    button_secondary_border_color_hover="#a1988a",
+    button_cancel_background_fill="#f0ddd7", button_cancel_background_fill_dark="#4a2a25",
+    button_cancel_background_fill_hover="#e8cdc5", button_cancel_background_fill_hover_dark="#5a332c",
+    button_cancel_text_color="#6e3b32", button_cancel_text_color_dark="#e2bdb3",
+    button_cancel_border_color="#d9b8ae", button_cancel_border_color_dark="#6e3b32",
 )
 
 
