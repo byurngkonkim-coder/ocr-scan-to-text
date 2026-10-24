@@ -205,6 +205,65 @@ def test_rematch_headings_matches_front_of_merged_toc_row():
     assert st["found"] == 1
 
 
+_P = "그날 아침 그녀는 택시 안에서 음악을 들으며 오래도록 창밖을 바라보았다."
+
+
+def test_infer_chapters_marks_numbered_chapter_lines():
+    """차례가 없는 책 — 본문의 장 번호표 줄(CHAPTER N, 1Q84 실측)을 번호 순서대로 제목으로. 글자는 그대로."""
+    text = "\n\n".join(["머리 이야기다.", "CHAPTER 1", _P, "CHAPTER 2", _P, "CHAPTER 3", _P])
+    out, entries = text_cleaner.infer_chapters(text)
+    assert [e["title"] for e in entries] == ["CHAPTER 1", "CHAPTER 2", "CHAPTER 3"]
+    assert all(e["level"] == 1 for e in entries)
+    assert "# CHAPTER 2" in out.split("\n") and out.replace("# CHAPTER", "CHAPTER") == text
+
+
+def test_infer_chapters_skips_sentences_toc_remnant_and_repeats():
+    """'제1장을 시작하며'(문장)·'제3장 삶을 단순화하라·56'(차례 잔재)·같은 번호 반복은 제목이 아니다
+    (GameTheory·FocalPoint·IDEAHACKS49 실측)."""
+    text = "\n\n".join(["제3장 삶을 단순화하라·56", "제1장 집중의 힘", "제1장을 시작하며", _P,
+                        "제1장 집중의 힘", _P, "제2장 목표를 세워라", _P, "제3장 삶을 단순화하라", _P])
+    out, entries = text_cleaner.infer_chapters(text)
+    assert [e["title"] for e in entries] == ["제1장 집중의 힘", "제2장 목표를 세워라", "제3장 삶을 단순화하라"]
+    lines = out.split("\n")
+    assert lines[0] == "제3장 삶을 단순화하라·56" and lines[2] == "# 제1장 집중의 힘" and "제1장을 시작하며" in lines
+    assert lines.count("# 제1장 집중의 힘") == 1
+
+
+def test_infer_chapters_parts_and_too_few():
+    """부가 있으면 부 1단계·장 2단계. 장 번호가 3개 미만이면 추정하지 않는다(일반 글의 우연한 '1장')."""
+    text = "\n\n".join(["1부", "1장 정렬의 중요성", _P, "2장 경제적 가치", _P, "2부", "3장 내부 조직", _P])
+    out, entries = text_cleaner.infer_chapters(text)
+    assert [(e["level"], e["title"]) for e in entries] == \
+        [(1, "1부"), (2, "1장 정렬의 중요성"), (2, "2장 경제적 가치"), (1, "2부"), (2, "3장 내부 조직")]
+    few = "\n\n".join(["1장 처음", _P, "2장 다음", _P])
+    assert text_cleaner.infer_chapters(few) == (few, [])
+
+
+def test_infer_chapters_book_parts_gap_and_parts_only():
+    """'BOOK 1 APRIL-JUNE' 은 부(1Q84), OCR 이 한 장을 못 읽어 번호가 하나 건너뛰어도 잇는다(IDEAHACKS49 2장),
+    장 줄이 없어도 부가 3개 이상이면 부로 나눈다(Alignment 1부~4부)."""
+    text = "\n\n".join(["BOOK 1 APRIL-JUNE", "1장_정보Hack", _P, "3장_정리 Hack", _P, "4장_오감Hack", _P,
+                        "BOOK 2 JULY", "CHAPTER 1", _P])
+    _, entries = text_cleaner.infer_chapters(text)
+    assert [(e["level"], e["title"]) for e in entries] == \
+        [(1, "BOOK 1 APRIL-JUNE"), (2, "1장_정보Hack"), (2, "3장_정리 Hack"), (2, "4장_오감Hack"),
+         (1, "BOOK 2 JULY"), (2, "CHAPTER 1")]
+    parts = "\n\n".join(["1부", _P, "2부", _P, "CHAPTER9", _P, "3부", _P, "4부", _P, "2장 주석의 소제목", _P])
+    assert [e["title"] for e in text_cleaner.infer_chapters(parts)[1]] == ["1부", "2부", "3부", "4부"]
+
+
+def test_iter_clean_infers_chapters_without_toc(monkeypatch):
+    """차례를 못 찾은 책도 정제 결과에 장 제목·맨 앞 목록용 항목이 생기고, 보고는 '추정'이라고 밝힌다."""
+    monkeypatch.setattr(config, "get_local_cleanup_engine", lambda: "rules")
+    rep: dict = {}
+    names = ["경영의 원칙", "고객의 발견", "혁신의 조건", "성과의 측정"]
+    pages = [f"제{i}장 {n}\n" + _BODY for i, n in enumerate(names, 1)] + [_BODY] * 6
+    out = _clean(pages, rep)
+    assert [e["title"] for e in rep["toc_entries"]][:2] == ["제1장 경영의 원칙", "제2장 고객의 발견"]
+    assert "# 제1장 경영의 원칙" in out.split("\n")
+    assert "본문에서 장 제목 4개를 추정" in rep["toc_note"]
+
+
 def test_rematch_headings_never_drops_or_duplicates_lines():
     """정제본 다시 찾기는 줄을 지우거나 이미 있는 제목을 또 넣지 않는다(NextSociety '피터 드러커' 줄 소실 회귀)."""
     entries = [{"level": 1, "title": "책머리에", "page": 9},

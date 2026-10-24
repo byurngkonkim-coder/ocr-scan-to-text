@@ -357,9 +357,14 @@ def iter_clean(pages: list[str], drop_front_matter: bool = False, on_chunk=None,
         if n_sp:
             report["warnings"].append(f"붙어 쓴 낱말 띄어쓰기 {n_sp}곳 교정 (정제 전 원문 사본에서 확인 가능)")
     text = unify_paragraph_breaks(text)
+    guessed: list[dict] = []
+    if not toc_entries:     # 차례를 못 찾은 책 — 본문의 장 번호표 줄로 장을 세운다
+        text, guessed = infer_chapters(text)
+        toc_entries.extend(guessed)       # report(_out) 의 toc_entries 와 같은 목록
     if toc_entries:
         text = rematch_headings(text, toc_entries, toc_stats, respace=rules_mode)
-        report["toc_note"] = toc_headings.report(toc_entries, toc_stats)
+        report["toc_note"] = (f"차례를 찾지 못해 본문에서 장 제목 {len(guessed)}개를 추정(제N장·CHAPTER N 꼴 줄)"
+                              if guessed else toc_headings.report(toc_entries, toc_stats))
         if report_out is not None:
             report_out["toc_note"] = report["toc_note"]
         text = toc_headings.space_headings(text)   # 장·절 제목 줄 앞뒤 빈 줄(R-18)
@@ -573,6 +578,48 @@ def _title_line(lines: list[str], lo: int, hi: int, title: str) -> int | None:
 
 _FRONT_MIN = 6
 _FRONT_RATIO = 0.4
+_CHAPTER_LINE_MAX = 40
+_CHAPTER_MIN = 3
+_BOOK_PART_RE = re.compile(r'^book\s*\d', re.I)
+
+
+def infer_chapters(text: str) -> tuple[str, list[dict]]:
+    """차례가 없는 책 — 본문의 장 번호표 줄('CHAPTER 1'·'제1장 집중의 힘'·'1부')을 '#' 제목으로, 차례 항목도 만든다.
+    (Alignment·FocalPoint·1Q84·IDEAHACKS49 실측 — 차례를 못 찾아 수십만 자가 한 덩어리였다)
+    오탐 방지: 40자 이하 줄만, 번호가 1·2·3… 차례대로 이어질 때만(같은 번호 반복·앞선 차례 잔재는 건너뜀 —
+    OCR 이 한 장을 못 읽은 것만큼 하나 건너뛰기는 허용, IDEAHACKS49 2장), 부 뒤에선 장 번호가 1부터 다시 시작해도 된다.
+    쪽번호로 끝나는 차례 잔재('제3장 삶을 단순화하라·56')·문장('제1장을 시작하며' — toc_headings 장 꼴이 거른다) 제외,
+    장·부가 모두 3개 미만이면 하지 않는다. 'BOOK 1 APRIL-JUNE' 은 부(1Q84).
+    다음 줄을 제목으로 합치지 않는다 — 인용문일 때가 있다(FocalPoint). 글자는 그대로."""
+    lines = text.split("\n")
+    picks: list[tuple[int, int]] = []          # (줄 번호, 단계 꼴 0=부 1=장)
+    expect = {0: 1, 1: 1}
+    for i, raw in enumerate(lines):
+        l = raw.strip()
+        if not l or len(l) > _CHAPTER_LINE_MAX or _MD_HEADING_RE.match(l) or l.startswith("|"):
+            continue
+        kind = 0 if _BOOK_PART_RE.match(l) else toc_headings._level_kind(l)
+        m = re.search(r'\d+', l)
+        if kind not in (0, 1) or not m:
+            continue
+        rest = toc_headings._LABEL_RE.sub("", l)
+        if rest and re.search(r'\d\s*$', rest):
+            continue
+        no = int(m.group())
+        # 건너뛰기는 첫 장을 찾은 뒤에만 — 부 뒤 주석 구간의 '2장 …' 소제목이 첫 장으로 잡혔다(Alignment)
+        if (no == expect[kind] or (expect[kind] > 1 and no == expect[kind] + 1)
+                or (kind == 1 and no == 1 and picks and picks[-1][1] == 0)):
+            picks.append((i, kind))
+            expect[kind] = no + 1
+    if sum(k == 1 for _, k in picks) < _CHAPTER_MIN and sum(k == 0 for _, k in picks) < _CHAPTER_MIN:
+        return text, []
+    has_part = any(k == 0 for _, k in picks)
+    entries = []
+    for i, kind in picks:
+        e = {"level": 1 if kind == 0 or not has_part else 2, "title": lines[i].strip(), "page": None}
+        lines[i] = toc_headings._heading(e)
+        entries.append(e)
+    return "\n".join(lines), entries
 
 
 def keep_headings(fn, text: str) -> str:
