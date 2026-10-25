@@ -2544,10 +2544,13 @@ def build_ui() -> gr.Blocks:
             sel = [r["name"] for r in rows if r["name"] in keep]
             return sel, _batch_sel_html(rows, sel)
 
-        def _batch_pick_new(rows, query, status, sel):
-            keep = set(sel or []) | {r["name"] for r in _batch_visible(rows, query, status) if r["status"] == "미처리"}
+        def _batch_pick_new(folder: str, query: str, status: str, sel):
+            # 목록을 직접 다시 읽는다 — 탭을 연 직후 목록이 아직 불러와지는 중에 누르면 화면이 가진
+            # batch_rows 는 빈 목록이라 아무것도 고르지 못했다(파일 534개는 첫 로딩이 몇 분)
+            note, _, rows, sel, _ = _batch_load(folder, query, status, sel)
+            keep = set(sel) | {r["name"] for r in _batch_visible(rows, query, status) if r["status"] == "미처리"}
             sel = [r["name"] for r in rows if r["name"] in keep]
-            return _batch_shown(rows, query, status, sel), sel, _batch_sel_html(rows, sel)
+            return note, _batch_shown(rows, query, status, sel), rows, sel, _batch_sel_html(rows, sel)
 
         def _batch_set_dir(folder: str, query: str, status: str):
             folder = (folder or "").strip()
@@ -2584,8 +2587,11 @@ def build_ui() -> gr.Blocks:
 
         batch_load_in = [batch_dir, batch_search, batch_filter, batch_sel]
         batch_load_out = [batch_note, batch_list, batch_rows, batch_sel, batch_sel_note]
-        batch_tab.select(fn=_batch_load, inputs=batch_load_in, outputs=batch_load_out)
-        batch_refresh_btn.click(fn=_batch_load, inputs=batch_load_in, outputs=batch_load_out)
+        # 같은 줄(concurrency_id) — 목록 불러오기가 끝난 뒤에 '미처리 모두 선택'이 돈다.
+        # 나중에 끝난 불러오기가 방금 고른 것을 예전 선택으로 덮어쓰지 않게
+        batch_tab.select(fn=_batch_load, inputs=batch_load_in, outputs=batch_load_out, concurrency_id="batch_list")
+        batch_refresh_btn.click(fn=_batch_load, inputs=batch_load_in, outputs=batch_load_out,
+                                concurrency_id="batch_list")
         batch_dir_io = {"inputs": [batch_dir, batch_search, batch_filter], "outputs": [batch_dir, *batch_load_out]}
         batch_dir.submit(fn=_batch_set_dir, **batch_dir_io)
         batch_dir_btn.click(fn=_batch_pick_dir, **batch_dir_io)
@@ -2595,8 +2601,8 @@ def build_ui() -> gr.Blocks:
                trigger_mode="always_last")
         batch_list.select(fn=_batch_pick, inputs=[batch_rows, batch_sel], outputs=[batch_sel, batch_sel_note],
                           trigger_mode="multiple")   # 클릭마다 차례로 — 하나도 버리지 않는다
-        batch_pick_btn.click(fn=_batch_pick_new, inputs=[batch_rows, batch_search, batch_filter, batch_sel],
-                             outputs=[batch_list, batch_sel, batch_sel_note])
+        batch_pick_btn.click(fn=_batch_pick_new, inputs=batch_load_in, outputs=batch_load_out,
+                             concurrency_id="batch_list")
         batch_none_btn.click(fn=lambda rows: (gr.update(value=[]), [], _batch_sel_html(rows, [])),
                              inputs=[batch_rows], outputs=[batch_list, batch_sel, batch_sel_note])
 
