@@ -58,3 +58,20 @@ def test_continuation_after_pagebreak_still_glued(nxt):
 def test_item_after_pagebreak_not_glued(item):
     out = text_cleaner.post_process_pagebreaks(f"첫째 항목 설명이 이어지는 줄\n{text_cleaner.PAGEBREAK}\n{item}")
     assert item in out.splitlines()
+
+
+@pytest.mark.skipif(not __import__("core.spacing", fromlist=["x"]).is_available(), reason="kiwipiepy 미설치")
+@pytest.mark.parametrize("before, after, joined", [
+    ("지극히 훌륭한전", "략일 수도 있겠지만", "훌륭한전략일"),      # 마이클포터_경쟁전략 3594쪽 경계
+    ("역기능을 불러오", "는가? 그렇다면", "불러오는가"),
+    ("분석 도구로", "서의 전략 집단도", "도구로서의"),
+])
+def test_word_split_at_pagebreak_is_joined(before, after, joined):
+    out = text_cleaner.post_process_pagebreaks(f"{before}\n{text_cleaner.PAGEBREAK}\n{after}")
+    assert joined in out
+
+
+@pytest.mark.parametrize("before, after", [("기업의", "노력은 실패한다"), ("산업", "구조는 바뀐다"), ("시장", "점유율을 높인다")])
+def test_real_word_boundary_at_pagebreak_keeps_space(before, after):
+    out = text_cleaner.post_process_pagebreaks(f"그 결과 {before}\n{text_cleaner.PAGEBREAK}\n{after}")
+    assert f"{before} {after.split()[0]}" in out

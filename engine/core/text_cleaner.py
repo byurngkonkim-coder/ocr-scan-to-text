@@ -416,7 +416,11 @@ def _glue(before: str, after: str) -> str:
         # 2. 뒤 어절 전체가 조사인 경우 -> 결합 ('결정'+'을')
         if re.sub(r'[^가-힣]+$', '', after) in _JOSA_WORDS:
             return ""
-    # 3. 그 외에는 일반적인 단어 경계로 보고 띄어씀
+        # 3. 한 낱말이 갈라진 것('훌륭한전'+'략일', '도구로'+'서의') — Kiwi 점수로 판정
+        from core import spacing
+        if spacing.is_split_word(re.sub(r'^[^가-힣]+', '', before), re.sub(r'[^가-힣]+$', '', after)):
+            return ""
+    # 4. 그 외에는 일반적인 단어 경계로 보고 띄어씀
     return " "
 
 

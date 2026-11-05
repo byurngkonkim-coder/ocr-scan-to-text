@@ -77,6 +77,22 @@ def _merge(orig: str, spaced: str) -> tuple[str, int]:
     return "".join(out), len(keep)
 
 
+_JOIN_MARGIN = 3.0
+
+
+def is_split_word(before: str, after: str) -> bool:
+    """줄·쪽 경계에서 끊긴 두 어절이 한 낱말인가 — 붙인 꼴의 Kiwi 점수가 띄운 꼴보다 확실히 높으면.
+    실측(마이클포터_경쟁전략, 2026-11-06): '훌륭한전'+'략일' +19, '도구로'+'서의' +13, '불러오'+'는가' +5,
+    바른 경계('기업의'+'노력은'·'시장'+'점유율을')는 0."""
+    if not (before and after and is_available()):
+        return False
+    with _lock:
+        k = _get()
+        joined = k.analyze(before + after)[0][1]
+        spaced = k.analyze(before + " " + after)[0][1]
+    return joined - spaced >= _JOIN_MARGIN
+
+
 def fix_spacing(text: str) -> tuple[str, int]:
     """붙은 한글 덩어리가 있는 줄만 Kiwi 로 띄운다. (본문, 넣은 띄어쓰기 수)"""
     if not text or not is_available():

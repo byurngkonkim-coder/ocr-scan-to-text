@@ -60,6 +60,41 @@ def _candidates(line: str, tokens) -> list[tuple[str, str]]:
     return out
 
 
+_ANCHOR_MIN = 3     # 이만큼 나온 고유명사(NNP)를 기준 표기로 본다
+_VARIANT_MAX = 2    # 이만큼 이하로 나온 낱말만 그 변형 후보
+
+
+def _jamo(ch: str) -> tuple[int, int, int]:
+    s = ord(ch) - 0xAC00
+    return s // 588, (s % 588) // 28, s % 28
+
+
+def _shape_variant(word: str, anchor: str) -> bool:
+    """같은 글자 수, 첫소리·모음은 모두 같고 받침만 2글자 이상 다르다 — '막인클'/'마이클', '폭턴'/'포터'.
+    첫소리·모음까지 허용하면 표본 책 1권에서 후보 140개가 거의 다 다른 낱말이었다('포기'/'포터', '보스'/'포드')."""
+    if len(word) != len(anchor):
+        return False
+    diff = 0
+    for a, b in zip(word, anchor):
+        ja, jb = _jamo(a), _jamo(b)
+        if ja[:2] != jb[:2]:
+            return False
+        diff += ja[2] != jb[2]
+    return diff >= 2
+
+
+def _name_variants(text: str, token_lists) -> list[tuple[str, str]]:
+    """책 안에서 자주 나온 고유명사의 드문 변형 — OCR 이 같은 이름을 몇 군데서만 잘못 읽은 것."""
+    nnp: dict[str, int] = {}
+    for toks in token_lists:
+        for t in toks:
+            if t.tag == "NNP" and len(t.form) >= 2 and re.fullmatch("[가-힣]+", t.form):
+                nnp[t.form] = nnp.get(t.form, 0) + 1
+    anchors = [a for a, c in nnp.items() if c >= _ANCHOR_MIN]
+    heads = {(w[:len(a)], a) for w in set(re.findall("[가-힣]{2,}", text)) for a in anchors}
+    return [(h, a) for h, a in heads if _shape_variant(h, a) and text.count(h) <= _VARIANT_MAX]
+
+
 def find(text: str, user_dict: dict[str, str] | None = None) -> list[dict]:
     """[{wrong, suggestion, count, context}] — 많이 나온 것부터. 본문은 바꾸지 않는다."""
     if not text or not spacing.is_available():
@@ -73,14 +108,14 @@ def find(text: str, user_dict: dict[str, str] | None = None) -> list[dict]:
     with _lock:   # 일괄 처리 작업들이 의심 목록용 Kiwi 하나를 같이 쓴다
         token_lists = list(_get().tokenize(lines, typos=_MODE))
     seen: dict[tuple[str, str], dict] = {}
-    for line, toks in zip(lines, token_lists):
-        for wrong, sugg in _candidates(line, toks):
-            if wrong in user_dict or (wrong, sugg) in seen:
-                continue
-            i = text.find(wrong)
-            ctx = text[max(0, i - _CTX):i + len(wrong) + _CTX].replace("\n", " ")
-            seen[(wrong, sugg)] = {"wrong": wrong, "suggestion": sugg,
-                                   "count": text.count(wrong), "context": ctx}
+    cands = [c for line, toks in zip(lines, token_lists) for c in _candidates(line, toks)]
+    for wrong, sugg in cands + _name_variants(text, token_lists):
+        if wrong in user_dict or (wrong, sugg) in seen:
+            continue
+        i = text.find(wrong)
+        ctx = text[max(0, i - _CTX):i + len(wrong) + _CTX].replace("\n", " ")
+        seen[(wrong, sugg)] = {"wrong": wrong, "suggestion": sugg,
+                               "count": text.count(wrong), "context": ctx}
     return sorted(seen.values(), key=lambda r: -r["count"])
 
 

@@ -476,17 +476,23 @@ _NAME_STAMP_RE = re.compile(r'^\d{8}_\d{6}_')                     # 02_결과 �
 _NAME_TAIL_RE = re.compile(r'^(?:\d{8}|원문|미완|OCR중|정제중|정제완료|기울기 보정)$')   # 파일명 끝의 날짜·상태 칸
 
 
-def _book_name(file_name: str) -> tuple[str, str]:
-    """파일명 '책제목_저자' → (책 제목, 저자). 끝의 날짜·상태 칸은 떼고, 칸이 하나면 저자는 ''."""
+def _book_name(file_name: str, front: str = "") -> tuple[str, str]:
+    """파일명 '책제목_저자' → (책 제목, 저자). 끝의 날짜·상태 칸은 떼고, 칸이 하나면 저자는 ''.
+    front(책 앞쪽 글)에 첫 칸이 '○○ 지음'·'지은이 ○○' 로 나오면 '저자_책제목' 파일명으로 보고 바꾼다
+    (마이클포터_경쟁전략 → 저자: 경쟁전략 으로 나왔다, 2026-11-06)."""
     parts = _NAME_STAMP_RE.sub("", Path(file_name).stem).split("_")
     while len(parts) > 1 and _NAME_TAIL_RE.match(parts[-1].strip()):
         parts.pop()
+    if len(parts) == 2 and front:
+        flat, first = re.sub(r'\s+', '', front), re.sub(r'\s+', '', parts[0])
+        if first and (first + "지음" in flat or "지은이" + first in flat):
+            return parts[1], parts[0]
     return (" ".join(parts[:-1]), parts[-1]) if len(parts) > 1 else (parts[0], "")
 
 
 def _doc_header(info: dict, note: str | None) -> list[str]:
     """맨 앞 문서 정보 줄(기호 없이) — NotebookLM 이 출처·쪽 표지 뜻을 알게. 지어낸 내용은 넣지 않는다."""
-    title, author = _book_name(info["name"])
+    title, author = _book_name(info["name"], info.get("front", ""))
     pages = f" · PDF {info['pages']}쪽" if info.get("pages") else ""
     return ["스캔본 OCR 텍스트 전문(요약·생성 문장 없음)",
             f"책: {title}" + (f" · 저자: {author}" if author else "") + " (파일명 기준 추정)",
@@ -518,7 +524,7 @@ def _structured_texts(text: str | None, crep: dict | None, out_fmt: OutputFormat
     else:
         md = txt = text
     if info:
-        head = _doc_header(info, note)
+        head = _doc_header({**info, "front": (text or "")[:5000]}, note)
         md = "\n".join([f"> **문서 정보** — {head[0]}"] + [f"> - {l}" for l in head[1:]]) + "\n\n" + md
         txt = "\n".join([f"문서 정보 — {head[0]}"] + head[1:]) + "\n\n" + txt
     return (md if out_fmt == OutputFormat.MD else txt), md

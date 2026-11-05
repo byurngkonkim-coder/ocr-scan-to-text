@@ -47,7 +47,36 @@ def strip_subtitles(texts: list[str]) -> list[str]:
 
 
 _NUM_ONLY_RE = re.compile(r'^[\s·.…‥\-/]*(\d{1,3})\s*$')
-_LABEL_ONLY_RE = re.compile(r'^\d{1,2}\s*[.)]$')
+_LABEL_ONLY_RE = re.compile(r'^(?:\d{1,2}\s*[.)]|(?:제\s*)?\d{1,2}\s*[장부])$')
+# 한 줄에 여러 항목이 이어진 차례('결정요인39|산업구조 분석과 경쟁전략 74 |…설정 77 2장', '중심점177정보와…179',
+# 마이클포터_경쟁전략 실측) — 제목 글자 바로 뒤(띄어쓰기 한 칸까지)의 1~3자리 수가 쪽번호 후보
+_INLINE_NO_RE = re.compile(r'(?<=[가-힣A-Za-z?!)」”’])\s?(\d{1,3})(?![\d.,:)~\-])')
+_NOT_PAGE_AFTER_RE = re.compile(r'\s*[장부절편권](?![가-힣])|(?:가지|개|세기|년|월|일|차|명|번째|위|배|%)')
+_NOT_PAGE_BEFORE_RE = re.compile(r'(?:part|chapter|step|no|제)\s?$', re.I)
+_TRAIL_LABEL_RE = re.compile(r'^(.*?\S)\s+((?:제\s*)?\d{1,2}\s*[장부])$')
+
+
+def split_toc_line(line: str) -> list[str]:
+    """차례 한 줄 → 항목 줄들. '|' 와 제목 뒤 쪽번호에서 끊고, 끝에 붙은 다음 장·부 번호표('77 2장')는 떼어 둔다.
+    쪽번호는 줄 안에서 커지기만 한다 — '분석의 4가지 요소 101' 의 4 는 쪽번호가 아니다.
+    수 바로 뒤에 한글이 붙은 것('중심점177정보와')은 앞에 쪽번호를 이미 읽었을 때만 쪽번호로 본다."""
+    out: list[str] = []
+    last = 0
+    for piece in line.split("|"):
+        pos = 0
+        for m in _INLINE_NO_RE.finditer(piece):
+            n, after = int(m.group(1)), piece[m.end():]
+            if (n < last or _NOT_PAGE_AFTER_RE.match(after) or _NOT_PAGE_BEFORE_RE.search(piece[:m.start(1)])
+                    or (re.match(r'[가-힣A-Za-z]', after) and not last)):
+                continue
+            out.append(piece[pos:m.end(1)].strip())
+            pos, last = m.end(1), n
+        out.append(piece[pos:].strip())
+    rows: list[str] = []
+    for r in out:
+        m = _TRAIL_LABEL_RE.match(r)
+        rows += [m.group(1), m.group(2)] if m and re.search(r'\d\s*$', m.group(1)) else [r]
+    return [r for r in rows if r]
 _PLACEHOLDER_RE = re.compile(r'^\[[^\]]*\]$|^[─━\-=\s]*비텍스트\s*영역')
 _FULLWIDTH_PAREN = str.maketrans("（）", "()")     # 텍스트층 PDF 의 전각 괄호('（금요일 저녁）-53')
 
@@ -55,7 +84,8 @@ _FULLWIDTH_PAREN = str.maketrans("（）", "()")     # 텍스트층 PDF 의 전�
 def rows_from_text(page: str) -> list[tuple[str, float]]:
     """쪽 글의 줄 → 차례 행. OCR 이 쪽번호를 따로 읽어 제목 다음 줄('1.경영은 기업경영이다' / '32')로 오면
     앞 줄에 붙인다(앞 줄에 이미 번호가 있으면 다음 줄 앞의 번호로 본다)."""
-    lines = [l.strip().translate(_FULLWIDTH_PAREN) for l in page.split("\n") if l.strip()]
+    lines = [s for l in page.split("\n") if l.strip()
+             for s in split_toc_line(l.strip().translate(_FULLWIDTH_PAREN))]
     out: list[str] = []
     pending = None
     label = ""
@@ -169,7 +199,7 @@ def extract_toc_rows(rows_by_page: list[list[tuple[str, float]]]) -> tuple[list[
             lv = level_of[k]
             if k <= 1:                # 부·장 — 꼴 없는 항목이 이 아래에 든다
                 container = lv
-        elif bullet or _OUTER_MATTER_RE.match(title.replace(" ", "")):
+        elif bullet or _OUTER_MATTER_RE.match(title.replace(" ", "")) or _OUTER_MATTER_RE.match(title.split()[0]):
             lv = 1                    # 앞뒤 부속('·역자의 말'·'·감사의 말'·'찾아보기')은 장 밖
             container = 0
         else:

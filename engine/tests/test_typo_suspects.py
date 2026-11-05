@@ -43,3 +43,13 @@ def test_save_writes_tsv_under_results_subfolder(tmp_path):
 def test_suspects_use_own_kiwi_not_spacing_one():
     # 같은 Kiwi 로 space() 뒤 tokenize(typos=) 를 부르면 프로세스가 죽는다(kiwipiepy 0.24 실측)
     assert typo_suspects._get() is not spacing._get()
+
+
+def test_rare_spelling_of_frequent_proper_noun_is_listed():
+    """같은 책에서 많이 나온 고유명사와 받침·모양만 다른 드문 낱말 — '막인클 폭턴'(2회) vs '마이클 포터'(16회),
+    마이클포터_경쟁전략 실측(2026-11-06). 본문은 바꾸지 않는다."""
+    text = "\n".join(["마이클 포터 교수는 경쟁전략을 말했다."] * 5 + ["막인클 폭턴의 경쟁전략", "포기하지 않는다"])
+    pairs = {(r["wrong"], r["suggestion"]) for r in typo_suspects.find(text, user_dict={})}
+    assert ("막인클", "마이클") in pairs
+    assert ("폭턴", "포터") in pairs
+    assert not any(w.startswith("포기") for w, _ in pairs)      # 모음이 다르면 다른 낱말

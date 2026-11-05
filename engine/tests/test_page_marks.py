@@ -94,6 +94,15 @@ def test_book_name_from_filename():
     assert ocr_gradio._book_name("GameTheory.pdf") == ("GameTheory", "")
 
 
+def test_book_name_author_first_when_front_text_says_so():
+    """'저자_책제목' 파일명 — 앞쪽 글에 '마이클 포터 지음' 이 있으면 순서를 바꾼다(마이클포터_경쟁전략 실측)."""
+    import ocr_gradio
+    front = "경쟁전략\nCOMPETITIVE STRATEGY 마이클 포터 지음 조동성 옮김"
+    assert ocr_gradio._book_name("20261106_044132_마이클포터_경쟁전략.pdf", front) == ("경쟁전략", "마이클포터")
+    # 앞쪽 글이 파일명 순서와 맞으면 그대로
+    assert ocr_gradio._book_name("NextSociety_피터드러커.pdf", "피터 드러커 지음") == ("NextSociety", "피터드러커")
+
+
 def test_structured_texts_doc_header_md_and_txt():
     """맨 앞 문서 정보 — 책·저자(파일명 기준 추정)·원본 파일·쪽 수·처리일·장절 결과·쪽 표지 뜻. MD 는 인용 블록,
     TXT 는 같은 줄에서 기호만 뺀다. 본문(차례·쪽 표지)은 그 뒤에 그대로."""

@@ -3,6 +3,7 @@
 toc_headings.py 는 MyOCR(engine/toc_headings.py)와 바이트 그대로 같은 파일이다. 모듈 자체 단위 테스트는
 MyOCR tests/test_book_layout.py 에 있고, 여기서는 01 정제 경로에 붙인 부분을 본다.
 """
+import re
 import sys
 from pathlib import Path
 
@@ -285,3 +286,35 @@ def test_rematch_headings_respaces_titles_and_list():
                                         {"found": 1, "inferred": 0, "missing": []}, respace=True)
     assert entries[0]["title"] == "03 이제 세일즈를 해 볼까"
     assert "# 03 이제 세일즈를 해 볼까" in out.split("\n") and "이제세일즈" not in out
+
+
+# ── 한 줄에 여러 항목이 '|'·붙은 쪽번호로 이어진 차례(마이클포터_경쟁전략 원문 사본 11~14쪽, 2026-11-06) ──
+_PORTER_TOC = [
+    "차례\n옮긴이의글경쟁에서이기기위한 변치않는 원칙5 개정판을내며|지금, 경쟁전략이여전히중요한이유12 "
+    "머리말보다진일보한경영전략을위하여21 들어가며산업과경쟁기업을포괄적으로분석하는법25 1부\n"
+    "일반적분석기법\n1장\n산업구조분석37\n"
+    "경쟁강도의 구조적 결정요인39|산업구조 분석과 경쟁전략 74 |산업구조 분석과 산업의 범위 설정 77 2장\n"
+    "본원적 경쟁전략80\n3가지본원적전략81|어중간한상태90|3가지본원적전략의 위험부담94\n3장\n"
+    "경쟁기업 분석의 체계98\n경쟁기업 분석의 4가지 요소 101|4가지 조성요인의 통합-경쟁기업의대응수준125|"
+    "경쟁기업 분석과산업 예측130|경쟁기업 정보관리 시스템의 필요성 131 4장\n시장신호135",
+    "5장\n경쟁적 조치152\n산업의 불안정성-경쟁전의 유발가능성154|경쟁적조치 157|결의표명170 |중심점177"
+    "정보와기밀유지의문제점179\n6장\n구매자와 공급자에대한 전략180 구매자선택180|구매전략200",
+]
+
+
+def test_toc_line_with_bars_and_glued_page_numbers_splits_into_entries():
+    entries, _ = toc_headings.extract_toc_text(_PORTER_TOC + ["본문"] * 30)
+    titles = [e["title"] for e in entries]
+    assert "1부 일반적분석기법" in titles
+    assert "1장 산업구조분석" in titles
+    assert "경쟁강도의 구조적 결정요인" in titles
+    assert "산업구조 분석과 산업의 범위 설정" in titles
+    assert "2장 본원적 경쟁전략" in titles
+    assert "경쟁기업 분석의 4가지 요소" in titles          # '4가지' 는 쪽번호가 아니다
+    assert "중심점" in titles and "정보와기밀유지의문제점" in titles
+    assert "구매자선택" in titles
+    assert not any("|" in t for t in titles)
+    assert not any(re.search(r"\d{2,3}\s*\S", t) for t in titles if not re.match(r"\d+[장부]", t))
+    by = {e["title"]: e for e in entries}
+    assert by["1부 일반적분석기법"]["level"] < by["1장 산업구조분석"]["level"] < by["경쟁강도의 구조적 결정요인"]["level"]
+    assert by["경쟁강도의 구조적 결정요인"]["page"] == 39
