@@ -34,7 +34,28 @@ def test_candidate_differs_in_exactly_one_letter_and_is_hangul_only():
     for w, s, _ in ocr_typos.candidates(["모두 같은 이야기를 하면 혼들린다.",
                                          "Competitio 스식n혔 경쟁", "사라지지 않을 것이다. ,스 헤라클레스도"]):
         assert sum(x != y for x, y in zip(w, s)) == 1
-        assert w.isalpha() and all("가" <= c <= "힣" for c in w)
+        assert w.strip() == w and all("가" <= c <= "힣" or c == " " for c in w)
+
+
+@pytest.mark.parametrize("line, pair", [   # ㅏ/ㅣ — 텍스트 레이어 PDF 3권(2026-11-06) 실측
+    ("상실 앞에서, 어찌 분노히지 않을 수 있으랴.", ("노히", "노하")),
+    ("계속 모르고 살이가는 자가 진정한 행운아", ("살이", "살아")),
+    ("유일한 방법은 남들과 디르게 하는 것이다", ("디르", "다르")),
+])
+def test_finds_thin_stroke_a_i_confusions(line, pair):
+    assert pair in _pairs(line)
+
+
+def test_wrong_word_appears_only_where_the_error_is():
+    # 사용자 사전은 모든 책에 글자 그대로 치환한다 — 2자 조각 '았을'(받았을)·'리고'(그리고)를 내면
+    # 등록 순간 바른 낱말이 망가진다. 틀린 말은 책 안에서 오류 자리에만 나와야 한다
+    lines = ["저는 질문을 받았을 때 답을 모르면 모른다고 합니다.",
+             "그 사람을 행복하게 해 줄 수 았을까?"]
+    text = "\n".join(lines)
+    rows = ocr_typos.candidates(lines)
+    assert any("있을" in s for _, s, _ in rows)
+    for w, _, _ in rows:
+        assert text.count(w) == 1 and "받았을" not in w
 
 
 @pytest.mark.parametrize("line", ["특허 기간이 지나버리는 경우","궁금한 것을 참는 사람",
@@ -68,3 +89,23 @@ def test_ocr_candidates_use_own_kiwi():
 def test_registered_ocr_typo_is_not_listed():
     rows = typo_suspects.find("두려움과 훙분이 교차한다", user_dict={"훙분": "흥분"})
     assert all(r["wrong"] != "훙분" for r in rows)
+
+
+# ── 2단계: 조사 계열 자동 반영(사용자 결정 2026-11-06) ──
+def test_auto_fix_changes_only_josa_confusions():
+    src = "성공의 비밀올 알 수 있다\n구매자에게 구메하고 소유하는 기쁨\n보이는 것듈 해결하리란 믿음"
+    new, n = ocr_typos.auto_fix(src)
+    assert "비밀을" in new and "것들" in new
+    assert "구메하고" in new          # 조사 계열이 아닌 짝은 목록만 — 본문은 그대로
+    assert n == 2 and len(new) == len(src) and new.count("\n") == src.count("\n")
+
+
+@pytest.mark.parametrize("line", ["내일 친구가 올 거야.", "올해는 비가 많이 올 것 같다.", "올바른 길을 가라.",
+                                  "봄이 온 줄 몰랐다.", "온 힘을 다해 노력해 보아도", "훨씬 나올 수 있다"])
+def test_auto_fix_keeps_correct_ol_on(line):
+    assert ocr_typos.auto_fix(line) == (line, 0)
+
+
+def test_auto_fix_is_idempotent():
+    once, _ = ocr_typos.auto_fix("온 힘올 다해 노력해 보아도 마옴대로 되지 않는다")
+    assert ocr_typos.auto_fix(once) == (once, 0)

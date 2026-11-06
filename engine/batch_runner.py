@@ -226,6 +226,7 @@ def _run() -> None:
                 else:   # 정제 강등 안내만 남긴다 — '완료'만 보이면 정제가 안 된 것을 모른다(2026-10-13)
                     job.detail = next((ln.strip(" ⚠️") for ln in str(last[1]).splitlines()
                                        if "문장 정제 미적용" in ln), "")
+                    _auto_fix(job)        # 조사 계열 OCR 혼동 — 의심 목록보다 먼저(고친 것은 목록에 안 남게)
                     _save_suspects(job)   # '완료' 전에 — 완료로 보이는데 목록이 아직 없는 틈을 없앤다
                     _note_review(job)
                 job.state = "완료" if job.result else "실패"
@@ -234,12 +235,36 @@ def _run() -> None:
         job.ended = time.time()
 
 
+def _auto_fix(job: Job) -> None:
+    """결과의 조사 계열 OCR 혼동(힘올→힘을)만 본문에 바로 고친다 — ocr_typos.AUTO_FIX(사용자 결정 2026-11-06).
+    한 글자를 한 글자로 바꾸므로 글자 수가 그대로여야 한다. 아니면 쓰지 않는다. 실패해도 작업은 '완료'."""
+    import os
+    from core import ocr_typos, typo_suspects
+    path = Path(job.result)
+    if path.suffix.lower() not in (".txt", ".md") or not path.is_file():
+        return
+    try:
+        src = path.read_text(encoding="utf-8")
+        with typo_suspects._lock:
+            new, n = ocr_typos.auto_fix(src)
+        if not n or len(new) != len(src):
+            return
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(new, encoding="utf-8")
+        os.replace(tmp, path)
+    except Exception as e:
+        job.detail = " · ".join(filter(None, [job.detail, f"조사 자동 교정 실패: {type(e).__name__}"]))
+        return
+    job.detail = " · ".join(filter(None, [job.detail, f"조사 자동 교정 {n}곳"]))
+
+
 def _save_suspects(job: Job) -> None:
     """결과 txt 의 의심 목록(Kiwi 오타 후보)을 02_결과/_의심목록/ 에 남긴다 — 본문은 바꾸지 않는다.
     목록을 못 만들어도 결과는 이미 저장됐으므로 작업은 '완료' 그대로 둔다."""
     from core import typo_suspects
     path = Path(job.result)
-    if path.suffix.lower() != ".txt" or not path.is_file():
+    # .md 도 — 텍스트 레이어 PDF 결과가 .md 로 나와 의심 목록이 빠졌다(2026-11-06 3권). 목록은 읽기만 한다
+    if path.suffix.lower() not in (".txt", ".md") or not path.is_file():
         return
     try:
         _, n = typo_suspects.save(path)
