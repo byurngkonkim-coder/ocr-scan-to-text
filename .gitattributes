@@ -3,3 +3,7 @@
 *.bat text eol=crlf
 *.cmd text eol=crlf
 *.ps1 text eol=crlf
+
+# User typo dictionary is edited on two PCs. Keep both sides' added lines on
+# merge instead of stopping with a conflict (duplicates collapse on load).
+engine/user_typos.tsv merge=union
