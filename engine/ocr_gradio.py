@@ -3138,7 +3138,19 @@ def _history_choices() -> list[tuple[str, str]]:
 # 실행
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _port_in_use(port: int = 7860) -> bool:
+    import socket
+    with socket.socket() as s:
+        s.settimeout(1)
+        return s.connect_ex(("127.0.0.1", port)) == 0
+
+
 def main():
+    # 이미 떠 있는 서버가 있으면 새로 띄우지 않는다 — 띄우면 launch 에서 포트 충돌로 죽으면서
+    # 아래 ocr_server.pid 를 죽은 번호로 덮어써, STOP/START 가 살아 있는 서버를 못 알아봤다(2026-11-06)
+    if _port_in_use():
+        print("이미 http://localhost:7860 에서 서버가 실행 중입니다 — 새로 띄우지 않습니다.")
+        return
     demo = build_ui()
     print("\n✅ OCR 웹 UI 시작 (로컬 엔진: RapidOCR PP-OCRv5 한글)")
     print("   브라우저: http://localhost:7860\n")
