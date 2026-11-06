@@ -1,27 +1,25 @@
 @echo off
 title Stop OCR Server
 
-rem Stop only the OCR server: the process on port 7860 whose PID is in engine\ocr_server.pid
-rem (written by the server itself). Any other program on 7860 is left alone.
-set "_mine="
-if exist "%~dp0engine\ocr_server.pid" set /p _mine=<"%~dp0engine\ocr_server.pid"
+rem Stop only the OCR server: processes running ocr_gradio.py. Any other program on 7860 is left alone.
+rem netstat / ocr_server.pid are not used: a running server was not shown as LISTENING and the PID file
+rem was overwritten by a crashed start, so STOP said "not running" (2026-11-06). See engine\ocr_port.ps1.
+rem Relative path only: no non-ASCII path is passed to PowerShell.
+cd /d "%~dp0engine"
 set "_found="
 set "_other="
-for /f "tokens=5" %%p in ('netstat -ano 2^>nul ^| findstr ":7860 " ^| findstr "LISTENING"') do (
-    if "%%p"=="%_mine%" (
-        taskkill /f /pid %%p > nul 2>&1
-        set "_found=1"
-    ) else (
-        set "_other=%%p"
-    )
+powershell -NoProfile -ExecutionPolicy Bypass -File "ocr_port.ps1" stop
+if not errorlevel 1 set "_found=1"
+if not defined _found (
+    powershell -NoProfile -ExecutionPolicy Bypass -File "ocr_port.ps1" check
+    if errorlevel 3 set "_other=1"
 )
 
 echo.
 if defined _found (
     echo  [DONE] OCR server stopped.
 ) else if defined _other (
-    echo  Port 7860 is used by another program ^(PID %_other%^) - not stopped.
-    echo  If it is this OCR server started another way, close it in Task Manager.
+    echo  Port 7860 is used by another program - not stopped.
 ) else (
     echo  OCR server is not running.
 )

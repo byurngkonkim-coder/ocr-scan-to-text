@@ -13,14 +13,16 @@ set "PATH=%PYDIR%;%PATH%"
 rem Server output goes to a log file; without this Python writes it in cp949 and crashes on emoji.
 set "PYTHONUTF8=1"
 
-rem Port 7860 already open: only treat it as this tool when the PID matches ocr_server.pid
-rem (written by the server itself). Another program on 7860 used to be opened as if it were this tool.
-set "_owner="
-for /f "tokens=5" %%p in ('netstat -ano 2^>nul ^| findstr ":7860 " ^| findstr "LISTENING"') do set "_owner=%%p"
-if not defined _owner goto start_new
-set "_mine="
-if exist "ocr_server.pid" set /p _mine=<"ocr_server.pid"
-if not "%_owner%"=="%_mine%" goto port_taken
+rem Port 7860 already answering: open it only when it is this tool (an ocr_gradio.py process).
+rem Another program on 7860 used to be opened as if it were this tool.
+rem netstat is not used: a running server was not shown as LISTENING, so a second server started,
+rem crashed on the port and overwrote ocr_server.pid (2026-11-06). See ocr_port.ps1.
+powershell -NoProfile -ExecutionPolicy Bypass -File "ocr_port.ps1" check
+if errorlevel 3 goto port_taken
+if errorlevel 2 goto already_running
+goto start_new
+
+:already_running
 echo.
 echo  Already running. Opening http://localhost:7860
 start http://localhost:7860
@@ -29,7 +31,7 @@ exit
 
 :port_taken
 echo.
-echo  [ERROR] Port 7860 is used by another program (PID %_owner%), not by this OCR tool.
+echo  [ERROR] Port 7860 is used by another program, not by this OCR tool.
 echo  Close that program, then run START_OCR.bat again.
 echo.
 pause
@@ -77,8 +79,8 @@ if not defined _pid goto server_died
 
 set /a _tries=0
 :wait_loop
-netstat -an 2>nul | findstr ":7860 " | findstr "LISTENING" > nul
-if %errorlevel% == 0 goto open_browser
+powershell -NoProfile -ExecutionPolicy Bypass -File "ocr_port.ps1" up
+if not errorlevel 1 goto open_browser
 rem Process gone before the port opened = crash. Stop waiting and show the error log now.
 tasklist /fi "PID eq %_pid%" /nh 2>nul | find "%_pid%" > nul
 if errorlevel 1 goto server_died

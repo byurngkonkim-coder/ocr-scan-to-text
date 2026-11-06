@@ -13,7 +13,7 @@ import re
 import threading
 from pathlib import Path
 
-from core import spacing
+from core import ocr_typos, spacing
 
 SUBDIR = "_의심목록"
 _MODE = "basic_with_continual_and_lengthening"
@@ -107,8 +107,9 @@ def find(text: str, user_dict: dict[str, str] | None = None) -> list[dict]:
         return []
     with _lock:   # 일괄 처리 작업들이 의심 목록용 Kiwi 하나를 같이 쓴다
         token_lists = list(_get().tokenize(lines, typos=_MODE))
+        ocr = [(w, s) for w, s, _ in ocr_typos.candidates(lines)]   # OCR 글자 모양 혼동(구메·힘올), 별도 Kiwi
     seen: dict[tuple[str, str], dict] = {}
-    cands = [c for line, toks in zip(lines, token_lists) for c in _candidates(line, toks)]
+    cands = [c for line, toks in zip(lines, token_lists) for c in _candidates(line, toks)] + ocr
     for wrong, sugg in cands + _name_variants(text, token_lists):
         if wrong in user_dict or (wrong, sugg) in seen:
             continue

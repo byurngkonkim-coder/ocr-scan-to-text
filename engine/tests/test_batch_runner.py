@@ -55,10 +55,12 @@ def test_files_processed_in_order_and_marked_done(monkeypatch, tmp_path):
     assert br._jobs[0].result == f"{a}.txt"
 
 
-def test_suspect_list_saved_next_to_result(monkeypatch, tmp_path):
-    # 결과 txt 를 저장하면 의심 목록도 02_결과/_의심목록/ 에 남는다(intent 2026-10-17)
+@pytest.mark.parametrize("ext", [".txt", ".md"])
+def test_suspect_list_saved_next_to_result(monkeypatch, tmp_path, ext):
+    # 결과를 저장하면 의심 목록도 02_결과/_의심목록/ 에 남는다(intent 2026-10-17)
+    # .md — 텍스트 레이어 PDF 결과가 .md 로 나와 목록이 빠졌다(2026-11-06)
     from core import typo_suspects
-    result = tmp_path / "책A.txt"
+    result = tmp_path / f"책A{ext}"
     result.write_text("걷모습만 보고", encoding="utf-8")
 
     def process_full(file_obj, *args, progress=None, **kwargs):
@@ -72,6 +74,29 @@ def test_suspect_list_saved_next_to_result(monkeypatch, tmp_path):
     assert saved == [result]
     assert br._jobs[0].state == "완료"
     assert "의심 3곳" in br._jobs[0].detail
+
+
+@pytest.mark.parametrize("ext", [".txt", ".md"])
+def test_josa_confusion_fixed_in_result(monkeypatch, tmp_path, ext):
+    # 조사 계열 OCR 혼동(비밀올→비밀을)은 결과에 바로 고친다 — 의심 목록 전에(사용자 결정 2026-11-06)
+    from core import spacing, typo_suspects
+    if not spacing.is_available():
+        pytest.skip("kiwipiepy 미설치")
+    result = tmp_path / f"책A{ext}"
+    result.write_text("성공의 비밀올 알 수 있다\n내일 친구가 올 거야.", encoding="utf-8")
+
+    def process_full(file_obj, *args, progress=None, **kwargs):
+        yield ("", "완료", "", str(result), None, None)
+
+    seen = []
+    monkeypatch.setattr(ocr_gradio, "process_full", process_full)
+    monkeypatch.setattr(typo_suspects, "save",
+                        lambda p: (seen.append(p.read_text(encoding="utf-8")), (p.parent / "x.tsv", 0))[1])
+    br.submit([tmp_path / "책A.pdf"], ("kor+eng",), {"cleanup": True})
+    _wait_idle()
+    assert result.read_text(encoding="utf-8") == "성공의 비밀을 알 수 있다\n내일 친구가 올 거야."
+    assert seen == [result.read_text(encoding="utf-8")]      # 목록은 고친 본문으로
+    assert "조사 자동 교정 1곳" in br._jobs[0].detail and br._jobs[0].state == "완료"
 
 
 def test_suspect_list_failure_does_not_fail_job(monkeypatch, tmp_path):

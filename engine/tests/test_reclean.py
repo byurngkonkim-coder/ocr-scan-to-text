@@ -25,6 +25,16 @@ def test_applies_dictionaries_and_backs_up(env, tmp_path):
     assert r["backup"].parent.parent == tmp_path / "_백업"
 
 
+@pytest.mark.skipif(not spacing.is_available(), reason="kiwipiepy 미설치")
+def test_josa_ocr_confusion_fixed_automatically(env):
+    # 조사 계열(올→을)만 사전 등록 없이 바로 고친다(ocr_typos.AUTO_FIX, 사용자 결정 2026-11-06)
+    f = env / "책J.txt"
+    f.write_text("성공의 비밀올 알 수 있다\n내일 친구가 올 거야.", encoding="utf-8")
+    [r] = reclean.reclean_files([f])
+    assert f.read_text(encoding="utf-8") == "성공의 비밀을 알 수 있다\n내일 친구가 올 거야."
+    assert r["changed"] and r["typos"] == 1
+
+
 def test_unchanged_file_is_not_rewritten_or_backed_up(env):
     f = env / "책B.txt"
     f.write_text("바른 문장이다.", encoding="utf-8")

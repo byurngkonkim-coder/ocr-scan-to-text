@@ -12,7 +12,7 @@ import re
 import time
 from pathlib import Path
 
-from core import spacing, typo_suspects, user_typos
+from core import ocr_typos, spacing, typo_suspects, user_typos
 
 BACKUP_ROOT = Path(__file__).resolve().parent.parent.parent / "_백업"
 _PARTIAL_RE = re.compile(r"_(?:정제중|OCR중)(?:_\d{8}_\d{6})?$")
@@ -27,10 +27,13 @@ def list_results(results_dir: Path) -> list[Path]:
 
 
 def correct(text: str) -> tuple[str, int, int]:
-    """(교정본, 사용자 사전으로 바꾼 곳, 넣은 띄어쓰기)."""
+    """(교정본, 사용자 사전·조사 자동 교정으로 바꾼 곳, 넣은 띄어쓰기)."""
     from core.korean_corrector import fix_spelling_and_typos
     text = fix_spelling_and_typos(text)
     text, n_typo = user_typos.apply(text)
+    with typo_suspects._lock:   # 조사 계열 OCR 혼동(힘올→힘을)만 자동 — ocr_typos.AUTO_FIX
+        text, n_josa = ocr_typos.auto_fix(text)
+    n_typo += n_josa
     # R-17 은 한 번에 끝나지 않는다 — 띄운 뒤 남은 5자↑ 조각을 다음 번에 또 띄운다.
     # 02_결과 25권 실측: 1회 107,216곳 → 2회 16곳 → 3회 0곳. 누를 때마다 바뀌지 않게 멈출 때까지 돈다.
     n_space = 0
