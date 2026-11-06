@@ -271,6 +271,15 @@ def get_parallel_workers() -> int:
         return 4
 
 
+def get_page_timeout_s() -> float:
+    """한 쪽 결과를 기다리는 최대 시간(초). 넘기면 그 쪽은 비우고 다음 쪽으로. 기본 1200(20분) —
+    Ollama 쪽 시간 제한(900초)보다 길게. 결과 대기에 제한이 없어 책 전체가 멈췄다(2026-11-02 분석의힘 261쪽)."""
+    try:
+        return max(1.0, float(load().get("page_timeout_s", 1200)))
+    except (TypeError, ValueError):
+        return 1200.0
+
+
 def get_batch_workers() -> int:
     """② 일괄 처리 동시 파일 수. 1~4, 기본 2. 동시 Gemini 호출 = 이 값 × parallel_workers."""
     try:

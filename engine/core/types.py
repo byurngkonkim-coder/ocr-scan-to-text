@@ -11,6 +11,7 @@ class OCREngine(str, Enum):
     GEMINI = "gemini"
     OLLAMA = "ollama"          # 로컬 Ollama 비전 모델 (core.ollama_vision)
     PDF_TEXT = "pdf_text"      # 디지털 PDF 텍스트 레이어 직접 추출(OCR·API 미사용)
+    RESTORED = "restored"      # 끊긴 실행의 OCR 복구본(_OCR중.txt)에서 되살린 쪽 — 본문만 있음
 
 
 class OutputFormat(str, Enum):

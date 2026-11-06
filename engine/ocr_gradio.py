@@ -1,7 +1,9 @@
 """Gradio 웹 UI — OCR 스캔파일 텍스트추출 도구 (localhost:7860)"""
 from __future__ import annotations
 import contextvars
+import glob
 import html
+import json
 import os
 import re
 import sys
@@ -10,7 +12,7 @@ import tempfile
 import threading
 import unicodedata
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from pathlib import Path
 
 try:
@@ -319,6 +321,10 @@ class _CleanCheckpoint:
                     self.path = RESULTS_DIR / f"{stem}_{suffix}_{ts}_{k}.{self.ext}"
                     k += 1
         self._fh  = open(self.path, "x", encoding="utf-8")
+        _CleanCheckpoint.live.add(self.path)
+
+    # 지금 쓰고 있는 복구본 — 같은 책의 다른 처리가 이어받지 않게(_resume_pages)
+    live: set[Path] = set()
 
     def append(self, chunk: str) -> None:
         self._fh.write(chunk + "\n\n")
@@ -335,6 +341,7 @@ class _CleanCheckpoint:
         return final
 
     def close(self) -> None:
+        _CleanCheckpoint.live.discard(self.path)
         try:
             self._fh.close()
         except Exception:
@@ -786,6 +793,59 @@ def _page_plan(file_path: Path, start_page: int = 1, max_pages: int | None = Non
             yield idx + 1, imgs[idx]
 
     return total, _gen_img()
+
+
+# 복구본 쪽 끝에 붙이는 그림·표 자리표시 한 줄(JSON) — 본문엔 표 자리 표지만 있어, 이게 없으면
+# 이어 붙인 쪽의 표가 통째로 사라졌다(분석의힘 표 8개, 2026-11-02)
+_CKPT_FIG = "⟦그림·표⟧ "
+
+
+def _ckpt_chunk(p: PageResult) -> str:
+    """OCR 복구본에 적는 쪽 하나 — '[페이지 N]' + 본문 (+ 그림·표 자리표시 줄)."""
+    chunk = f"[페이지 {p.page_num}]\n{p.corrected_text}"
+    if p.figures:
+        chunk += "\n" + _CKPT_FIG + json.dumps(p.figures, ensure_ascii=False)
+    return chunk
+
+
+def _resume_pages(stem: str) -> tuple[list[PageResult], Path | None]:
+    """앞 실행이 끊겨 남긴 OCR 복구본(02_결과/{stem}_OCR중*.txt)에서 1쪽부터 이어진 쪽을 되살린다.
+    → (복원 쪽, 쓴 복구본). 복구본이 여럿이면 쪽이 가장 많은 것. 마지막 쪽은 기록 도중 끊겼을 수
+    있어 버리고 다시 읽는다. 본문·그림표 자리표시만 남아 있어 엔진은 RESTORED, 빈 본문은 빈 페이지로.
+    표 내용이 없는 쪽(그림·표 줄을 적기 전의 복구본)에서 멈춘다 — 그 쪽부터 다시 읽는다."""
+    best: list[tuple[int, str]] = []
+    src = None
+    for f in sorted(RESULTS_DIR.glob(f"{glob.escape(stem)}_OCR중*.txt")):
+        if f in _CleanCheckpoint.live:
+            continue
+        try:
+            pages = remake_md.read_raw_pages(f)[0]
+        except (OSError, UnicodeDecodeError):
+            continue
+        # 미리보기 뒤 '계속'(4쪽부터)처럼 1쪽부터가 아닌 복구본은 이어 붙일 수 없다
+        if [n for n, _ in pages] == list(range(1, len(pages) + 1)) and len(pages) > len(best):
+            best, src = pages, f
+    restored: list[PageResult] = []
+    for n, body in best[:-1]:
+        lines = body.split("\n")
+        figs = [json.loads(ln[len(_CKPT_FIG):]) for ln in lines if ln.startswith(_CKPT_FIG)]
+        t = "\n".join(ln for ln in lines if not ln.startswith(_CKPT_FIG)).strip()
+        p = PageResult(page_num=n, raw_text=t, corrected_text=t, engine=OCREngine.RESTORED,
+                       confidence=0.0, figures=figs[0] if figs else [],
+                       is_blank=not t, blank_reason="복원(빈 쪽)" if not t else "")
+        if not set(figure_detector.TABLE_TOKEN_RE.findall(t)) <= {
+                figure_detector.TABLE_TOKEN_RE.match(k).groups() for k in writer._page_tables(p)}:
+            break
+        restored.append(p)
+    return (restored, src) if restored else ([], None)
+
+
+def _failed_page(page_num: int, reason: str) -> tuple[PageResult, list[str]]:
+    """읽지 못한 쪽 — 비워 두고 검토 필요로 남긴다(파일 전체는 계속)."""
+    return (PageResult(page_num=page_num, raw_text="", corrected_text="",
+                       engine=OCREngine.RAPIDOCR, confidence=0.0,
+                       needs_review=True, review_reason=reason),
+            [f"  p.{page_num}: ⚠ {reason} — 이 쪽은 비워 두고 계속"])
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1687,6 +1747,7 @@ def _run_ocr(
         pre_warnings.append(f"⚠ 대용량 파일 ({file_mb:.1f} MB)")
 
     # 페이지 계획 (대용량 PDF는 지연 렌더링 — 전 페이지 일괄 변환/메모리 점유 없음)
+    restored, resume_src = [], None
     if cached_images:
         total = len(cached_images)
 
@@ -1701,8 +1762,14 @@ def _run_ocr(
             "\n".join(pre_warnings) if pre_warnings else "📂 파일을 읽는 중...",
             "", None, gr.update(visible=False), None,
         )
+        # 끊긴 앞 실행의 OCR 복구본이 있으면 읽은 쪽은 건너뛴다 — 유료 Vision 재호출 방지(2026-11-02)
+        restored, resume_src = _resume_pages(file_path.stem) if start_page == 1 else ([], None)
         try:
-            total, pages = _page_plan(file_path, start_page=start_page, notes=plan_notes)
+            total, pages = _page_plan(file_path, start_page=start_page + len(restored), notes=plan_notes)
+            if len(restored) >= total:   # 원본보다 쪽이 많은 복구본 — 이름만 같은 다른 책
+                restored, resume_src = [], None
+                plan_notes.clear()
+                total, pages = _page_plan(file_path, start_page=start_page, notes=plan_notes)
         except Exception as load_err:
             yield (
                 _progress_html(0, 0, "오류", elapsed_str=elapsed()),
@@ -1717,6 +1784,13 @@ def _run_ocr(
     # OCR 원문을 쪽마다 02_결과/{원본명}_OCR중.txt 에 쌓는다 — 중단·크래시에도 이미 읽은
     # 쪽(유료 Vision 포함)이 남는다. 정상 확정 후 지운다. (QA ISSUE-B, 2026-10-03)
     ocr_ckpt = _CleanCheckpoint(file_path.stem, OutputFormat.TXT, suffix="OCR중")
+    if restored:   # 복원 쪽도 이번 복구본에 옮겨 적는다 — 또 끊겨도 한 파일에 다 남게
+        for p in restored:
+            ocr_ckpt.append(_ckpt_chunk(p))
+        result.pages.extend(restored)
+        start_page += len(restored)
+        step_logs.append(f"  ♻ 앞 실행 복구본에서 {len(restored)}쪽 복원 — {start_page}쪽부터 이어서 "
+                         f"({resume_src.name})")
     vision_budget = None if vision_first else _VisionBudget(total)
     def _read(image, page_num):
         try:
@@ -1726,16 +1800,13 @@ def _run_ocr(
                 vision_budget=vision_budget,
             )
         except Exception as page_err:   # 한 쪽의 예외가 파일 전체를 죽이지 않게 — 검토 필요로 남김
-            reason = f"처리 오류: {page_err}"
-            return (PageResult(page_num=page_num, raw_text="", corrected_text="",
-                               engine=OCREngine.RAPIDOCR, confidence=0.0,
-                               needs_review=True, review_reason=reason),
-                    [f"  p.{page_num}: ⚠ {reason} — 이 쪽은 비워 두고 계속"])
+            return _failed_page(page_num, f"처리 오류: {page_err}")
 
     # 쪽 읽기를 parallel_workers 개까지 동시에 보낸다(Vision 1쪽 약 8초 — 대부분 응답 대기).
     # 이미지는 이 스레드에서 차례로 그리고(렌더러는 스레드 안전이 아님), 결과는 쪽 순서대로
     # 저장한다. 동시에 메모리에 있는 쪽 이미지는 최대 workers 장.
     workers = config.get_parallel_workers()
+    page_timeout = config.get_page_timeout_s()
     executor = ThreadPoolExecutor(max_workers=workers)
     inflight: deque = deque()
     render_err = None
@@ -1766,10 +1837,13 @@ def _run_ocr(
             )
             progress((before / total) if total else 0, desc=f"{page_num}/{total}")
 
-            page_result, page_logs = fut.result()
+            try:
+                page_result, page_logs = fut.result(timeout=page_timeout)
+            except FuturesTimeout:   # 응답 없는 쪽 하나가 책 전체를 세우지 않게(2026-11-02)
+                page_result, page_logs = _failed_page(page_num, f"시간 초과({page_timeout:.0f}초 응답 없음)")
             result.pages.append(page_result)
             step_logs.extend(page_logs)
-            ocr_ckpt.append(f"[페이지 {page_num}]\n{page_result.corrected_text}")
+            ocr_ckpt.append(_ckpt_chunk(page_result))
             processed += 1
 
             done_total = start_page - 1 + processed
@@ -1792,6 +1866,7 @@ def _run_ocr(
     finally:
         # 중단(제너레이터 close) 시 아직 안 보낸 쪽은 취소 — 이미 보낸 쪽만 마저 끝난다
         executor.shutdown(wait=False, cancel_futures=True)
+        ocr_ckpt.close()   # 쪽 기록 끝 — 중단돼도 '쓰는 중'에서 빼야 다음 실행이 이어받는다
     if render_err is not None:
         step_logs.append(f"  ⚠ {start_page + processed}쪽 이후를 읽지 못해 중단 — "
                          f"처리한 {processed}쪽만 저장합니다 ({render_err})")
@@ -1912,6 +1987,11 @@ def _run_ocr(
     ocr_ckpt.close()
     if results_path is not None and render_err is None:   # 다 읽고 확정됐을 때만 OCR 복구본을 지운다
         ocr_ckpt.path.unlink(missing_ok=True)
+        if resume_src is not None:          # 이어 받은 앞 실행 복구본도 — 내용은 이번 복구본에 옮겨 적었다
+            try:
+                resume_src.unlink(missing_ok=True)
+            except OSError as e:            # 지우지 못해도 결과는 이미 확정 — 기록까지 마친다
+                step_logs.append(f"  ⚠ 이어받은 복구본을 지우지 못함(손으로 지워도 됩니다): {resume_src.name} ({e})")
 
     # ── storage: 결과 파일 영구 저장 + 이력 기록 ─────────────────────────────
     stored_path   = None
