@@ -106,6 +106,30 @@ def test_auto_fix_keeps_correct_ol_on(line):
     assert ocr_typos.auto_fix(line) == (line, 0)
 
 
+@pytest.mark.parametrize("line", ["사소한 잘못올을 저지르면 안 된다",       # 을을 이 된다
+                                  "이 회사는 c power올 주창했다",           # 을/를 못 가림
+                                  "제공권 —— 올 확보하는 것이 중요하다"])
+def test_auto_fix_skips_doubled_or_non_hangul_left(line):
+    assert ocr_typos.auto_fix(line) == (line, 0)
+
+
+@pytest.mark.parametrize("src, want", [("결국 대학을 졸업히고 취직했다.", "결국 대학을 졸업하고 취직했다."),
+                                       ("남들과 디르게 생각해야 한다.", "남들과 다르게 생각해야 한다.")])
+def test_auto_fix_hi_di(src, want):   # ㅏ/ㅣ 히→하·디→다(사용자 결정 2026-11-06)
+    assert ocr_typos.auto_fix(src) == (want, 1)
+
+
+@pytest.mark.parametrize("line", ["특히 조용히 천천히 걸어라.", "분명히 확실히 말했다.", "히말라야에 오르다.",
+                                  "디지털 시대의 디자인과 오디오, 라디오를 듣는다.", "미디어와 아이디어가 중요하다.",
+                                  "어디로 가는지 모른다."])
+def test_auto_fix_keeps_correct_hi_di(line):
+    assert ocr_typos.auto_fix(line) == (line, 0)
+
+
+def test_auto_fix_looks_through_closing_quotes():
+    assert ocr_typos.auto_fix("“노동신문”올 “인민일보”와 비교했다")[0].startswith("“노동신문”을")
+
+
 def test_auto_fix_is_idempotent():
     once, _ = ocr_typos.auto_fix("온 힘올 다해 노력해 보아도 마옴대로 되지 않는다")
     assert ocr_typos.auto_fix(once) == (once, 0)
