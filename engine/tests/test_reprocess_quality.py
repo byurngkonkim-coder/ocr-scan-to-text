@@ -34,6 +34,16 @@ def test_body_deleted_fails():
     assert not q["ok"] and q["loss"] > 0.03
 
 
+def test_english_body_deleted_fails():
+    # JesusCEO: 영문 책은 한글이 0 이라 '0 → 0' 으로 통과했다 — 영문자가 많으면 영문자로 센다
+    ents = [{"level": 1, "title": "He Said Thank You", "page": 1}, {"level": 1, "title": "He Owned It", "page": 2}]
+    body = "Each of us must answer to someone in the end. " * 20
+    src = f"# He Said Thank You\n\n{body}\n\n# He Owned It\n\n{body}"
+    out = f"# He Said Thank You\n\n# He Owned It\n\n{body}"
+    q = rb.quality(ents, src, out)
+    assert q["script"] == "영문" and not q["ok"] and q["loss"] > 0.03
+
+
 def test_titles_bunched_far_from_their_pages_fail():
     # Alianment정렬 실제 사고(2026-11-07) — 장 제목 10개가 모두 맨 뒤 주석 속 '2장 …_역사적 고찰' 줄에 섰다.
     # 순서는 맞아서 순서 검사로는 못 잡았다. 차례 쪽번호와 본문 속 자리가 크게 어긋나면 불합격.

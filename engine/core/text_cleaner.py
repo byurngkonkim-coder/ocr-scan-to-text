@@ -1198,7 +1198,9 @@ def drop_heading_echo(text: str) -> tuple[str, int]:
             fixed += 1
             continue
         whole = _strip_label(paras[i].lstrip("#").strip())
-        if len(whole) >= 4 and toc_headings._norm_hangul(nxt) == toc_headings._norm_hangul(whole):
+        # 한글만 남겨 견준다 — 영어 제목은 남는 글이 없어 아무 문단이나 같다고 보게 된다(JesusCEO 첫 문단 소실)
+        norm_whole = toc_headings._norm_hangul(whole)
+        if len(norm_whole) >= 4 and toc_headings._norm_hangul(nxt) == norm_whole:
             paras[j] = None      # 번호표를 뗀 제목 전체가 다음 줄에 다시('2부' 줄에 선 제목 아래 '내부 조직 간 …')
             fixed += 1
             continue

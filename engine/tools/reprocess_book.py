@@ -93,10 +93,12 @@ def quality(entries: list[dict], src: str, out: str) -> dict:
     paged = [(k, e["page"]) for e, k in zip(entries, at) if k is not None and e.get("page")]
     last = max((p for _, p in paged), default=0)
     misplaced = sum(1 for k, p in paged if abs(k / len(lines) - p / last) > _PAGE_DRIFT) if last else 0
-    hangul = lambda t: len(re.findall("[가-힣]", remake_md.parse_result(t)[1]))
-    before, after = hangul(src), hangul(out)
+    hangul = lambda t, pat="[가-힣]": len(re.findall(pat, remake_md.parse_result(t)[1]))
+    before, after, script = hangul(src), hangul(out), "한글"
+    if hangul(src, "[A-Za-z]") > before:   # 영문 책 — 한글만 세면 '0 → 0' 이라 문단이 지워져도 몰랐다(JesusCEO 첫 문단 96곳)
+        before, after, script = hangul(src, "[A-Za-z]"), hangul(out, "[A-Za-z]"), "영문"
     loss = (before - after) / before if before else 0.0
-    return {"found": len(ks), "total": len(entries), "order_breaks": breaks, "misplaced": misplaced,
+    return {"found": len(ks), "total": len(entries), "order_breaks": breaks, "misplaced": misplaced, "script": script,
             "missing": [e["title"] for e, k in zip(entries, at) if k is None],
             "hangul_before": before, "hangul_after": after, "loss": round(loss, 4),
             "ok": breaks == 0 and loss <= _LOSS_MAX and misplaced <= max(2, len(paged) * _DRIFT_SHARE)}
@@ -200,7 +202,7 @@ if __name__ == "__main__":
         print(line)
     q = rep["quality"]
     print(f"점검: 제목 {q['found']}/{q['total']} · 순서 어긋남 {q['order_breaks']} · 쪽과 먼 제목 {q['misplaced']} · "
-          f"본문 한글 {q['hangul_before']:,} → {q['hangul_after']:,} ({-q['loss']:+.1%})")
+          f"본문 {q['script']} {q['hangul_before']:,} → {q['hangul_after']:,} ({-q['loss']:+.1%})")
     regress = ratchet(Path(target).stem, q)
     if not q["ok"] or regress:
         print("⚠ 불합격 —", regress or "제목 순서가 차례와 다르거나, 제목이 차례 쪽과 먼 자리에 섰거나, 본문 한글이 3% 넘게 줄었다",

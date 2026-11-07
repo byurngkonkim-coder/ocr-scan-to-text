@@ -50,6 +50,14 @@ def test_whole_title_without_label_repeated_below_dropped():
     assert n == 1 and out == "# 2부 내부 조직 간 전략 정렬\n\n## 3장 재무와 고객 전략의 정렬"
 
 
+def test_english_paragraph_under_english_heading_kept():
+    # 한글만 남기고 견주면 영어 제목·영어 문단이 둘 다 '' 라 같다고 보고 문단을 지웠다(JesusCEO 각 꼭지 첫 문단 96곳)
+    for body in ("[p.24]\nach of us must answer to someone.", "[p.24]\n\nach of us must answer to someone.",
+                 "ach of us must answer to someone."):
+        text = f"## He Kept in Constant Contact with His Boss\n\n{body}\n\n둘째 문단."
+        assert tc.drop_heading_echo(text) == (text, 0), body
+
+
 def test_decoration_glyph_line_under_heading_dropped():
     # 장 표지 장식 '•○•' 이 'o'·'o°' 로 읽힌 줄(HalfTimeShock 7곳) — 글자 없는 한두 자만
     text = "## 2. 갇히는 것도 좋다\n\no\n\n본문.\n\n## 13. 시작, 혹은 끝\n\no°\n\n본문 2."
