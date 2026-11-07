@@ -337,3 +337,13 @@ def test_two_line_title_with_bare_number_label():
     assert "## 07 고객의 경험을 창조하고 관리하는 CEM" in out.split("\n")
     assert tc._strip_label("07 고객의 경험을") == "고객의 경험을"
     assert tc._strip_label("30억 통화 분석") == "30억 통화 분석"   # 단위가 붙은 숫자는 그대로
+
+
+def test_part_section_chapter_opener_not_toc_remnant():
+    # 전쟁론 실측(2026-11-08) — 책 앞쪽의 '제1부' / '제1편 전쟁의 본질' / '제1장 전쟁이란 무엇인가' 는 서로 다른
+    # 제목 3개지만 장 여는 쪽이다. 남은 차례 덩어리는 쪽번호가 붙어 있다 — 쪽번호가 없으면 제목이 많을 때만 차례로 본다
+    e = [{"level": 1, "title": t, "page": None} for t in ("제1부", "제1편 전쟁의 본질", "제1장 전쟁이란 무엇인가")]
+    body = ["머리말 끝 문단이다.", "제1부", "제1편 전쟁의 본질", "제1장 전쟁이란 무엇인가"] \
+        + [f"본문 문단 {i}이다." for i in range(60)]
+    text = "\n\n".join(body)
+    assert tc.drop_toc_remnant(text, e) == (text, 0)

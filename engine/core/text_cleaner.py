@@ -820,6 +820,7 @@ def space_list_numbers(text: str) -> tuple[str, int]:
 
 _TOC_PIECE_RE = re.compile(r'(?<![\d.])(?=\d{1,2}\.\s)')
 _TOC_REMNANT_MIN = 3          # 차례 항목과 같은 문단이 이만큼 이어져야 남은 차례로 본다
+_TOC_REMNANT_NOPAGE = 6       # 쪽번호가 하나도 없는 덩어리는 이만큼 — 부·편·장 여는 쪽(3개)은 차례가 아니다
 _TOC_REMNANT_FRONT = 0.15     # 책 앞쪽(문단 수 기준)에서만
 _TOC_REMNANT_EDGE_RE = re.compile(r'^제\s*\d+\s*[편부장]|차\s?례')
 
@@ -860,8 +861,11 @@ def drop_toc_remnant(text: str, entries: list[dict]) -> tuple[str, int]:
         j = i
         while j < len(kinds) and kinds[j]:
             j += 1
-        # 서로 다른 제목으로 센다 — 장 여는 쪽의 '장 제목 두 번 + 첫 절 제목' 은 차례가 아니다(Helping 2장)
-        if len(set().union(*(k for k in kinds[i:j] if isinstance(k, set)))) >= _TOC_REMNANT_MIN:
+        # 서로 다른 제목으로 센다 — 장 여는 쪽의 '장 제목 두 번 + 첫 절 제목' 은 차례가 아니다(Helping 2장).
+        # 쪽번호(끝 숫자·숫자뿐 문단)가 없으면 제목이 아주 많을 때만 — '제1부'/'제1편 …'/'제1장 …' 여는 쪽(전쟁론)
+        distinct = len(set().union(*(k for k in kinds[i:j] if isinstance(k, set))))
+        paged = any(k == 1 or re.search(r'\d\s*$', paras[x]) for x, k in zip(range(i, j), kinds[i:j]))
+        if distinct >= (_TOC_REMNANT_MIN if paged else _TOC_REMNANT_NOPAGE):
             a, b = i, j      # 앞뒤 '제1편 자 아 편'·'부록1. … 차례' 같은 차례 머리·꼬리 한 문단씩
             if a and len(paras[a - 1]) <= 60 and _TOC_REMNANT_EDGE_RE.search(paras[a - 1]):
                 a -= 1
