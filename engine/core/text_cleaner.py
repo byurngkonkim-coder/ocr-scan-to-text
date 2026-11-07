@@ -1267,7 +1267,8 @@ def drop_subtitle_echo(text: str) -> tuple[str, int]:
                 if _latin_echo(s, lat):
                     lines[k] = None
                 elif e and SequenceMatcher(None, toc_headings._norm_hangul(e.group(1)), sub,
-                                           autojunk=False).ratio() >= _SUB_ECHO_MIN:
+                                           autojunk=False).ratio() >= _SUB_ECHO_MIN \
+                        and _latin_echo(e.group(2), lat):   # 영어도 원제와 닮아야 — 글쓴이 줄('피터 센게Peter Senge')은 둔다
                     lines[k] = s[e.end():] or None
                 else:
                     continue

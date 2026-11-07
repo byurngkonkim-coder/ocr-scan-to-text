@@ -77,6 +77,13 @@ def test_book_info_backref_followed_by_digit_rejected(tmp_path):
     assert rb.read_book_info(p)["subs"] == [("(a)(b)", "\\g<1>42. 제목\\n\\n\\2")]
 
 
+def test_book_info_empty_replacement_allowed(tmp_path):
+    # '정규식 => ' (지우기) — 줄 끝 빈칸이 잘려 ' => ' 를 못 찾고 조용히 무시됐다(MBAInaBox 로고 잡음)
+    p = tmp_path / "책.txt"
+    p.write_text("책: 시리즈\n바꾸기: ^BOX  => \n\n차례:\n머리말 1\n", encoding="utf-8")
+    assert rb.read_book_info(p)["subs"] == [("^BOX ", "")]
+
+
 def test_ratchet_fails_when_found_titles_drop(tmp_path):
     # 21세기지식경영 실제 회귀 48 → 44 를 사람이 표를 대조해서야 찾았다
     base = tmp_path / "base.json"

@@ -44,9 +44,11 @@ def read_book_info(path: Path) -> dict:
         key, val = key.strip(), val.strip()
         if val and key in ("책", "저자", "출처"):
             info[{"책": "book", "저자": "author", "출처": "basis"}[key]] = val
-        elif val and key == "바꾸기" and " => " in val:   # 이 책에만 맞는 고침(정규식 => 바꿀 글, \n 줄바꿈)
-            # 바꿀 글 끝의 띄어쓰기는 살린다('성경의 진리 ' — 뒤 글과 붙지 않게)
-            pat, rep = line.partition(":")[2].lstrip().split(" => ", 1)
+        elif val and key == "바꾸기" and " => " in line + " ":   # 이 책에만 맞는 고침(정규식 => 바꿀 글, \n 줄바꿈)
+            # 바꿀 글 끝의 띄어쓰기는 살린다('성경의 진리 ' — 뒤 글과 붙지 않게). 바꿀 글이 비면 지우기
+            # (줄 끝 '=> ' 의 빈칸이 편집기에서 잘려도 — MBAInaBox 로고 잡음)
+            pat, rep = (line.partition(":")[2].lstrip() + " ").split(" => ", 1)
+            rep = rep[:-1]
             # '\142.' 는 묶음 1 + '42.' 가 아니라 8진수 글자 'b' 가 된다(IDEAHACKS49) — 숫자가 이어지면 \g<1> 로
             if re.search(r'\\\d\d', rep):
                 raise ValueError(f"{path.name} 바꾸기 '{rep}': 묶음 번호 뒤에 숫자가 오면 \\g<1> 꼴로 쓰세요")

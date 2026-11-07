@@ -102,6 +102,14 @@ def test_partial_and_garbled_subtitle_echo_dropped():
     assert tc.drop_subtitle_echo(f"{h}\n\n{echo}\n\n본문.") == (f"{h}\n\n[p.149]\n글 꼴 둠 없는\n\n본문.", 1)
 
 
+def test_author_byline_under_title_author_heading_kept():
+    # '글 제목 _ 글쓴이' 꼴(MBAInaBox) — 글쓴이 줄 '피터 센게Peter Senge' 는 영문 이름이 든 본문 정보라 둔다.
+    # 지우는 것은 제목에 영어 원제가 있고 줄의 영어가 그 원제와 닮았을 때만(HowToWinEveryArgument)
+    h = "## 학습조직의 혁신: 다섯 가지 디서플린의 앙상블 _ 피터 센게"
+    text = f"{h}\n\n피터 센게Peter Senge\n\n본문."
+    assert tc.drop_subtitle_echo(text) == (text, 0)
+
+
 def test_body_after_underscore_heading_kept():
     # 부제와 다른 글로 시작하는 본문, 원제와 다른 영어 문장은 그대로
     h = "# 끝에 가서 딴소리를 하라 _ 전제들을 부정하는 결론 Conclusion which denies premises"
