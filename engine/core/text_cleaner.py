@@ -655,7 +655,8 @@ def _bounds(paras: list[str], entries: list[dict], ei: int) -> tuple[int, int, b
     return lo, hi, at[ei] is not None
 
 
-_EXTRA_LABEL_RE = re.compile(r'^\s*(?:제\s*)?\d+\s*[장부편강권]\s*')
+# 점 없는 번호표 '07 고객의 …'(MBA명강의)도 — 빈칸 뒤 한글일 때만('30억'·'2천년' 처럼 붙은 수는 그대로)
+_EXTRA_LABEL_RE = re.compile(r'^\s*(?:제\s*)?\d+\s*[장부편강권]\s*|^\s*\d{1,2}\s+(?=[가-힣])')
 
 
 def _strip_label(title: str) -> str:

@@ -325,3 +325,15 @@ def test_lone_chapter_label_line_used_when_title_absent():
     # 엄격한 앞 패스에서는 쓰지 않는다
     out = tc.rematch_headings("\n".join(lines), e, {}, respace=False, keep_titles=True, exact=True)
     assert out.split("\n")[2] == "제1장"
+
+
+def test_two_line_title_with_bare_number_label():
+    # MBA명강의 실측(2026-11-08) — 차례 '07 고객의 경험을 창조하고 관리하는 CEM', 본문은 번호 없이 두 줄로 갈림.
+    # '07 ' 처럼 점 없는 번호표를 떼지 못해 두 줄 잇기가 차례 제목과 견주지 못했다(5곳)
+    e = [{"level": 1, "title": "제2부 마케팅", "page": None},
+         {"level": 2, "title": "07 고객의 경험을 창조하고 관리하는 CEM", "page": None}]
+    lines = ["# 제2부 마케팅", "본문.", "고객의 경험을", "", "창조하고 관리하는CEM", "", "본문 2."]
+    out = tc.rematch_headings("\n".join(lines), e, {}, respace=False, keep_titles=True)
+    assert "## 07 고객의 경험을 창조하고 관리하는 CEM" in out.split("\n")
+    assert tc._strip_label("07 고객의 경험을") == "고객의 경험을"
+    assert tc._strip_label("30억 통화 분석") == "30억 통화 분석"   # 단위가 붙은 숫자는 그대로
