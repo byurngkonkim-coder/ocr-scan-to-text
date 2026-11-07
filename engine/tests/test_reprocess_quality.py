@@ -47,6 +47,15 @@ def test_titles_bunched_far_from_their_pages_fail():
     assert not q["ok"] and q["misplaced"] >= 5
 
 
+def test_book_info_title_ending_in_number_kept_with_dash(tmp_path):
+    # '세일즈 입문 매뉴얼 30' — 끝 숫자가 쪽번호로 잘렸다(DrivingSalesmanPowerSkill). 끝에 ' -' 를 붙이면 쪽번호 없음
+    p = tmp_path / "책.txt"
+    p.write_text("책: 시리즈\n\n차례:\n1권 세일즈 입문 매뉴얼 30 -\n  01 첫 장 12\n", encoding="utf-8")
+    toc = rb.read_book_info(p)["toc"]
+    assert toc[0] == {"level": 1, "title": "1권 세일즈 입문 매뉴얼 30", "page": None}
+    assert toc[1] == {"level": 2, "title": "01 첫 장", "page": 12}
+
+
 def test_ratchet_fails_when_found_titles_drop(tmp_path):
     # 21세기지식경영 실제 회귀 48 → 44 를 사람이 표를 대조해서야 찾았다
     base = tmp_path / "base.json"

@@ -12,6 +12,7 @@
     차례: (아무 설명)
     제1편 자아편
       01. 첫 장 제목 12          ← 들여쓰기 2칸 = 한 단계 아래, 끝 숫자 = 쪽번호
+    매뉴얼 30 -                  ← 끝 숫자가 제목의 일부면 ' -' (쪽번호 없음)
 
 사용: venv/Scripts/python.exe tools/reprocess_book.py 20261019_201720_삶의지혜_자아편
      (이름 없이 실행하면 아직 _재처리 에 없는 가장 오래된 결과 하나)
@@ -49,6 +50,10 @@ def read_book_info(path: Path) -> dict:
     entries = []
     for line in toc.splitlines()[1:]:
         if not line.strip():
+            continue
+        if line.rstrip().endswith(" -"):      # 끝 숫자가 제목의 일부('매뉴얼 30 -') — 쪽번호 없음
+            entries.append({"level": (len(line) - len(line.lstrip(" "))) // 2 + 1,
+                            "title": line.strip()[:-1].strip(), "page": None})
             continue
         m = _PAGE_TAIL_RE.search(line.strip())
         title = line.strip()[:m.start()] if m and not re.fullmatch(r'\d+\.?', line.strip()) else line.strip()
