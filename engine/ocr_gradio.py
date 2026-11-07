@@ -500,9 +500,12 @@ def _book_name(file_name: str, front: str = "") -> tuple[str, str]:
 def _doc_header(info: dict, note: str | None) -> list[str]:
     """맨 앞 문서 정보 줄(기호 없이) — NotebookLM 이 출처·쪽 표지 뜻을 알게. 지어낸 내용은 넣지 않는다."""
     title, author = _book_name(info["name"], info.get("front", ""))
+    # 책정보 파일(02_결과/_재처리/_책정보 — 원본 PDF·인터넷에서 사람이 확인한 정보)이 있으면 그것을 쓴다
+    title, author = info.get("book") or title, info.get("author") or author
+    basis = f" ({info['basis']})" if info.get("basis") else " (파일명 기준 추정)"
     pages = f" · PDF {info['pages']}쪽" if info.get("pages") else ""
     return ["스캔본 OCR 텍스트 전문(요약·생성 문장 없음)",
-            f"책: {title}" + (f" · 저자: {author}" if author else "") + " (파일명 기준 추정)",
+            f"책: {title}" + (f" · 저자: {author}" if author else "") + basis,
             f"원본 파일: {info['name']}{pages} · 처리일 {time.strftime('%Y-%m-%d')}"]\
         + ([f"장·절: {note}"] if note else []) \
         + (["쪽 표지: [p.N] 줄 뒤의 글은 원본 PDF N쪽 내용"] if info.get("pages") else [])

@@ -335,6 +335,9 @@ def iter_clean(pages: list[str], drop_front_matter: bool = False, on_chunk=None,
     if config.get_enable_margin_filter():
         text = post_process_pagebreaks(text)
     text, _ = rejoin_split_sentences(text)
+    text, n_spaced = strip_spaced_running_header(text)
+    if n_spaced:
+        report["warnings"].append(f"한 글자씩 띄운 쪽 머리글 {n_spaced}곳 제거 (정제 전 원문 사본에서 확인 가능)")
     if rules_mode:
         text = noise_rules.finish_groups(text)   # 출처 명언 그룹 경계 표지 → 빈 줄(줄 잇기가 끝난 뒤)
         text, _ = noise_rules.repair_quote_brackets(text)   # 출처 인용 괄호 〈〉「」『』 짝 복원
@@ -362,7 +365,9 @@ def iter_clean(pages: list[str], drop_front_matter: bool = False, on_chunk=None,
         text, guessed = infer_chapters(text)
         toc_entries.extend(guessed)       # report(_out) 의 toc_entries 와 같은 목록
     if toc_entries:
-        text = rematch_headings(text, toc_entries, toc_stats, respace=rules_mode)
+        # 흩어진 제목부터 — rematch 가 제목 앞부분만 같은 줄을 먼저 잡아 차례 제목을 그 줄로 바꾼다(삶의지혜)
+        text, _ = place_split_titles(text, toc_entries)
+        text = rematch_headings(text, toc_entries, toc_stats, respace=rules_mode)   # found·missing 도 여기서
         report["toc_note"] = (f"차례를 찾지 못해 본문에서 장 제목 {len(guessed)}개를 추정(제N장·CHAPTER N 꼴 줄)"
                               if guessed else toc_headings.report(toc_entries, toc_stats))
         if report_out is not None:
@@ -517,7 +522,8 @@ def _show_headings(pages: list[str], store: list[str]) -> list[str]:
     return [_HIDDEN_HEADING_RE.sub(lambda m: store[int(m.group(1))], p) for p in pages]
 
 
-def rematch_headings(text: str, entries: list[dict], stats: dict, respace: bool) -> str:
+def rematch_headings(text: str, entries: list[dict], stats: dict, respace: bool,
+                     keep_titles: bool = False) -> str:
     """정제 뒤 한 번 더 — 줄 잇기 전 원문에서 못 찾은 차례 제목이 정제본에 따로 선 줄로 남아 있으면 제목으로
     (DrivingSalesmanPowerSkill '03 이제 세일즈를 해 볼까' 등 19곳, 2026-10-24 실측).
     무손실: 한 줄만, 앞뒤로 찾은 차례 제목 줄 사이에서만 찾고, 그 줄 글자 그대로 '#' 만 붙인다 — 차례 목록 제목을
@@ -541,7 +547,8 @@ def rematch_headings(text: str, entries: list[dict], stats: dict, respace: bool)
         hi = min((k for k in at[ei + 1:] if k is not None), default=len(lines))
         k = _title_line(lines, lo, hi, e["title"])
         if k is not None:
-            e["title"] = lines[k].strip()
+            if not keep_titles:   # 사람이 확인한 차례(책정보 파일)면 제목은 차례 글자 그대로 — OCR 오타 줄로 안 바꿈
+                e["title"] = lines[k].strip()
             lines[k] = toc_headings._heading(e)
             at[ei] = k
     text = "\n".join(lines)
@@ -559,6 +566,169 @@ def rematch_headings(text: str, entries: list[dict], stats: dict, respace: bool)
     return text
 
 
+# ── 장 번호 표지를 사이에 두고 흩어진 장 제목 (삶의지혜_자아편 실측, 2026-11-07) ─────────────
+# 장 첫 쪽의 큰 제목이 '…사람'과 / '…사람'은 / 03 / 목표가 다르다' 처럼 여러 문단으로 갈리거나 본문 첫 문장에
+# 붙어('…않는다고 08 생각해 보라 나태함은…') 한 줄만 보는 rematch_headings 로는 21장 중 0장을 찾았다.
+# 오삭제 방지: 차례 번호와 같은 번호가 따로 선 낱말('13년'·'10만' 은 아님) 둘레 7문단 안에서만, 그 번호를 낀
+# 연속 낱말 묶음이 차례 제목과 _SPLIT_TITLE_MIN 이상 같을 때만 그 낱말들을 제목 줄 하나로 바꾼다.
+_SPLIT_TITLE_MIN = 0.8
+_SPLIT_TITLE_REACH = 3      # 번호 문단 앞뒤로 볼 문단 수
+_SPLIT_TITLE_SLACK = 4      # 제목 낱말 수보다 이만큼 더 긴 묶음까지 본다
+
+
+def _split_title_span(words: list[tuple[int, str]], t: int, target: str) -> tuple[int, int] | None:
+    """번호 낱말 words[t] 를 낀 [i, j] 중 차례 제목(target, 한글·숫자만)과 가장 같은 묶음."""
+    norms = [toc_headings._norm_hangul(w) for _, w in words]
+    reach = len(target) // 2 + _SPLIT_TITLE_SLACK
+    best, span = 0.0, None
+    for i in range(max(0, t - reach), t + 1):
+        for j in range(t, min(len(words), t + reach + 1)):
+            cand = "".join(norms[i:t]) + "".join(norms[t + 1:j + 1])
+            if not cand or len(cand) > len(target) * 1.5:
+                continue
+            r = SequenceMatcher(None, cand, target, autojunk=False).ratio()
+            if r > best:
+                best, span = r, (i, j)
+    return span if best >= _SPLIT_TITLE_MIN else None
+
+
+def place_split_titles(text: str, entries: list[dict]) -> tuple[str, int]:
+    """본문에 아직 없는 번호 붙은 차례 제목('03. …')을, 번호 표지 둘레에 흩어진 제목 글자 자리에 세운다.
+    (본문, 세운 수). 제목 줄 글자는 차례 제목 그대로 — 흩어진 OCR 글자 대신."""
+    paras = text.split("\n\n")
+    placed, start = 0, 0
+    for e in entries:
+        head = toc_headings._heading(e)
+        if head in paras[start:]:
+            start = paras.index(head, start) + 1
+            continue
+        m = re.match(r'0*(\d{1,3})\.\s*(.+)', e["title"])
+        if not m:
+            continue
+        tok = re.compile(rf'0*{m.group(1)}')
+        target = toc_headings._norm_hangul(m.group(2))
+        for k in range(start, len(paras)):
+            if _MD_HEADING_RE.match(paras[k]) or not any(tok.fullmatch(w) for w in paras[k].split()):
+                continue
+            lo = k
+            while lo > max(start, k - _SPLIT_TITLE_REACH) and not _MD_HEADING_RE.match(paras[lo - 1]):
+                lo -= 1
+            hi = k
+            while hi < min(len(paras) - 1, k + _SPLIT_TITLE_REACH) and not _MD_HEADING_RE.match(paras[hi + 1]):
+                hi += 1
+            words = [(p, w) for p in range(lo, hi + 1) for w in paras[p].split()]
+            t = next(x for x, (p, w) in enumerate(words) if p == k and tok.fullmatch(w))
+            span = _split_title_span(words, t, target)
+            if span is None:
+                continue
+            (pi, _), (pj, _) = words[span[0]], words[span[1]]
+            before = " ".join(w for x, (p, w) in enumerate(words) if p == pi and x < span[0])
+            after = " ".join(w for x, (p, w) in enumerate(words) if p == pj and x > span[1])
+            paras[pi:pj + 1] = [s for s in (before, head, after) if s]
+            start = pi + (2 if before else 1)
+            placed += 1
+            break
+    placed += _place_unnumbered_titles(paras, entries)
+    return "\n\n".join(paras), placed
+
+
+_TOC_PIECE_RE = re.compile(r'(?<![\d.])(?=\d{1,2}\.\s)')
+_TOC_REMNANT_MIN = 3          # 차례 항목과 같은 문단이 이만큼 이어져야 남은 차례로 본다
+_TOC_REMNANT_FRONT = 0.15     # 책 앞쪽(문단 수 기준)에서만
+_TOC_REMNANT_EDGE_RE = re.compile(r'^제\s*\d+\s*[편부장]|차\s?례')
+
+
+def drop_toc_remnant(text: str, entries: list[dict]) -> tuple[str, int]:
+    """본문 앞쪽에 남은 OCR 차례 덩어리('11. 성숙함은 … 111' / '210' / '역자후기' …)를 지운다 — 맨 앞 '# 차례'
+    목록과 같은 글이라 무손실(삶의지혜_자아편: 차례 쪽 일부만 읽혀 본문 서문 뒤에 남았다). 문단마다 번호 항목으로
+    나눠 모든 조각이 차례 제목(_MATCH_MIN 이상)이나 쪽번호일 때만 차례 문단, 그런 문단이 3개 이상 이어질 때만.
+    (본문, 지운 문단 수)"""
+    titles = [toc_headings._norm_hangul(e["title"]) for e in entries]
+    titles = [t for t in titles if len(t) >= 2]
+    if not titles:
+        return text, 0
+    paras = text.split("\n\n")
+
+    def kind(p: str) -> int:        # 2 = 차례 제목 문단, 1 = 쪽번호뿐, 0 = 본문
+        if re.fullmatch(r'[\d\s.…·]+', p):
+            return 1
+        if _MD_HEADING_RE.match(p):
+            return 0
+        pieces = [re.sub(r'[\s.…·]*\d{1,4}$', '', s.strip()) for s in _TOC_PIECE_RE.split(p) if s.strip()]
+        for s in pieces:
+            n = toc_headings._norm_hangul(s)
+            if not n or max(SequenceMatcher(None, n, t, autojunk=False).ratio() for t in titles) \
+                    < toc_headings._MATCH_MIN:
+                return 0
+        return 2
+
+    limit = max(1, int(len(paras) * _TOC_REMNANT_FRONT))
+    kinds = [kind(p) for p in paras[:limit]]
+    i = 0
+    while i < len(kinds):
+        if not kinds[i]:
+            i += 1
+            continue
+        j = i
+        while j < len(kinds) and kinds[j]:
+            j += 1
+        if sum(k == 2 for k in kinds[i:j]) >= _TOC_REMNANT_MIN:
+            a, b = i, j      # 앞뒤 '제1편 자 아 편'·'부록1. … 차례' 같은 차례 머리·꼬리 한 문단씩
+            if a and len(paras[a - 1]) <= 60 and _TOC_REMNANT_EDGE_RE.search(paras[a - 1]):
+                a -= 1
+            if b < len(paras) and len(paras[b]) <= 60 and _TOC_REMNANT_EDGE_RE.search(paras[b]):
+                b += 1
+            del paras[a:b]
+            return "\n\n".join(paras), b - a
+        i = j
+    return text, 0
+
+
+_SPLIT_TITLE_PLAIN_MIN = 0.85   # 번호 표지가 없으면 더 엄하게
+
+
+def _place_unnumbered_titles(paras: list[str], entries: list[dict]) -> int:
+    """번호 표지를 OCR 이 못 읽은 장(삶의지혜 01장 — '…시안 진정 가치 있는 것은 '황금알'자체가 아니라.' /
+    ''황금알'을 낳을 수 있는 닭이다 자신을 바꿔라') — 앞뒤 차례 제목 줄 사이에서 제목 첫 글자로 시작하는 낱말
+    묶음 중 처음으로 _SPLIT_TITLE_PLAIN_MIN 이상 같은 곳. 본문이 제목을 되풀이하는 곳보다 제목 자리가 앞선다."""
+    placed = 0
+    for ei, e in enumerate(entries):
+        head = toc_headings._heading(e)
+        if head in paras:
+            continue
+        target = toc_headings._norm_hangul(re.sub(r'^0*\d{1,3}\.\s*', '', e["title"]))
+        if len(target) < 8:
+            continue
+        prev = [paras.index(toc_headings._heading(p)) for p in entries[:ei] if toc_headings._heading(p) in paras]
+        nxt = [paras.index(toc_headings._heading(p)) for p in entries[ei + 1:] if toc_headings._heading(p) in paras]
+        lo, hi = (max(prev) + 1 if prev else 0), (min(nxt) if nxt else len(paras))
+        words = [(p, w) for p in range(lo, hi) if not _MD_HEADING_RE.match(paras[p]) for w in paras[p].split()]
+        norms = [toc_headings._norm_hangul(w) for _, w in words]
+        reach = len(target) // 2 + _SPLIT_TITLE_SLACK
+        for i in range(len(words)):
+            if not norms[i] or not target.startswith(norms[i][:2]):
+                continue
+            best, bj = 0.0, None
+            for j in range(i, min(len(words), i + reach)):
+                if words[j][0] != words[i][0] and _MD_HEADING_RE.match(paras[words[j][0]]):
+                    break
+                cand = "".join(norms[i:j + 1])
+                if len(cand) > len(target) * 1.3:
+                    break
+                r = SequenceMatcher(None, cand, target, autojunk=False).ratio()
+                if r > best:
+                    best, bj = r, j
+            if best < _SPLIT_TITLE_PLAIN_MIN:
+                continue
+            (pi, _), (pj, _) = words[i], words[bj]
+            before = " ".join(w for x, (p, w) in enumerate(words) if p == pi and x < i)
+            after = " ".join(w for x, (p, w) in enumerate(words) if p == pj and x > bj)
+            paras[pi:pj + 1] = [s for s in (before, head, after) if s]
+            placed += 1
+            break
+    return placed
+
+
 def _title_line(lines: list[str], lo: int, hi: int, title: str) -> int | None:
     """lines[lo:hi] 에서 차례 제목과 같은 따로 선 짧은 줄(제목 줄·표 줄 제외). 번호표를 뗀 제목으로도 본다.
     차례 OCR 이 두 항목·저자를 한 줄로 붙여 읽은 항목('다이렉트경영 마이클델', CEO의책꽃이 실측)은 그 앞부분과
@@ -572,6 +742,8 @@ def _title_line(lines: list[str], lo: int, hi: int, title: str) -> int | None:
             continue
         if _FIGURE_CAPTION_RE.match(l):     # 그림 설명('그림6.37 영향력-불확실성 매트릭스', 2x2Matrix)은 제목 아님
             continue
+        if 2 <= len(norm(title)) < 4 and norm(l) == norm(title):   # '서문' 같은 짧은 제목 — 같은 글자 줄만(삶의지혜)
+            return i
         n = norm(l)
         if any(SequenceMatcher(None, n, t).ratio() >= toc_headings._MATCH_MIN
                or (len(n) >= _FRONT_MIN and len(n) >= len(t) * _FRONT_RATIO
@@ -1047,6 +1219,44 @@ def strip_running_headers(pages: list[str]) -> list[str]:
 
 
 # ── 차례·판권 결정론 제거 (2026-10-05) ───────────────────────────────────────
+# ── 한 글자씩 띄운 쪽 머리글 (삶의지혜_자아편 실측, 2026-11-07) ─────────────────────
+# '소 중 한 사 람에 게 주 고 싶 은 삶의 지 혜' 가 문단 한가운데 섞여 들었다(15곳). OCR 이 매번 조금씩 달리 읽어
+# ('사 람 예 게'·'삶의 지 혜다른'·끝 글자 빠짐) 쪽 맨 위·아래 같은 줄만 지우는 strip_running_headers 로는 못 지운다.
+# 오삭제 방지: 책 안에서 같은 꼴로 3번 이상 되풀이된 8자 이상 띄운 문구만 머리글로 보고, 지울 자리도
+# 글자 사이가 절반 이상 띄어진 곳만 — 보통 띄어쓰기로 쓴 같은 말('소중한 사람에게 …')은 본문이다.
+_SPACED_RUN_RE = re.compile(r'(?<![가-힣])(?:[가-힣]{1,2} +){4,}[가-힣]{1,2}(?![가-힣])')
+_SPACED_ANY_RE = re.compile(r'(?:[가-힣]{1,3} +){3,}[가-힣]+')
+_SPACED_HEADER_REPEAT = 3
+_SPACED_HEADER_MIN = 8
+_SPACED_HEADER_MATCH = 0.8
+
+
+def strip_spaced_running_header(text: str) -> tuple[str, int]:
+    """책 전체에 되풀이된 한 글자씩 띄운 머리글을 지운다. (본문, 지운 곳 수)"""
+    counts: dict[str, int] = {}
+    for m in _SPACED_RUN_RE.finditer(text):
+        k = m.group().replace(" ", "")
+        if len(k) >= _SPACED_HEADER_MIN:
+            counts[k] = counts.get(k, 0) + 1
+    key = max((k for k, c in counts.items() if c >= _SPACED_HEADER_REPEAT), key=counts.get, default=None)
+    if key is None:
+        return text, 0
+    cuts: list[tuple[int, int]] = []
+    for m in _SPACED_ANY_RE.finditer(text):
+        pos = [m.start() + i for i, ch in enumerate(m.group()) if ch != " "]
+        compact = "".join(text[p] for p in pos)
+        blocks = [b for b in SequenceMatcher(None, compact, key, autojunk=False).get_matching_blocks() if b.size]
+        if sum(b.size for b in blocks) < len(key) * _SPACED_HEADER_MATCH:
+            continue
+        a, b = pos[blocks[0].a], pos[blocks[-1].a + blocks[-1].size - 1] + 1
+        if text.count(" ", a, b) * 2 >= b - a - text.count(" ", a, b):
+            cuts.append((a, b))
+    for a, b in reversed(cuts):
+        left, right = text[:a].rstrip(" "), text[b:].lstrip(" ")
+        text = left + (" " if left[-1:] not in ("", "\n") and right[:1] not in ("", "\n") else "") + right
+    return text, len(cuts)
+
+
 # 실측: 피터드러커 매니지먼트(715p) — 차례(24~27쪽)가 청크 6~7에 있어, 표제지 뒤 해설이
 # 먼저 나와 body_started 가 켜진 뒤라 LLM 삭제 규칙이 닿지 않았고, 판권(715쪽)도 남았다.
 # 차례·판권은 형태가 뚜렷하므로 LLM 앞에서 규칙으로 걷어내고, 무엇을 걷었는지 보고한다.

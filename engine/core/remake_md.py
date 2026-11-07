@@ -86,6 +86,31 @@ def read_raw_pages(path: Path) -> tuple[list[tuple[int, str]], str, int | None]:
     return pages, name, total
 
 
+def rebuild(text: str, toc: list[dict] | None = None) -> tuple[list[dict], str, str]:
+    """결과 글 → (차례 항목, 새 구조 본문, 장·절 보고). toc 를 주면(책정보 파일 — 원본 PDF·인터넷에서 모은 차례)
+    결과에 든 차례 대신 쓰고, 제목 글자는 그 차례 그대로 둔다(respace 안 함)."""
+    entries, body = parse_result(text)
+    body, _ = text_cleaner.strip_spaced_running_header(body)
+    if toc is not None:
+        entries = toc
+    stats: dict = {"inferred": 0}
+    if entries:
+        # 흩어진 제목부터 — rematch 가 제목 앞부분만 같은 줄('…변하듯 04')을 먼저 잡아 차례 제목을 그 줄로 바꿨다
+        body, _ = text_cleaner.drop_toc_remnant(body, entries)
+        body, _ = text_cleaner.place_split_titles(body, entries)
+        body = text_cleaner.rematch_headings(body, entries, stats, respace=toc is None,   # found·missing 도
+                                             keep_titles=toc is not None)
+        note = toc_headings.report(entries, stats)
+    else:
+        body, entries = text_cleaner.infer_chapters(body)
+        if entries:
+            body = text_cleaner.rematch_headings(body, entries, stats, respace=True)
+        note = (f"차례를 찾지 못해 본문에서 장 제목 {len(entries)}개를 추정(제N장·CHAPTER N 꼴 줄)" if entries
+                else "차례를 찾지 못해 장·절 정비 없이 정제")
+    body = (toc_headings.space_headings(body) if entries else body.strip()) + "\n"
+    return entries, body, note
+
+
 def remake(path: Path, backup_dir: Path | None = None) -> dict:
     """결과 한 권(.md·.txt 짝)을 새 구조로 다시 만든다. → {name, path, raw, marks, toc, status, logs}"""
     import ocr_gradio                          # 순환 import 방지 — 실행 시점에(batch_runner 와 같은 방식)
@@ -98,18 +123,7 @@ def remake(path: Path, backup_dir: Path | None = None) -> dict:
     if _unrefined(text):
         row["status"] = "건너뜀 — 정제 안 한 결과(쪽 단위 서식)"
         return row
-    entries, body = parse_result(text)
-    stats: dict = {"inferred": 0}
-    if entries:
-        body = text_cleaner.rematch_headings(body, entries, stats, respace=True)
-        note = toc_headings.report(entries, stats)
-    else:
-        body, entries = text_cleaner.infer_chapters(body)
-        if entries:
-            body = text_cleaner.rematch_headings(body, entries, stats, respace=True)
-        note = (f"차례를 찾지 못해 본문에서 장 제목 {len(entries)}개를 추정(제N장·CHAPTER N 꼴 줄)" if entries
-                else "차례를 찾지 못해 장·절 정비 없이 정제")
-    body = (toc_headings.space_headings(body) if entries else body.strip()) + "\n"
+    entries, body, note = rebuild(text)
     raw = _raw_copy(path)
     pages, name, total = read_raw_pages(raw) if raw else (None, "", None)
     info = {"name": name or _STAMP_RE.sub("", path.stem), "pages": total}
