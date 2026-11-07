@@ -38,7 +38,9 @@ def _fake_process(order, delay=0.0):
     return process_full
 
 
-def _wait_idle(timeout=5):
+def _wait_idle(timeout=60):
+    # 끝나면 바로 빠져나온다 — 상한만 넉넉히. 5초는 다른 작업(표 추출·재처리)과 겹치면 Kiwi 로드가 늦어
+    # 의심 목록 저장 전에 끝나 버려 거짓 실패가 났다(2026-11-07 전체 테스트 2회)
     end = time.time() + timeout
     while br.busy() and time.time() < end:
         time.sleep(0.05)
