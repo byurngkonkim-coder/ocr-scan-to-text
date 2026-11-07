@@ -73,6 +73,7 @@ def read_book_info(path: Path) -> dict:
 _LOSS_MAX = 0.03     # 본문 한글 글자가 이만큼 넘게 줄면 실패 — 지우는 규칙이 본문까지 지운 것
 _PAGE_DRIFT = 0.35   # 제목 자리(문서 줄 비율)와 차례 쪽(마지막 쪽 비율)이 이만큼 넘게 다르면 엉뚱한 자리
 _DRIFT_SHARE = 0.2   # 쪽번호 있는 찾은 제목 중 이 비율(최소 2개)을 넘게 엉뚱하면 실패
+_SCRIPT_MIN = 200    # 한글이 이만큼은 있어야 한글 손실을 잰다 — 영문 책의 몇 글자 한글은 재지 않는다
 
 
 def quality(entries: list[dict], src: str, out: str) -> dict:
@@ -97,9 +98,12 @@ def quality(entries: list[dict], src: str, out: str) -> dict:
     misplaced = sum(1 for k, p in paged if abs(k / len(lines) - p / last) > _PAGE_DRIFT) if last else 0
     hangul = lambda t, pat="[가-힣]": len(re.findall(pat, remake_md.parse_result(t)[1]))
     before, after, script = hangul(src), hangul(out), "한글"
+    k_loss = (before - after) / before if before >= _SCRIPT_MIN else 0.0
     if hangul(src, "[A-Za-z]") > before:   # 영문 책 — 한글만 세면 '0 → 0' 이라 문단이 지워져도 몰랐다(JesusCEO 첫 문단 96곳)
         before, after, script = hangul(src, "[A-Za-z]"), hangul(out, "[A-Za-z]"), "영문"
     loss = (before - after) / before if before else 0.0
+    # 영문 인용이 많은 한국어 책(변화의기술)은 영문자가 더 많다 — 한글 손실도 함께 본다
+    loss = max(loss, k_loss)
     return {"found": len(ks), "total": len(entries), "order_breaks": breaks, "misplaced": misplaced, "script": script,
             "missing": [e["title"] for e, k in zip(entries, at) if k is None],
             "hangul_before": before, "hangul_after": after, "loss": round(loss, 4),

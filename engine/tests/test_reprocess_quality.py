@@ -44,6 +44,18 @@ def test_english_body_deleted_fails():
     assert q["script"] == "영문" and not q["ok"] and q["loss"] > 0.03
 
 
+def test_korean_body_lost_in_book_with_more_english_fails():
+    # 변화의기술: 쪽마다 영문 인용이 있어 영문자(22,585)가 한글(17,077)보다 많다 — 영문자만 재면 한글 문단이
+    # 지워져도 몰랐다. 두 글자 모두 재고 더 많이 준 쪽으로 판정한다
+    ents = [{"level": 1, "title": "나는 나를 사랑합니다", "page": 1}, {"level": 1, "title": "생각이 바뀌면", "page": 2}]
+    eng = "It is not lack of ability or opportunity that holds you back. " * 30
+    kor = "당신의 생각 속에서 스스로 설정한 한계를 제외하고는 당신이 성취할 수 있는 것에는 한계가 없다. " * 3
+    src = f"# 나는 나를 사랑합니다\n\n{eng}\n\n{kor}\n\n# 생각이 바뀌면\n\n{eng}\n\n{kor}"
+    out = f"# 나는 나를 사랑합니다\n\n{eng}\n\n{kor}\n\n# 생각이 바뀌면\n\n{eng}"
+    q = rb.quality(ents, src, out)
+    assert not q["ok"] and q["loss"] > 0.03
+
+
 def test_titles_bunched_far_from_their_pages_fail():
     # Alianment정렬 실제 사고(2026-11-07) — 장 제목 10개가 모두 맨 뒤 주석 속 '2장 …_역사적 고찰' 줄에 섰다.
     # 순서는 맞아서 순서 검사로는 못 잡았다. 차례 쪽번호와 본문 속 자리가 크게 어긋나면 불합격.
