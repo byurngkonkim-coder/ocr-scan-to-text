@@ -29,6 +29,13 @@ def test_label_line_above_same_numbered_heading_dropped():
     assert n == 2 and out == "앞 글.\n\n# 1부 정렬의 중요성 이해\n\n본문.\n\n## 9장 정렬 프로세스의 관리\n\n본문."
 
 
+def test_split_chapter_label_fragment_dropped():
+    # 'CHAP' 이 그림에 가려 'TER3'·'TER 7' 만 남음, 글자 사이가 띄워진 'C H A P T E R 4'(FastSecond)
+    text = "본문.\n\nTER3\n\n# CHAPTER 3 새로운 틈새시장\n\n본문.\n\nC H A P T E R 4\n\n# CHAPTER 4 신시장\n\n끝."
+    out, n = tc.drop_heading_echo(text)
+    assert n == 2 and "TER3" not in out and "C H A P" not in out
+
+
 def test_label_line_with_other_number_kept():
     text = "2부\n\n# 1부 정렬의 중요성 이해"
     assert tc.drop_heading_echo(text) == (text, 0)

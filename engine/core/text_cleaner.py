@@ -1158,7 +1158,9 @@ def drop_cover_ad(text: str) -> tuple[str, int]:
 
 
 _ECHO_LINE_MAX = 60
-_LONE_LABEL_RE = re.compile(r'^(?:제\s*)?(\d{1,2})\s*[부장편강]$|^(?:CHAPTER|PART|Chapter|Part)\s*(\d{1,2})$')
+# 'CHAP' 이 그림에 가려 남은 'TER3', 글자 사이가 띄워진 'C H A P T E R 4'(FastSecond)
+_LONE_LABEL_RE = re.compile(r'^(?:제\s*)?(\d{1,2})\s*[부장편강]$'
+                            r'|^(?:(?:C\s?H\s?A\s?P\s?)?T\s?E\s?R|P\s?A\s?R\s?T|Chapter|Part)\s*(\d{1,2})$')
 
 
 def drop_heading_echo(text: str) -> tuple[str, int]:
@@ -1170,8 +1172,8 @@ def drop_heading_echo(text: str) -> tuple[str, int]:
     fixed = 0
     for i in range(1, len(paras)):      # 제목 바로 위에 같은 번호의 표지 번호만 남은 줄('1부'·'CHAPTER9')
         lab = _LONE_LABEL_RE.match(paras[i - 1].strip())
-        num = re.match(r'#+\s*(?:제\s*)?(\d+)\s*[부장편강]', paras[i])
-        if lab and num and int(lab.group(1) or lab.group(2)) == int(num.group(1)):
+        num = re.match(r'#+\s*(?:(?:제\s*)?(\d+)\s*[부장편강]|(?:CHAPTER|PART|Chapter|Part)\s*(\d+))', paras[i])
+        if lab and num and int(lab.group(1) or lab.group(2)) == int(num.group(1) or num.group(2)):
             paras[i - 1] = None
             fixed += 1
     for i in range(len(paras) - 1):
