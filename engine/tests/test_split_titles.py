@@ -237,3 +237,19 @@ def test_chapter_title_wins_over_section_names_in_opener_list():
     paras = ["앞 장 본문.", "구성원 동기부여", "7장 조직 혁신의 프레임 워크", "본문."]
     out = tc.rematch_headings("\n\n".join(paras), e, {}, respace=False, keep_titles=True)
     assert "## 7장 조직 혁신의 프레임워크" in out.split("\n\n")
+
+
+def test_glued_list_numbers_in_run_spaced():
+    # CreatYourOwnFuture 실측(2026-11-07) — 실천 목록 '1오늘부터 …' / '2자신의 …' 번호가 글에 붙었다(10권 합 393곳)
+    text = "\n\n".join(["실천 과제", "1오늘부터 생각하자.", "2자신의 가능성을 믿자.", "3항상 최선을 생각하자.",
+                       "5자신의 목표를 공언하자.", "본문 문단."])
+    out, n = tc.space_list_numbers(text)
+    assert n == 4 and out.split("\n\n")[1:5] == ["1 오늘부터 생각하자.", "2 자신의 가능성을 믿자.",
+                                                 "3 항상 최선을 생각하자.", "5 자신의 목표를 공언하자."]
+
+
+def test_number_with_unit_or_alone_kept():
+    # 단위가 붙은 수('2년 만에'·'24시간'·'10대와')와 사슬 없는 외딴 번호는 그대로
+    text = "\n\n".join(["2년 만에, 나는 수입이 배로 늘었다.", "24시간 현금 지급기가 인기다.", "10대와 20대들은 다르다.",
+                       "본문.", "7어떤 경우에나 긍정적이자.", "1쇄인쇄 2005년", "3쇄발행 2006년", "10백만원/월"])
+    assert tc.space_list_numbers(text) == (text, 0)

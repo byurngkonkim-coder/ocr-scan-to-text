@@ -788,6 +788,34 @@ def attach_item_numbers(text: str) -> tuple[str, int]:
     return "\n\n".join(paras), n
 
 
+_GLUED_LIST_NO_RE = re.compile(r'(\d{1,2})(?=[가-힣])(?!(?:년|월|일|시|분|초|대|개|명|번|차|장|절|부|권|세|살|위|등|배|가지|퍼센트|'
+                               r'만|천|억|조|원|달러|층|호|회|주|점|편|쪽|건|곳|종|단계|인|척|평|명|쇄|백|판|채|마리|벌|그루))')
+_LIST_NO_RE = re.compile(r'(\d{1,2})(?=\s?[가-힣])')
+_LIST_RUN_REACH = 4      # 이웃 번호를 찾아볼 문단 수
+
+
+def space_list_numbers(text: str) -> tuple[str, int]:
+    """문단 첫머리에 글과 붙은 목록 번호('1오늘부터 …' / '2자신의 …')를 띄운다(CreatYourOwnFuture, 10권 합 393곳).
+    이웃 문단(앞뒤 _LIST_RUN_REACH 안)이 n±1·n±2 번호로 시작할 때만 — 외딴 숫자와 단위가 붙은 수('2년 만에'·
+    '24시간'·'10대와')는 그대로. 띄운 모양은 attach_item_numbers 와 같은 '번호 글'. (본문, 띄운 수)"""
+    paras = text.split("\n\n")
+    nums = {}
+    for i, p in enumerate(paras):
+        m = _LIST_NO_RE.match(p)
+        if m and not p.startswith("#"):
+            nums[i] = int(m.group(1))
+    n = 0
+    for i, p in enumerate(paras):
+        m = _GLUED_LIST_NO_RE.match(p)
+        if not m or i not in nums:
+            continue
+        k = nums[i]
+        if any(1 <= abs(nums.get(j, -99) - k) <= 2 for j in range(i - _LIST_RUN_REACH, i + _LIST_RUN_REACH + 1) if j != i):
+            paras[i] = m.group(1) + " " + p[m.end():]
+            n += 1
+    return "\n\n".join(paras), n
+
+
 _TOC_PIECE_RE = re.compile(r'(?<![\d.])(?=\d{1,2}\.\s)')
 _TOC_REMNANT_MIN = 3          # 차례 항목과 같은 문단이 이만큼 이어져야 남은 차례로 본다
 _TOC_REMNANT_FRONT = 0.15     # 책 앞쪽(문단 수 기준)에서만
