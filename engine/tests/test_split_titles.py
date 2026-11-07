@@ -143,6 +143,17 @@ def test_concept_map_table_with_some_titles_kept():
     assert tc.drop_toc_tables(text, _E3) == (text, 0)
 
 
+def test_category_box_listing_all_chapters_kept():
+    # 꼭지마다 있는 '기능별 분류' 표 — 장 이름 7개가 모두 들었다. 작은 차례는 맨 윗단계 항목이 하나뿐이다
+    # (The28BusinessBible 2026-11-08: 표 6개를 지우고 '제1장 제너럴 매니지먼트' 제목 6개로 바꿈)
+    chapters = ["제너럴 매니지먼트", "논리적 사고", "기술경영·기업가 정신", "사람 (HR/조직행동)", "물건 (마케팅)",
+                "돈 (회계·재무)", "전략"]
+    entries = [{"level": 1, "title": f"제{i}장 {t}", "page": None} for i, t in enumerate(chapters, 1)]
+    text = ("본문\n\n| 기능별 분류 | 제너럴매니지먼트 | O |\n| --- | --- | --- |\n"
+            "|  | 논리적 사고 기술경영·기업가 정신 사람(HR/조직행동) 물건(마케팅) 돈(회계·재무) 전략 |  |")
+    assert tc.drop_toc_tables(text, entries) == (text, 0)
+
+
 def test_heading_in_chapter_opener_list_moves_to_real_section():
     e = [{"level": 2, "title": "환경 분석, 어떻게 할 것인가", "page": 15},
          {"level": 3, "title": "1. 외부 환경 분석", "page": 16},

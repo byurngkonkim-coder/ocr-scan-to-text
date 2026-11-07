@@ -929,8 +929,10 @@ def drop_toc_tables(text: str, entries: list[dict]) -> tuple[str, int]:
         hay = norm(" ".join(paras[i:j]))
         found = [(e, t) for e, t in titles if _contains_title(hay, t)]
         hits = [e for e, _ in found]
-        if len(hits) >= _TOC_TABLE_MIN and sum(len(t) for _, t in found) >= len(hay) * _TOC_TABLE_SHARE:
-            top = min(hits, key=lambda e: e["level"])
+        top = min(hits, key=lambda e: e["level"]) if hits else None
+        # 작은 차례는 맨 윗단계 항목이 하나 — 장 이름을 모두 늘어놓은 꼭지별 '기능별 분류' 표는 본문(The28BusinessBible)
+        if (len(hits) >= _TOC_TABLE_MIN and sum(len(t) for _, t in found) >= len(hay) * _TOC_TABLE_SHARE
+                and sum(e["level"] == top["level"] for e in hits) == 1):
             head = toc_headings._heading(top)
             if head not in paras:
                 out.append(head)
