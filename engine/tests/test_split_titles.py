@@ -96,3 +96,110 @@ def test_item_numbers_attach_to_following_item():
 def test_scattered_numbers_are_not_item_chain():
     text = "\n\n".join(["2019", "본문", "15", "본문", "300", "본문"])
     assert tc.attach_item_numbers(text) == (text, 0)
+
+
+# ── 12년차기획맨의기획실무노트 (2026-11-07) ─────────────────────────────────────
+
+_E3 = [{"level": 1, "title": "PART III. 기획의 실행, 어떻게 할 것인가", "page": 235},
+       {"level": 2, "title": "기획서, 제안에서 성공까지", "page": 237},
+       {"level": 3, "title": "1. 기획서의 제안과 승인", "page": 239},
+       {"level": 3, "title": "2. 기획서의 실천", "page": 241},
+       {"level": 2, "title": "현실적으로는 기민한 대응 전술이 필요하다", "page": 243}]
+
+
+def test_part_opener_toc_table_replaced_by_part_heading():
+    text = "\n\n".join([
+        "앞 부의 마지막 문단이다.",
+        "| 기획의 실행 | PAR T III |  |\n| --- | --- | --- |\n|  | 어떻게할 것인가 | Chapter 7. 기획서,제안에서 성공까지"
+        " 1.기획서의 제안과 승인 2.기획서의 실천 Chapter 8. 현실적으로는기민한대응전숨이 필요하다 |",
+        "본문이 시작된다."])
+    out, n = tc.drop_toc_tables(text, _E3)
+    assert n == 1
+    assert out.split("\n\n") == ["앞 부의 마지막 문단이다.", "# " + _E3[0]["title"], "본문이 시작된다."]
+
+
+def test_ordinary_table_kept():
+    text = "본문\n\n| 구분 | 매출 |\n| --- | --- |\n| 2019 | 100 |"
+    assert tc.drop_toc_tables(text, _E3) == (text, 0)
+
+
+def test_heading_in_chapter_opener_list_moves_to_real_section():
+    e = [{"level": 2, "title": "환경 분석, 어떻게 할 것인가", "page": 15},
+         {"level": 3, "title": "1. 외부 환경 분석", "page": 16},
+         {"level": 3, "title": "2. 내부 역량 분석", "page": 34}]
+    text = "\n\n".join(["## 환경 분석, 어떻게 할 것인가", "### 1. 외부 환경 분석", "1)거시 환경 분석", "2)산업분석",
+                       "2. 내부 여량 분석 1)성과분석 2)재무분석", "1.외부 환경 분석", "외부 환경은 기업에 영향을 미친다.",
+                       "### 2. 내부 역량 분석"])
+    out, n = tc.relocate_list_headings(text, e)
+    assert n == 1
+    paras = out.split("\n\n")
+    assert paras[1] == "1. 외부 환경 분석" and paras[5] == "### 1. 외부 환경 분석"
+
+
+def test_same_title_twice_in_toc_placed_in_both_parts():
+    # PART I·II 에 같은 절 제목 — 글자로만 찾으면 두 항목이 한 줄을 가리켰다
+    e = [{"level": 1, "title": "PART I. 이론", "page": 1}, {"level": 2, "title": "1. 외부 환경 분석", "page": 2},
+         {"level": 1, "title": "PART II. 사례", "page": 3}, {"level": 2, "title": "1. 외부 환경 분석", "page": 4}]
+    text = "\n\n".join(["# PART I. 이론", "## 1. 외부 환경 분석", "이론 본문.", "# PART II. 사례",
+                       "1. 외부 환경 분석 외부 환경 분석을 담당하게 된 김갑돌은 틀부터 작성한다."])
+    assert tc._entry_positions(text.split("\n\n"), e) == [0, 1, 3, None]
+    out, n = tc.place_split_titles(text, e)
+    assert n == 1 and out.split("\n\n")[4] == "## 1. 외부 환경 분석"
+
+
+def test_cover_ad_before_first_heading_dropped():
+    # 1분의사결정 — 머리말 앞에 뒤표지 광고(ISBN·값·시리즈 목록·그림 크레딧)가 남았다
+    text = "\n\n".join(["인생은 선택의 연속이다", "-분 시리즈 … ISBN 89-352-0180-4 값5000원", "청림1분시리즈",
+                       "1.1분 의사결정 스펜서 존슨 지음·서기원 옮김", "2. 1분 매니저 케네스 블랜차드 지음",
+                       "15. 1분창조력개발 와타나베 지음 본문그림:손문상", "# 머리말", "본문이다. 값 5000원이라고 썼다."])
+    out, n = tc.drop_cover_ad(text)
+    assert n == 5
+    assert out.split("\n\n") == ["인생은 선택의 연속이다", "# 머리말", "본문이다. 값 5000원이라고 썼다."]
+
+
+def test_no_cover_ad_unchanged():
+    text = "# 머리말\n\n본문 ISBN 이야기."
+    assert tc.drop_cover_ad(text) == (text, 0)
+
+
+# ── 2x2Matrix (2026-11-07) ─────────────────────────────────────────────────────
+
+def _m(*titles):
+    return [{"level": 3, "title": t, "page": None} for t in titles]
+
+
+def test_chapter_opener_name_list_dropped():
+    e = _m("고객 주도를 넘어서", "불연속성과 수명주기 전략", "가치 매니저로서의 고객", "고객 가치 분석", "구매 가능성")
+    text = "\n\n".join(["# Part 3", "고객 니즈의 프레임 워크 고객 주도를 넘어서 불연속성과 수명 주기 전략 가치 매니저로서의 고객 고객가치 분석",
+                       "구매 가능성", "고객 주도를 넘어서 불연속성과 수명주기 전략 가치 매니저로서의 고객",
+                       "본문이다. 고객 가치 분석을 해 보자."])
+    out, n = tc.drop_toc_dense(text, e)
+    assert n == 3
+    assert out.split("\n\n") == ["# Part 3", "본문이다. 고객 가치 분석을 해 보자."]
+
+
+def test_single_title_line_is_not_dense():
+    e = [{"level": 2, "title": t, "page": None} for t in
+         ("제1장에 들어가면서: 가정이 중요한 이유", "제5장에 들어가면서", "제6장에 들어가면서")]
+    text = "제1장에 들어가면서:가정이 중요한 이유"
+    assert tc.drop_toc_dense(text, e) == (text, 0)
+
+
+def test_title_followed_by_english_original_title():
+    e = _m("포트폴리오 분석", "문제와 해결책", "T-그룹 리더십", "변증법적 SWOT 분석")
+    text = "\n\n".join(["### 포트폴리오 분석", "본문.",
+                       "문제와 해결책Problems and Solutions Watts Wacker 미래가 나타나길 기다리는 사람에게는 미래가 없다.",
+                       "본문 2.", "T-그룹리더십T-Group Leadership Richard Nelson Jones 리더의 업무를…", "### 변증법적 SWOT 분석"])
+    out, n = tc.place_split_titles(text, e)
+    assert n == 2
+    paras = out.split("\n\n")
+    assert paras[2:4] == ["### 문제와 해결책", "Problems and Solutions Watts Wacker 미래가 나타나길 기다리는 사람에게는 미래가 없다."]
+    assert "### T-그룹 리더십" in paras
+
+
+def test_exact_pass_skips_similar_index_line():
+    e = _m("본원적 네트워크 전략", "매스 커스터마이제이션 _ 4가지 접근법")
+    lines = ["### 본원적 네트워크 전략", "본문", "매스커스터마이제이션_4가지 접근법Mass Customization 고객마다 다르게", "본문",
+             "매스 커스터마이제이션 238"]
+    out = tc.rematch_headings("\n".join(lines), e, {}, respace=False, keep_titles=True, exact=True)
+    assert "### 매스 커스터마이제이션 _ 4가지 접근법" not in out.split("\n")   # 색인 줄은 같은 글자가 아니다

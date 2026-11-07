@@ -523,7 +523,7 @@ def _show_headings(pages: list[str], store: list[str]) -> list[str]:
 
 
 def rematch_headings(text: str, entries: list[dict], stats: dict, respace: bool,
-                     keep_titles: bool = False) -> str:
+                     keep_titles: bool = False, exact: bool = False) -> str:
     """정제 뒤 한 번 더 — 줄 잇기 전 원문에서 못 찾은 차례 제목이 정제본에 따로 선 줄로 남아 있으면 제목으로
     (DrivingSalesmanPowerSkill '03 이제 세일즈를 해 볼까' 등 19곳, 2026-10-24 실측).
     무손실: 한 줄만, 앞뒤로 찾은 차례 제목 줄 사이에서만 찾고, 그 줄 글자 그대로 '#' 만 붙인다 — 차례 목록 제목을
@@ -545,11 +545,13 @@ def rematch_headings(text: str, entries: list[dict], stats: dict, respace: bool,
             continue
         lo = max((k for k in at[:ei] if k is not None), default=-1) + 1
         hi = min((k for k in at[ei + 1:] if k is not None), default=len(lines))
-        k = _title_line(lines, lo, hi, e["title"])
+        k = _title_line(lines, lo, hi, e["title"], exact)
         if k is not None:
             if not keep_titles:   # 사람이 확인한 차례(책정보 파일)면 제목은 차례 글자 그대로 — OCR 오타 줄로 안 바꿈
                 e["title"] = lines[k].strip()
-            lines[k] = toc_headings._heading(e)
+            # 한글 제목 줄 뒤에 붙은 영어 원제('시나리오 경영Scenarios', 2x2Matrix)는 제목 아래 문단으로 남긴다
+            latin = _latin_tail(lines[k], e["title"]) if keep_titles else ""
+            lines[k] = toc_headings._heading(e) + (f"\n\n{latin}" if latin else "")
             at[ei] = k
     text = "\n".join(lines)
     heads = {l for l in lines if _MD_HEADING_RE.match(l)}
@@ -592,22 +594,49 @@ def _split_title_span(words: list[tuple[int, str]], t: int, target: str) -> tupl
     return span if best >= _SPLIT_TITLE_MIN else None
 
 
+def _entry_positions(paras: list[str], entries: list[dict]) -> list[int | None]:
+    """차례 항목마다 본문 제목 줄 위치 — 차례 순서대로 앞에서부터 짝짓는다. 같은 제목이 두 번 있는 차례
+    (12년차기획맨: PART I·II 모두 '1. 외부 환경 분석')에서 글자로만 찾으면 두 항목이 한 줄을 같이 가리켰다."""
+    out: list[int | None] = []
+    heads = [(i, p) for i, p in enumerate(paras) if p.startswith("#")]
+    pos = 0
+    for e in entries:
+        h = toc_headings._heading(e)
+        k = next((i for i, p in heads if i >= pos and p == h), None)
+        out.append(k)
+        if k is not None:
+            pos = k + 1
+    return out
+
+
+def _bounds(paras: list[str], entries: list[dict], ei: int) -> tuple[int, int, bool]:
+    """ei 번째 항목을 찾을 범위 — 앞 항목 제목 줄 뒤부터 뒤 항목 제목 줄 앞까지. (lo, hi, 이미 있음)"""
+    at = _entry_positions(paras, entries)
+    lo = max((k for k in at[:ei] if k is not None), default=-1) + 1
+    hi = min((k for k in at[ei + 1:] if k is not None), default=len(paras))
+    return lo, hi, at[ei] is not None
+
+
 def place_split_titles(text: str, entries: list[dict], tail: bool = False) -> tuple[str, int]:
     """본문에 아직 없는 번호 붙은 차례 제목('03. …')을, 번호 표지 둘레에 흩어진 제목 글자 자리에 세운다.
     (본문, 세운 수). 제목 줄 글자는 차례 제목 그대로 — 흩어진 OCR 글자 대신."""
     paras = text.split("\n\n")
     placed, start = 0, 0
-    for e in entries:
+    for ei, e in enumerate(entries):
         head = toc_headings._heading(e)
-        if head in paras[start:]:
-            start = paras.index(head, start) + 1
+        at = _entry_positions(paras, entries)
+        if at[ei] is not None:
+            start = at[ei] + 1
             continue
         m = re.match(r'0*(\d{1,3})\.\s*(.+)', e["title"])
         if not m:
             continue
-        tok = re.compile(rf'0*{m.group(1)}')
+        tok = re.compile(rf'0*{m.group(1)}[.,]?')   # '2.' 도 — '2. 내부 역량 분석 내부 역량 분석 업무를…'(12년차기획맨)
         target = toc_headings._norm_hangul(m.group(2))
-        for k in range(start, len(paras)):
+        # 뒤 차례 항목의 제목 줄이 이미 섰으면 그 앞까지만 — 12년차기획맨 '1. 투자 유치를 위한 IR 자료' 가 다음 절들
+        # 뒤에 되풀이된 같은 글자에 섰다
+        later = min((k for k in at[ei + 1:] if k is not None and k >= start), default=len(paras))
+        for k in range(start, later):
             if _MD_HEADING_RE.match(paras[k]) or not any(tok.fullmatch(w) for w in paras[k].split()):
                 continue
             lo = k
@@ -629,9 +658,35 @@ def place_split_titles(text: str, entries: list[dict], tail: bool = False) -> tu
             placed += 1
             break
     placed += _place_unnumbered_titles(paras, entries)
+    placed += _place_latin_led_titles(paras, entries)
     if tail:   # 앞뒤 제목이 다 선 뒤에만(좁은 범위) — 넓은 범위에서는 '죄' 같은 짧은 제목이 엉뚱한 문단 끝에 걸린다
         placed += _place_tail_titles(paras, entries)
     return "\n\n".join(paras), placed
+
+
+def _place_latin_led_titles(paras: list[str], entries: list[dict]) -> int:
+    """문단 첫머리가 한글 차례 제목이고 바로 영어 원제가 이어지는 꼴('문제와 해결책Problems and Solutions Watts
+    Wacker, Jim Taylor 미래가 나타나길…', 2x2Matrix 매트릭스 쪽) — 첫머리를 제목 줄로 세우고 나머지는 그대로
+    다음 문단으로. 앞뒤 차례 제목 줄 사이에서."""
+    placed = 0
+    for ei, e in enumerate(entries):
+        title = e["title"].strip()
+        if len(re.sub(r'\s+', '', title)) < 3:   # 영어 섞인 제목도('T-그룹리더십T-Group…'·'MBTI Myers Briggs…')
+            continue
+        lo, hi, found = _bounds(paras, entries, ei)
+        if found:
+            continue
+        # 번호표를 뗀 제목도('제2강 비교력' → '비교력 "지금 폐하께서는…"'), 뒤엔 영어 원제나 인용문
+        bare = toc_headings._LABEL_RE.sub("", title).strip()
+        leads = [re.compile(r'\s?'.join(map(re.escape, re.sub(r'\s+', '', t))) + r'\s?(?=[A-Za-z"“\'‘「『])')
+                 for t in dict.fromkeys([title, bare]) if len(re.sub(r'\s+', '', t)) >= 3]
+        for p in range(lo, hi):
+            m = next((m for m in (ld.match(paras[p]) for ld in leads) if m), None)
+            if m:
+                paras[p:p + 1] = [toc_headings._heading(e), paras[p][m.end():]]
+                placed += 1
+                break
+    return placed
 
 
 _ITEM_NO_RE = re.compile(r'\d{1,4}')
@@ -644,14 +699,12 @@ def _place_tail_titles(paras: list[str], entries: list[dict]) -> int:
     placed = 0
     for ei, e in enumerate(entries):
         head = toc_headings._heading(e)
-        if head in paras:
+        lo, hi, found = _bounds(paras, entries, ei)
+        if found:
             continue
         want = re.sub(r'\s+', '', e["title"])
         # 띄어 쓴 제목 글자 사이엔 빈칸이 있어도 되고, 앞 문장 끝('…해가된다 교회출석'·'…저항해야 한다시련')에 붙어도 된다
         tail_re = re.compile(r'(?:(?<=\s)|(?<=[다.!?"”’)\]]))' + r'\s?'.join(map(re.escape, want)) + r'\s*$')
-        prev = [paras.index(toc_headings._heading(p)) for p in entries[:ei] if toc_headings._heading(p) in paras]
-        nxt = [paras.index(toc_headings._heading(p)) for p in entries[ei + 1:] if toc_headings._heading(p) in paras]
-        lo, hi = (max(prev) + 1 if prev else 0), (min(nxt) if nxt else len(paras))
         for p in range(lo, min(hi, len(paras) - 1)):
             m = tail_re.search(paras[p])
             if m and m.start() > 0 and re.match(r'\d{1,4}(?:\s|$)', paras[p + 1].strip()):
@@ -741,6 +794,153 @@ def drop_toc_remnant(text: str, entries: list[dict]) -> tuple[str, int]:
     return text, 0
 
 
+_TOC_TABLE_MIN = 3      # 차례 제목이 이만큼 든 표는 부(PART) 여는 쪽의 작은 차례
+
+
+def _contains_title(hay: str, title: str) -> bool:
+    """정규화한 글(hay)에 차례 제목이 OCR 오자 몇 개를 빼고 이어져 들어 있나 — '도출합 것인가'·'전숨이'."""
+    if len(title) < 4:
+        return False
+    m = SequenceMatcher(None, hay, title, autojunk=False).find_longest_match(0, len(hay), 0, len(title))
+    if m.size == len(title):
+        return True
+    a = max(0, m.a - m.b)
+    return SequenceMatcher(None, hay[a:a + len(title) + 2], title, autojunk=False).ratio() >= toc_headings._MATCH_MIN
+
+
+def drop_toc_tables(text: str, entries: list[dict]) -> tuple[str, int]:
+    """부(PART)를 여는 쪽의 작은 차례가 OCR 에서 표로 읽힌 것('| 기획의 실행 | PART III | … Chapter 7. 기획서,
+    제안에서 성공까지 1.기획서의 제안과 승인 …')을 지우고, 그 표에 든 가장 높은 단계 차례 항목의 제목 줄 하나로
+    바꾼다 — 맨 앞 차례 목록과 같은 글이라 무손실(12년차기획맨 3곳). 그대로 두면 제목 맞추기가 표 속 글자를 먼저
+    잡아 진짜 장·절 자리를 놓치고 표를 깨뜨렸다. 차례 제목이 _TOC_TABLE_MIN 개 이상 든 표만. (본문, 지운 표 수)"""
+    if not entries:
+        return text, 0
+    norm = toc_headings._norm_hangul
+    titles = [(e, norm(toc_headings._LABEL_RE.sub("", e["title"])) or norm(e["title"])) for e in entries]
+    paras = text.split("\n\n")
+    out, n, i = [], 0, 0
+    while i < len(paras):
+        j = i
+        while j < len(paras) and paras[j].strip() and all(l.lstrip().startswith("|")
+                                                            for l in paras[j].split("\n") if l.strip()):
+            j += 1
+        if j == i:
+            out.append(paras[i])
+            i += 1
+            continue
+        hay = norm(" ".join(paras[i:j]))
+        hits = [e for e, t in titles if _contains_title(hay, t)]
+        if len(hits) >= _TOC_TABLE_MIN:
+            top = min(hits, key=lambda e: e["level"])
+            head = toc_headings._heading(top)
+            if head not in paras:
+                out.append(head)
+            n += 1
+        else:
+            out.extend(paras[i:j])
+        i = j
+    return "\n\n".join(out), n
+
+
+_TOC_DENSE_MIN = 3        # 차례 제목이 이만큼 들고
+_TOC_DENSE_COVER = 0.7    # 문단 글자의 이만큼을 차례 제목이 채우면 장 여는 쪽의 작은 차례
+
+
+def drop_toc_dense(text: str, entries: list[dict]) -> tuple[str, int]:
+    """장 여는 쪽에 늘어놓은 그 장의 항목 이름('고객 니즈의 프레임 워크 고객 주도를 넘어서 불연속성과 …' /
+    '구매 가능성' / …)을 지운다(2x2Matrix 6~8장). 맨 앞 차례 목록과 같은 글이라 무손실. 그대로 두면 제목
+    맞추기가 그 속의 짧은 줄을 먼저 잡아 뒤 항목들이 설 자리가 없었다. 차례 제목이 문단 글자의 70% 이상을
+    채우는 문단과, 그런 문단 바로 옆의 차례 제목과 같은 짧은 줄만. 맨 앞 차례(문서 첫 제목 줄 앞)는 건드리지 않는다.
+    (본문, 지운 문단 수)"""
+    norm = toc_headings._norm_hangul
+    # 같은 글자는 한 번만 — '제5장에 들어가면서'·'제6장에 들어가면서' 는 번호를 떼면 같다(21세기지식경영)
+    titles = sorted({t for t in (norm(toc_headings._LABEL_RE.sub("", e["title"])) for e in entries) if len(t) >= 4})
+    if not titles:
+        return text, 0
+    paras = text.split("\n\n")
+
+    def dense(p: str) -> bool:
+        n = norm(p)
+        if len(n) < 12 or p.startswith("#"):
+            return False
+        hits = [t for t in titles if t in n]
+        return (len(hits) >= _TOC_DENSE_MIN and sum(map(len, hits)) >= len(n) * _TOC_DENSE_COVER
+                and max(map(len, hits)) < len(n) * 0.6)    # 제목 하나가 문단 대부분이면 제목 줄이다
+
+    marks = [dense(p) for p in paras]
+    for i, p in enumerate(paras):     # 목록 사이에 따로 선 항목 이름 한 줄
+        if not marks[i] and len(p) <= 40 and norm(p) in titles and (
+                any(marks[max(0, i - 2):i]) and any(marks[i + 1:i + 3])):
+            marks[i] = True
+    out = [p for p, m in zip(paras, marks) if not m]
+    return "\n\n".join(out), len(paras) - len(out)
+
+
+_COVER_AD_START_RE = re.compile(r'ISBN|값\s?[\d,]+\s?원')
+_COVER_AD_LINE_RE = re.compile(r'ISBN|값\s?[\d,]+\s?원|지음|옮김|그림\s?:|시리즈')
+_COVER_AD_PARA_MAX = 400
+
+
+def drop_cover_ad(text: str) -> tuple[str, int]:
+    """첫 제목 줄 앞에 남은 뒤표지 광고 — ISBN·값이 든 문단부터, 뒤이어 오는 짧은 시리즈 광고·그림 크레딧
+    문단('2. 1분 매니저 케네스 블랜차드 지음…'·'본문그림:손문상')까지(1분의사결정). 첫 제목 줄 뒤(본문)는 보지
+    않고, 문단이 길면(본문 글) 멈춘다. (본문, 지운 문단 수)"""
+    paras = text.split("\n\n")
+    first = next((i for i, p in enumerate(paras) if _MD_HEADING_RE.match(p)), len(paras))
+    a = next((i for i in range(first) if _COVER_AD_START_RE.search(paras[i])), None)
+    if a is None or len(paras[a]) > _COVER_AD_PARA_MAX:
+        return text, 0
+    b = a + 1
+    while b < first and len(paras[b]) <= _COVER_AD_PARA_MAX and _COVER_AD_LINE_RE.search(paras[b]) \
+            or (b < first and len(paras[b]) <= 40 and b + 1 < first and _COVER_AD_LINE_RE.search(paras[b + 1])):
+        b += 1
+    del paras[a:b]
+    return "\n\n".join(paras), b - a
+
+
+_LIST_LINE_RE = re.compile(r'^(?:\d{1,2}\s?[.,)]?\s?\S|\d\)|[-•·])')
+_LIST_LINE_MAX = 160
+
+
+def relocate_list_headings(text: str, entries: list[dict]) -> tuple[str, int]:
+    """장 여는 쪽의 절 목록('1)거시 환경 분석' / '2)산업분석' …) 속 줄에 선 절 제목을, 다음 제목 줄 전에 같은
+    글자로 다시 나오는 진짜 절 자리로 옮긴다(12년차기획맨: '1. 외부 환경 분석' 이 목록에 서서 본문 자리를 놓침,
+    '5. 전략 기획서 보고' 가 장 첫머리 목록에 서서 1~4절 자리가 없어짐). 목록 속이라고 보는 것: 바로 앞이나
+    뒤 문단이 짧은 번호·글머리 줄이거나 다른 제목 줄. 옮긴 자리의 글은 그 줄 글자 그대로 본문으로 돌려놓는다.
+    (본문, 옮긴 수)"""
+    norm = toc_headings._norm_hangul
+    paras = text.split("\n\n")
+    moved = 0
+
+    def listy(k: int) -> bool:
+        if not 0 <= k < len(paras):
+            return False
+        p = paras[k].strip()
+        return (bool(_MD_HEADING_RE.match(p)) or (len(p) <= _LIST_LINE_MAX and bool(_LIST_LINE_RE.match(p)))
+                or len(re.findall(r'\d\)', p)) >= 3       # 한 문단으로 붙어 읽힌 목록('1)거시… 2)산업… 3)…')
+                or (len(p) <= 40 and not _SENT_END.search(p)))   # 장 제목 조각('현실적으로는')
+
+    # 뒤 항목부터 — 앞 항목의 진짜 자리가 뒤 항목의 잘못 선 제목 줄 뒤에 있으면 뒤 것이 먼저 비켜야 한다(12년차기획맨 8장)
+    for ei in reversed(range(len(entries))):
+        e = entries[ei]
+        head = toc_headings._heading(e)
+        p = _entry_positions(paras, entries)[ei]
+        if p is None:
+            continue
+        if not (listy(p - 1) or listy(p + 1)):   # 같은 제목 줄이 다음 제목 전에 또 나와야 옮기므로 한쪽만 봐도 된다
+            continue
+        q = next((k for k in range(p + 1, len(paras)) if _MD_HEADING_RE.match(paras[k])), len(paras))
+        t = norm(e["title"])
+        k = next((k for k in range(p + 2, q) if len(paras[k]) <= len(e["title"]) * 1.4 + 5 and norm(paras[k])
+                  and SequenceMatcher(None, norm(paras[k]), t, autojunk=False).ratio() >= toc_headings._MATCH_MIN),
+                 None)
+        if k is None:
+            continue
+        paras[p], paras[k] = e["title"], head
+        moved += 1
+    return "\n\n".join(paras), moved
+
+
 _SPLIT_TITLE_PLAIN_MIN = 0.85   # 번호 표지가 없으면 더 엄하게
 
 
@@ -751,14 +951,12 @@ def _place_unnumbered_titles(paras: list[str], entries: list[dict]) -> int:
     placed = 0
     for ei, e in enumerate(entries):
         head = toc_headings._heading(e)
-        if head in paras:
-            continue
         target = toc_headings._norm_hangul(re.sub(r'^0*\d{1,3}\.\s*', '', e["title"]))
         if len(target) < 8:
             continue
-        prev = [paras.index(toc_headings._heading(p)) for p in entries[:ei] if toc_headings._heading(p) in paras]
-        nxt = [paras.index(toc_headings._heading(p)) for p in entries[ei + 1:] if toc_headings._heading(p) in paras]
-        lo, hi = (max(prev) + 1 if prev else 0), (min(nxt) if nxt else len(paras))
+        lo, hi, found = _bounds(paras, entries, ei)
+        if found:
+            continue
         words = [(p, w) for p in range(lo, hi) if not _MD_HEADING_RE.match(paras[p]) for w in paras[p].split()]
         norms = [toc_headings._norm_hangul(w) for _, w in words]
         reach = len(target) // 2 + _SPLIT_TITLE_SLACK
@@ -786,23 +984,46 @@ def _place_unnumbered_titles(paras: list[str], entries: list[dict]) -> int:
     return placed
 
 
-def _title_line(lines: list[str], lo: int, hi: int, title: str) -> int | None:
+_LATIN_TAIL_RE = re.compile(r'[A-Za-z][^가-힣]*$')
+
+
+def _latin_tail(line: str, title: str) -> str:
+    """한글 제목 줄 끝의 영어 부분 — 차례 제목에 없는 것만('시나리오 경영Scenarios' → 'Scenarios')."""
+    if not re.search(r'[가-힣]', title):
+        return ""
+    m = _LATIN_TAIL_RE.search(line.strip())
+    return m.group().strip() if m and m.group().strip() not in title else ""
+
+
+def _title_line(lines: list[str], lo: int, hi: int, title: str, exact: bool = False) -> int | None:
     """lines[lo:hi] 에서 차례 제목과 같은 따로 선 짧은 줄(제목 줄·표 줄 제외). 번호표를 뗀 제목으로도 본다.
     차례 OCR 이 두 항목·저자를 한 줄로 붙여 읽은 항목('다이렉트경영 마이클델', CEO의책꽃이 실측)은 그 앞부분과
     같은 줄도 — 6자 이상·항목의 40% 이상일 때만."""
     han = bool(re.search(r'[가-힣]', title))
     norm = toc_headings._norm_hangul if han else toc_headings._norm
-    targets = [t for t in dict.fromkeys([norm(title), norm(toc_headings._LABEL_RE.sub("", title))]) if len(t) >= 4]
+    # '주제 _ 부제' 차례 제목은 본문 제목 줄에 주제만 있기도 하다('2장 2×2의 변증법 _ 문제 상황을…' → '2×2의 변증법')
+    main = title.split(" _ ")[0] if " _ " in title else ""
+    targets = [t for t in dict.fromkeys([norm(title), norm(toc_headings._LABEL_RE.sub("", title)),
+                                         norm(toc_headings._LABEL_RE.sub("", main))]) if len(t) >= 4]
+    # 짧은 주제('추천사 _ …')·번호표를 뗀 짧은 제목('제1강 관찰력' → '관찰력', 2천년의강의)
+    short_main = norm(toc_headings._LABEL_RE.sub("", main)) if main else norm(toc_headings._LABEL_RE.sub("", title))
     for i in range(lo, hi):
         l = lines[i].strip()
-        if not l or _MD_HEADING_RE.match(l) or l.startswith("|") or len(l) > len(title) * 1.4 + 5:
+        # 한글 제목은 줄 끝 영어 원제를 빼고 길이를 잰다('시나리오 경영Scenarios', 2x2Matrix)
+        size = len(_LATIN_TAIL_RE.sub("", l)) if han and re.search(r'[가-힣]', l) else len(l)
+        if not l or _MD_HEADING_RE.match(l) or l.startswith("|") or size > len(title) * 1.4 + 5:
             continue
         if _FIGURE_CAPTION_RE.match(l):     # 그림 설명('그림6.37 영향력-불확실성 매트릭스', 2x2Matrix)은 제목 아님
             continue
         # '서문'·'죄' 같은 짧은 제목 — 같은 글자 줄만(삶의지혜·1001가지기독교명언)
-        if (len(norm(title)) == 1 and l == title.strip()) or (2 <= len(norm(title)) < 4 and norm(l) == norm(title)):
+        if (len(norm(title)) == 1 and l == title.strip()) or (2 <= len(norm(title)) < 4 and norm(l) == norm(title)) \
+                or (2 <= len(short_main) < 4 and norm(l) == short_main):    # '추천사 _ 제임스 길모어…' → '추천사'
             return i
         n = norm(l)
+        if exact:   # 띄어쓰기·영어 원제만 다른 같은 글자 줄만 — 비슷한 줄(색인 줄)이 진짜 제목보다 먼저 잡혔다(2x2Matrix)
+            if n in targets:
+                return i
+            continue
         if any(SequenceMatcher(None, n, t).ratio() >= toc_headings._MATCH_MIN
                or (len(n) >= _FRONT_MIN and len(n) >= len(t) * _FRONT_RATIO
                    and SequenceMatcher(None, n, t[:len(n)]).ratio() >= toc_headings._MATCH_MIN) for t in targets):

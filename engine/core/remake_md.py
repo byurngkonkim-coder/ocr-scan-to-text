@@ -100,12 +100,22 @@ def rebuild(text: str, toc: list[dict] | None = None) -> tuple[list[dict], str, 
     if entries:
         # 흩어진 제목부터 — rematch 가 제목 앞부분만 같은 줄('…변하듯 04')을 먼저 잡아 차례 제목을 그 줄로 바꿨다
         body, _ = text_cleaner.drop_toc_remnant(body, entries)
+        body, _ = text_cleaner.drop_toc_tables(body, entries)
+        body, _ = text_cleaner.drop_toc_dense(body, entries)
+        # 글자가 같은 따로 선 줄부터(경계를 세우고) → 흩어진 제목은 그 경계 안에서 → 다시 맞춤
+        if toc is not None:
+            body = text_cleaner.rematch_headings(body, entries, stats, respace=False, keep_titles=True,
+                                                 exact=True)
         body, _ = text_cleaner.place_split_titles(body, entries)
         body = text_cleaner.rematch_headings(body, entries, stats, respace=toc is None,
                                              keep_titles=toc is not None)
+        # 장 여는 쪽 절 목록에 선 제목을 진짜 자리로 옮긴 뒤, 그 사이에 생긴 자리에서 못 찾은 항목을 다시 맞춘다
+        body, moved = text_cleaner.relocate_list_headings(body, entries)
+        if moved:
+            body = text_cleaner.rematch_headings(body, entries, stats, respace=False, keep_titles=toc is not None)
         # 한 번 더 — rematch 가 세운 제목들이 앞뒤 경계가 되어 문단 끝에 붙은 짧은 제목을 좁은 범위에서 찾는다
         body, more = text_cleaner.place_split_titles(body, entries, tail=True)
-        if more:
+        if more or moved:
             heads = set(body.split("\n"))
             stats["missing"] = [e["title"] for e in entries if toc_headings._heading(e) not in heads]
             stats["found"] = len(entries) - len(stats["missing"]) - stats["inferred"]
@@ -117,6 +127,7 @@ def rebuild(text: str, toc: list[dict] | None = None) -> tuple[list[dict], str, 
         note = (f"차례를 찾지 못해 본문에서 장 제목 {len(entries)}개를 추정(제N장·CHAPTER N 꼴 줄)" if entries
                 else "차례를 찾지 못해 장·절 정비 없이 정제")
     body, _ = text_cleaner.attach_item_numbers(body)   # 제목을 다 세운 뒤 — 문단 끝 제목 찾기가 번호 문단을 본다
+    body, _ = text_cleaner.drop_cover_ad(body)
     body = (toc_headings.space_headings(body) if entries else body.strip()) + "\n"
     return entries, body, note
 
