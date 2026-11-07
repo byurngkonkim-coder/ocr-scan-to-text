@@ -285,3 +285,15 @@ def test_two_unrelated_short_lines_not_joined():
     lines = ["세번째 열쇠:", "", "다른 이야기를 하자", "", "본문."]
     out = tc.rematch_headings("\n".join(lines), e, {}, respace=False, keep_titles=True, exact=True)
     assert out.split("\n")[0] == "세번째 열쇠:"
+
+
+def test_lone_chapter_label_line_used_when_title_absent():
+    # FocalPoint 실측(2026-11-07) — 장 표지에 '제1장' 만 있고 큰 제목은 차례에만. 느슨한 패스의 마지막 수단
+    e = [{"level": 1, "title": "제1장 습관이 운명을 결정한다", "page": None},
+         {"level": 1, "title": "제2장 핵심을 찾아 집중하라", "page": None}]
+    lines = ["프롤로그 끝.", "", "제1장", "", "모든 위대한 사람은", "", "## 제2장 핵심을 찾아 집중하라"]
+    out = tc.rematch_headings("\n".join(lines), e, {}, respace=False, keep_titles=True)
+    assert out.split("\n")[2] == "# 제1장 습관이 운명을 결정한다"
+    # 엄격한 앞 패스에서는 쓰지 않는다
+    out = tc.rematch_headings("\n".join(lines), e, {}, respace=False, keep_titles=True, exact=True)
+    assert out.split("\n")[2] == "제1장"

@@ -1351,6 +1351,12 @@ def _title_line(lines: list[str], lo: int, hi: int, title: str, exact: bool = Fa
                or (len(n) >= _FRONT_MIN and len(n) >= len(t) * _FRONT_RATIO
                    and SequenceMatcher(None, n, t[:len(n)]).ratio() >= toc_headings._MATCH_MIN) for t in targets):
             return i
+    # 마지막(느슨한) 패스에서 제목 글자 줄이 없으면 장 번호표만 따로 선 줄('제1장') — 장 표지에 큰 제목 없이 번호만
+    # 있는 책(FocalPoint: 제목은 차례에만). 번호표가 정확히 같은 줄만
+    lab = None if exact else _EXTRA_LABEL_RE.match(title)
+    if lab and lab.group().strip() != title.strip():
+        want = re.sub(r'\s', '', lab.group())
+        return next((i for i in range(lo, hi) if re.sub(r'\s', '', lines[i]) == want), None)
     return None
 
 
