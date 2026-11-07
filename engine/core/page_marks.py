@@ -77,6 +77,8 @@ def _insert_at(text: str, o: int) -> int | None:
         return _next_body_line(text, ls)
     le = text.find("\n", o)
     le = len(text) if le < 0 else le
+    if _HEADING_RE.match(text[ls:le]):     # 제목 줄은 끊지 않는다 — 제목 속 '?' 는 문장 끝이 아니다(StrategicalThinking)
+        return _next_body_line(text, le + 1)
     m = _SENT_END_RE.search(text, o, le)
     while m and m.end() < le and not text[m.end()].isspace():    # '3.5'·'U.S.' 같은 문장 속 마침표
         m = _SENT_END_RE.search(text, m.end(), le)

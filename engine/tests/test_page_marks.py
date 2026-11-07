@@ -63,6 +63,15 @@ def test_mark_goes_after_heading_line():
     assert "# 제2장 지식 사회\n\n[p.2]\n" + _P3 in out
 
 
+def test_page_turning_inside_heading_keeps_heading_whole():
+    """쪽이 제목 줄 중간에서 바뀌어도 제목을 끊지 않는다 — 제목 속 '?' 는 문장 끝이 아니다
+    (StrategicalThinking '[도구 4] … 시장 접근율인가? 승률인가?' 가 [p.344] 로 두 줄이 됨, 2026-11-08)."""
+    head = "### 승패 분석 : 시장 접근율인가? 승률인가?"
+    clean = f"{_P1}\n\n{head}\n\n{_P3}"
+    out, _ = page_marks.mark_pages(clean, [(1, _P1 + " 승패 분석"), (2, "시장 접근율인가? 승률인가?\n" + _P3)])
+    assert head + "\n" in out and "[p.2]\n" + _P3 in out
+
+
 def test_mark_not_inside_markdown_table():
     """쪽 시작이 표 안이면 표가 끝난 뒤에 — 표를 깨지 않는다."""
     table = "| 구분 | 낮음 | 높음 |\n| --- | --- | --- |\n| 가치 | 시장점유율이 낮은 사업부 | 성장률이 높은 사업부 |"
