@@ -525,6 +525,44 @@ def _show_headings(pages: list[str], store: list[str]) -> list[str]:
     return [_HIDDEN_HEADING_RE.sub(lambda m: store[int(m.group(1))], p) for p in pages]
 
 
+_BACK_MATTER = {"주석", "미주", "후주", "참고문헌", "찾아보기", "색인", "주", "notes"}
+
+
+def _back_matter_fences(lines: list[str], entries: list[dict]) -> list[int]:
+    """차례 항목마다 넘으면 안 되는 줄 — 그 항목 뒤에 오는 뒷부분 항목('주석'·'찾아보기')이 본문에 따로 선 줄의
+    마지막 자리. 본문에 없는 '서문' 이 맨 뒤 주석 속 '서문' 줄을 잡아 그 뒤 장 제목이 모두 주석 속 장 이름 줄에
+    섰다(Alianment정렬 2026-11-07)."""
+    fences = [len(lines)] * len(entries)
+    fence = len(lines)
+    for ei in range(len(entries) - 1, -1, -1):
+        fences[ei] = fence
+        t = _strip_label(entries[ei]["title"]).strip()
+        if t.lower() in _BACK_MATTER:
+            k = next((i for i in range(len(lines) - 1, -1, -1)
+                      if lines[i].strip().lstrip("#").strip() == t), None)
+            if k is not None:
+                fence = min(fence, k)
+    return fences
+
+
+def _best_title_lines(lines: list[str], entries: list[dict], at: list[int | None], exact: bool) -> dict[int, int]:
+    """못 찾은 차례 항목을 차례 순서대로 앞뒤로 이미 선 제목 줄 사이에서 찾는다 — 뒷부분 항목 줄 너머는 보지
+    않는다(_back_matter_fences). {항목 번호: 줄 번호}
+    가장 많이 세우는 짝을 고르는 방식은 장 여는 쪽의 절 이름 목록 줄을 골라 진짜 절 자리를 버렸다(2x2Matrix 64→61)."""
+    at = list(at)
+    fences = _back_matter_fences(lines, entries)
+    out: dict[int, int] = {}
+    for ei, e in enumerate(entries):
+        if at[ei] is not None:
+            continue
+        lo = max((k for k in at[:ei] if k is not None), default=-1) + 1
+        hi = min(min((k for k in at[ei + 1:] if k is not None), default=len(lines)), fences[ei])
+        k = _title_line(lines, lo, hi, e["title"], exact)
+        if k is not None:
+            out[ei] = at[ei] = k
+    return out
+
+
 def rematch_headings(text: str, entries: list[dict], stats: dict, respace: bool,
                      keep_titles: bool = False, exact: bool = False) -> str:
     """정제 뒤 한 번 더 — 줄 잇기 전 원문에서 못 찾은 차례 제목이 정제본에 따로 선 줄로 남아 있으면 제목으로
@@ -543,12 +581,8 @@ def rematch_headings(text: str, entries: list[dict], stats: dict, respace: bool,
         at.append(k)
         if k is not None:
             pos = k + 1
-    for ei, e in enumerate(entries):
-        if at[ei] is not None:
-            continue
-        lo = max((k for k in at[:ei] if k is not None), default=-1) + 1
-        hi = min((k for k in at[ei + 1:] if k is not None), default=len(lines))
-        k = _title_line(lines, lo, hi, e["title"], exact)
+    for ei, k in _best_title_lines(lines, entries, at, exact).items():
+        e = entries[ei]
         if k is not None:
             if not keep_titles:   # 사람이 확인한 차례(책정보 파일)면 제목은 차례 글자 그대로 — OCR 오타 줄로 안 바꿈
                 e["title"] = lines[k].strip()
@@ -953,7 +987,16 @@ _DOUBLE_OPEN_RE = re.compile(r'""(?=[가-힣])')
 # '…진정한‘큰생각'' ⏎⏎ '을 만나게 될 것이다' — 쪽·줄 경계에서 낱말 꼬리 조사가 다음 문단으로 갈렸다.
 # 문단 첫머리에 올 수 없는 조사만('이·가·도·만·로' 는 '이 책'·'가지'·'도시' 처럼 낱말 머리일 수 있어 뺀다).
 _LEAD_JOSA_RE = re.compile(r'^(?:에서|으로|에게|을|를|은|는|의|에|과|와)(?=[\s,.])')
-_GLUED_DIGIT_RE = re.compile(r'(?<=[가-힣])(?<=(?:은|는|을|를|에|의|와|과|도|이|가))(?=\d)')
+_GLUED_DIGIT_RE = re.compile(r'(?<=[가-힣])(?<=(?:은|는|을|를|에|의|와|과|도|이|가))(?=\d)'
+                             # '용어로서4차'·'따라서3가지'·'하지만2016년' — 앞이 한글일 때만('1만2000' 은 그대로)
+                             r'|(?<=[가-힣][서만로])(?=\d)'
+                             r'|(?<=\d년)(?=\d{1,2}월)|(?<=\d월)(?=\d{1,2}일)'    # '2017년5월' (4차산업혁명시대)
+                             # 문장 끝 뒤 숫자+단위 '있다.1992년'·'있다.3장과' — 각주 번호('하였다.2 첫')는 단위가 없어 그대로
+                             r'|(?<=[다요]\.)(?=\d+(?:년|월|일|장|부|개|명|%|가지|세기|차|위|배))')
+# 조사 뒤 대문자 약어 '제조업과ICT'·'최고의IT' — 낱말 속 약어('삼성SDI'·'한국IT업계')는 앞 글자가 조사가 아니라 그대로
+_GLUED_LATIN_RE = re.compile(r'(?<=[가-힣]{2})(?<=[과와을를은는이가에의도])(?=[A-Z]{2})'
+                             # 낱말 첫머리 지시어+책 '이책은'·'그책을'(CEO의책꽃이 23곳) — '정책'·'…이책임' 은 앞이 한글이라 그대로
+                             r'|(?<=[이그저])(?<![가-힣][이그저])(?=책)')
 _GLUED_QUOTE_RE = re.compile(r'(?<=[가-힣])(?=[‘“])')
 # 보조용언 '…기도 하다' — 용언 줄기+'기도' 뒤 '했다·한다…'(2천년의강의 '고백하기도했다'). 명사 '기도했다'(기도를
 # 했다)는 앞에 줄기가 없어 걸리지 않는다
@@ -1009,7 +1052,8 @@ def space_glued_marks(text: str) -> tuple[str, int]:
     띄운다. (본문, 넣은 띄어쓰기 수)"""
     text, a = _GLUED_DIGIT_RE.subn(" ", text)
     text, a2 = _AUX_GIDO_RE.subn(r"\1 \2", text)   # '고백하기도했다' → '고백하기도 했다'
-    a += a2
+    text, a3 = _GLUED_LATIN_RE.subn(" ", text)
+    a += a2 + a3
     b = 0
     lines = text.split("\n")
     for k, line in enumerate(lines):
@@ -1083,6 +1127,47 @@ def drop_cover_ad(text: str) -> tuple[str, int]:
         b += 1
     del paras[a:b]
     return "\n\n".join(paras), b - a
+
+
+_ECHO_LINE_MAX = 60
+_LONE_LABEL_RE = re.compile(r'^(?:제\s*)?(\d{1,2})\s*[부장편강]$|^(?:CHAPTER|PART|Chapter|Part)\s*(\d{1,2})$')
+
+
+def drop_heading_echo(text: str) -> tuple[str, int]:
+    """제목 바로 아래 문단이 제목 끝 한두 낱말로만 되어 있으면 지운다 — 장 표지의 큰 글자를 OCR 이 따로 읽은
+    것(4차산업혁명시대: '## 1장 혁신 전쟁의 서막' 아래 '서막'). 짧은 줄이 그 끝말로 시작하면(용어 상자 제목에
+    붙음: '산업 트렌드 오픈 이노베이션(…)') 끝말만 떼어낸다. 문장(…다.)이거나 긴 문단은 본문이라 두다.
+    (본문, 고친 수)"""
+    paras = text.split("\n\n")
+    fixed = 0
+    for i in range(1, len(paras)):      # 제목 바로 위에 같은 번호의 표지 번호만 남은 줄('1부'·'CHAPTER9')
+        lab = _LONE_LABEL_RE.match(paras[i - 1].strip())
+        num = re.match(r'#+\s*(?:제\s*)?(\d+)\s*[부장편강]', paras[i])
+        if lab and num and int(lab.group(1) or lab.group(2)) == int(num.group(1)):
+            paras[i - 1] = None
+            fixed += 1
+    for i in range(len(paras) - 1):
+        m = paras[i] is not None and _MD_HEADING_RE.match(paras[i])
+        nxt = (paras[i + 1] or "").strip()
+        if not m or not nxt or _MD_HEADING_RE.match(nxt):
+            continue
+        words = paras[i].lstrip("#").split()
+        for k in (2, 1):
+            if len(words) <= k:
+                continue
+            tail = " ".join(words[-k:])
+            if len(tail) < 2:
+                continue
+            if nxt == tail:
+                paras[i + 1] = None
+            elif nxt.startswith(tail + " ") and len(nxt) <= _ECHO_LINE_MAX and "다." not in nxt \
+                    and not nxt.endswith(("다", ".", "?", "!")):
+                paras[i + 1] = nxt[len(tail):].strip()
+            else:
+                continue
+            fixed += 1
+            break
+    return "\n\n".join(p for p in paras if p is not None), fixed
 
 
 _LIST_LINE_RE = re.compile(r'^(?:\d{1,2}\s?[.,)]?\s?\S|\d\)|[-•·])')
@@ -1190,8 +1275,11 @@ def _title_line(lines: list[str], lo: int, hi: int, title: str, exact: bool = Fa
     norm = toc_headings._norm_hangul if han else toc_headings._norm
     # '주제 _ 부제' 차례 제목은 본문 제목 줄에 주제만 있기도 하다('2장 2×2의 변증법 _ 문제 상황을…' → '2×2의 변증법')
     main = title.split(" _ ")[0] if " _ " in title else ""
+    # 장 표지 '큰 제목 _ 작은 제목' 은 본문에 작은 제목만 남기도 한다('… _ 역사적 고찰' → '역사적 고찰', Alianment정렬)
+    # 마지막(느슨한) 패스에서만 — 앞 패스에서 쓰면 큰 제목 줄을 찾기 전에 작은 제목 줄을 잡았다(2천년의강의)
+    sub = title.split(" _ ", 1)[1] if " _ " in title and not exact else ""
     targets = [t for t in dict.fromkeys([norm(title), norm(_strip_label(title)),
-                                         norm(_strip_label(main))]) if len(t) >= 4]
+                                         norm(_strip_label(main)), norm(sub)]) if len(t) >= 4]
     # 짧은 주제('추천사 _ …')·번호표를 뗀 짧은 제목('제1강 관찰력' → '관찰력', 2천년의강의)
     short_main = norm(_strip_label(main)) if main else norm(_strip_label(title))
     for i in range(lo, hi):

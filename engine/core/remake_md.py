@@ -128,6 +128,7 @@ def rebuild(text: str, toc: list[dict] | None = None) -> tuple[list[dict], str, 
                 else "차례를 찾지 못해 장·절 정비 없이 정제")
     body, _ = text_cleaner.attach_item_numbers(body)   # 제목을 다 세운 뒤 — 문단 끝 제목 찾기가 번호 문단을 본다
     body, _ = text_cleaner.drop_cover_ad(body)
+    body, _ = text_cleaner.drop_heading_echo(body)          # 장 표지 큰 글자 '서막'(4차산업혁명시대)
     body, _ = text_cleaner.repair_open_brackets(body)
     body, _ = text_cleaner.join_josa_paragraphs(body)      # '…‘큰생각'' ⏎⏎ '을 만나게' (2천년의강의)
     body, _ = text_cleaner.space_glued_marks(body)          # '당신은2000년'·'진정한‘큰생각''

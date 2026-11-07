@@ -15,6 +15,7 @@
 
 사용: venv/Scripts/python.exe tools/reprocess_book.py 20261019_201720_삶의지혜_자아편
      (이름 없이 실행하면 아직 _재처리 에 없는 가장 오래된 결과 하나)
+     tools/reprocess_book.py --상태   → 끝난 책 수·하던 책·다음 책(다시 시작 지점)
 """
 from __future__ import annotations
 
@@ -59,6 +60,8 @@ def read_book_info(path: Path) -> dict:
 
 
 _LOSS_MAX = 0.03     # 본문 한글 글자가 이만큼 넘게 줄면 실패 — 지우는 규칙이 본문까지 지운 것
+_PAGE_DRIFT = 0.35   # 제목 자리(문서 줄 비율)와 차례 쪽(마지막 쪽 비율)이 이만큼 넘게 다르면 엉뚱한 자리
+_DRIFT_SHARE = 0.2   # 쪽번호 있는 찾은 제목 중 이 비율(최소 2개)을 넘게 엉뚱하면 실패
 
 
 def quality(entries: list[dict], src: str, out: str) -> dict:
@@ -77,13 +80,17 @@ def quality(entries: list[dict], src: str, out: str) -> dict:
             used.add(k)
     ks = [k for k in at if k is not None]
     breaks = sum(1 for a, b in zip(ks, ks[1:]) if b < a)
+    # 차례 쪽번호와 본문 속 자리 — 순서는 맞아도 제목이 모두 맨 뒤 주석 속 장 이름 줄에 선 사고(Alianment정렬)
+    paged = [(k, e["page"]) for e, k in zip(entries, at) if k is not None and e.get("page")]
+    last = max((p for _, p in paged), default=0)
+    misplaced = sum(1 for k, p in paged if abs(k / len(lines) - p / last) > _PAGE_DRIFT) if last else 0
     hangul = lambda t: len(re.findall("[가-힣]", remake_md.parse_result(t)[1]))
     before, after = hangul(src), hangul(out)
     loss = (before - after) / before if before else 0.0
-    return {"found": len(ks), "total": len(entries), "order_breaks": breaks,
+    return {"found": len(ks), "total": len(entries), "order_breaks": breaks, "misplaced": misplaced,
             "missing": [e["title"] for e, k in zip(entries, at) if k is None],
             "hangul_before": before, "hangul_after": after, "loss": round(loss, 4),
-            "ok": breaks == 0 and loss <= _LOSS_MAX}
+            "ok": breaks == 0 and loss <= _LOSS_MAX and misplaced <= max(2, len(paged) * _DRIFT_SHARE)}
 
 
 BASELINE = OUT_DIR / "_점검기준.json"
@@ -110,6 +117,20 @@ def next_target() -> str | None:
         if p.stem not in done:
             return p.stem
     return None
+
+
+LOG = ENGINE.parent / "docs" / "순차개선_기록.md"
+_ROUND_RE = re.compile(r'^### \d+회 — (\S+)', re.M)
+
+
+def status(log: Path = LOG) -> dict:
+    """어디서 다시 시작할지 — 기록 문서에 회차가 적힌 책은 끝난 책, _재처리 결과는 있는데 회차가 없으면 하던 책
+    (규칙 고치기·기록·커밋 전에 멈춤), 그다음은 아직 다시 만들지 않은 가장 오래된 결과."""
+    done = _ROUND_RE.findall(log.read_text(encoding="utf-8")) if log.exists() else []
+    made = sorted(p.stem for p in OUT_DIR.glob("*.md"))
+    return {"done": len(done), "last": done[-1] if done else None,
+            "unfinished": [s for s in made if s not in done], "next": next_target(),
+            "remaining": sum(1 for p in RESULTS.glob("*.md") if p.stem not in done)}
 
 
 def reprocess(stem: str) -> tuple[Path, dict]:
@@ -150,6 +171,12 @@ def reprocess(stem: str) -> tuple[Path, dict]:
 
 
 if __name__ == "__main__":
+    if sys.argv[1:] == ["--상태"]:      # 다시 시작 지점(ocr-reprocess 스킬이 맨 먼저 부른다)
+        st = status()
+        print(f"끝난 책 {st['done']}권 (마지막: {st['last']}) · 남은 책 {st['remaining']}권")
+        print("하던 책(회차 기록 없음):", ", ".join(st["unfinished"]) or "없음")
+        print("다음 책:", st["next"] or "없음")
+        sys.exit(0)
     target = sys.argv[1] if len(sys.argv) > 1 else next_target()
     if not target:
         print("다시 만들 결과가 없습니다")
@@ -163,10 +190,10 @@ if __name__ == "__main__":
     for line in rep["logs"]:
         print(line)
     q = rep["quality"]
-    print(f"점검: 제목 {q['found']}/{q['total']} · 순서 어긋남 {q['order_breaks']} · "
+    print(f"점검: 제목 {q['found']}/{q['total']} · 순서 어긋남 {q['order_breaks']} · 쪽과 먼 제목 {q['misplaced']} · "
           f"본문 한글 {q['hangul_before']:,} → {q['hangul_after']:,} ({-q['loss']:+.1%})")
     regress = ratchet(Path(target).stem, q)
     if not q["ok"] or regress:
-        print("⚠ 불합격 —", regress or "제목 순서가 차례와 다르거나 본문 한글이 3% 넘게 줄었다",
+        print("⚠ 불합격 —", regress or "제목 순서가 차례와 다르거나, 제목이 차례 쪽과 먼 자리에 섰거나, 본문 한글이 3% 넘게 줄었다",
               "· 방금 바꾼 규칙부터 의심할 것")
         sys.exit(2)

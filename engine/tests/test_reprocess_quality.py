@@ -34,9 +34,39 @@ def test_body_deleted_fails():
     assert not q["ok"] and q["loss"] > 0.03
 
 
+def test_titles_bunched_far_from_their_pages_fail():
+    # Alianment정렬 실제 사고(2026-11-07) — 장 제목 10개가 모두 맨 뒤 주석 속 '2장 …_역사적 고찰' 줄에 섰다.
+    # 순서는 맞아서 순서 검사로는 못 잡았다. 차례 쪽번호와 본문 속 자리가 크게 어긋나면 불합격.
+    ents = [{"level": 1, "title": f"{k}장 제목{k}", "page": k * 40} for k in range(1, 10)]
+    chap = "\n\n".join(_BODY for _ in range(20))      # 장마다 문단 20개
+    body = "\n\n".join(chap for _ in range(9))
+    good = "\n\n".join(f"# {k}장 제목{k}\n\n{chap}" for k in range(1, 10))
+    bad = body + "\n\n" + "\n\n".join(f"# {k}장 제목{k}" for k in range(1, 10))
+    assert rb.quality(ents, good, good)["ok"] and rb.quality(ents, good, good)["misplaced"] == 0
+    q = rb.quality(ents, good, bad)
+    assert not q["ok"] and q["misplaced"] >= 5
+
+
 def test_ratchet_fails_when_found_titles_drop(tmp_path):
     # 21세기지식경영 실제 회귀 48 → 44 를 사람이 표를 대조해서야 찾았다
     base = tmp_path / "base.json"
     assert rb.ratchet("책", {"found": 48, "total": 48}, base) == ""
     assert rb.ratchet("책", {"found": 44, "total": 48}, base) == "제목 48 → 44 회귀"
     assert rb.ratchet("책", {"found": 48, "total": 48}, base) == ""
+
+
+def test_status_finds_unfinished_and_next(tmp_path, monkeypatch):
+    # 다시 시작 지점 — 결과는 만들었지만 기록 문서에 회차가 없는 책이 '하던 책', 그다음이 아직 안 만든 가장 오래된 결과
+    res, out = tmp_path / "02_결과", tmp_path / "02_결과" / "_재처리"
+    out.mkdir(parents=True)
+    for s in ("20260101_a", "20260102_b", "20260103_c"):
+        (res / f"{s}.md").write_text("x", encoding="utf-8")
+    for s in ("20260101_a", "20260102_b"):
+        (out / f"{s}.md").write_text("x", encoding="utf-8")
+    log = tmp_path / "기록.md"
+    log.write_text("### 1회 — 20260101_a (2026-11-07)\n", encoding="utf-8")
+    monkeypatch.setattr(rb, "RESULTS", res)
+    monkeypatch.setattr(rb, "OUT_DIR", out)
+    st = rb.status(log)
+    assert st == {"done": 1, "last": "20260101_a", "unfinished": ["20260102_b"], "next": "20260103_c",
+                  "remaining": 2}

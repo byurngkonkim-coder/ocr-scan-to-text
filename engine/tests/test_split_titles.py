@@ -203,3 +203,37 @@ def test_exact_pass_skips_similar_index_line():
              "매스 커스터마이제이션 238"]
     out = tc.rematch_headings("\n".join(lines), e, {}, respace=False, keep_titles=True, exact=True)
     assert "### 매스 커스터마이제이션 _ 4가지 접근법" not in out.split("\n")   # 색인 줄은 같은 글자가 아니다
+
+
+def test_early_entry_found_only_in_end_notes_does_not_drag_others():
+    # Alianment정렬 실측(2026-11-07) — 본문엔 '서문' 줄이 없고 맨 뒤 주석에만 있어, 차례 순서대로 앞에서부터 짝지으면
+    # '서문' 이 주석 줄을 잡고 그 뒤 장 제목 10개가 모두 주석 속 장 이름 줄에 섰다. 뒷부분 항목('주석') 앞 항목은
+    # 그 줄 너머에서 찾지 않는다.
+    e = _m("서문", "감사의 말", "재무와 고객 전략의 정렬", "지원 기능의 정렬", "주석")
+    paras = ["감사의 말", "고마운 분들.", "재무와 고객 전략의 정렬", "본문 1.", "지원 기능의 정렬", "본문 2.",
+             "주석", "서문", "1 캐플란 교수와 노튼 박사 저.", "재무와 고객 전략의 정렬", "2 각주."]
+    out = tc.rematch_headings("\n\n".join(paras), e, {}, respace=False, keep_titles=True)
+    got = out.split("\n\n")
+    assert got[:5] == ["### 감사의 말", "고마운 분들.", "### 재무와 고객 전략의 정렬", "본문 1.", "### 지원 기능의 정렬"]
+    assert got[6:10] == ["### 주석", "서문", "1 캐플란 교수와 노튼 박사 저.", "재무와 고객 전략의 정렬"]
+
+
+def test_small_title_after_underscore_matches_body_line():
+    # 장 표지 '기업 전략과 조직 구조 / 역사적 고찰' — 본문 OCR 에는 작은 제목 줄만 남았다(Alianment정렬)
+    e = _m("1장 들어가며", "2장 기업 전략과 조직 구조 _ 역사적 고찰", "3장 재무와 고객 전략의 정렬")
+    paras = ["### 1장 들어가며", "본문.", "역사적 고찰", "본문 2.", "### 3장 재무와 고객 전략의 정렬"]
+    out = tc.rematch_headings("\n\n".join(paras), e, {}, respace=False, keep_titles=True)
+    assert out.split("\n\n")[2] == "### 2장 기업 전략과 조직 구조 _ 역사적 고찰"
+    # 앞(엄격) 패스에서는 작은 제목으로 찾지 않는다 — 큰 제목 줄을 뒤 패스가 찾을 몫(2천년의강의 회귀)
+    out = tc.rematch_headings("\n\n".join(paras), e, {}, respace=False, keep_titles=True, exact=True)
+    assert out.split("\n\n")[2] == "역사적 고찰"
+
+
+def test_chapter_title_wins_over_section_names_in_opener_list():
+    # 2x2Matrix 회귀(2026-11-07) — 장 여는 쪽의 절 이름 목록이 장 제목 줄보다 앞에 있을 때, '가장 많이 세우는 짝'
+    # 방식이 절 이름을 세우고 장 제목을 버렸다(64→61). 차례 순서대로 앞 항목부터 찾으면 장 제목이 선다.
+    e = [{"level": 2, "title": "7장 조직 혁신의 프레임워크", "page": None},
+         {"level": 3, "title": "구성원 동기부여", "page": None}]
+    paras = ["앞 장 본문.", "구성원 동기부여", "7장 조직 혁신의 프레임 워크", "본문."]
+    out = tc.rematch_headings("\n\n".join(paras), e, {}, respace=False, keep_titles=True)
+    assert "## 7장 조직 혁신의 프레임워크" in out.split("\n\n")
