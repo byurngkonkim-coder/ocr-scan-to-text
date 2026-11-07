@@ -269,6 +269,7 @@ def join_broken_lines(text: str) -> str:
     full = lens[len(lens) // 2] * _FULL_LINE_RATIO if lens else 0
     letters = item_letters(lines)
     out: list[str] = []
+    noise: list[str] = []
     i = 0
     while i < len(lines):
         cur = lines[i]
@@ -289,18 +290,64 @@ def join_broken_lines(text: str) -> str:
                 break  # 그림 제목 줄 — 마침표 없이 끊긴 앞 문단에 붙었다('…욕심 그림0.1 이익 계획 매트릭스')
             # 지금까지 이은 줄이 아니라 '현재 물리적 줄'(lines[i])이 끝까지 찼는지를 본다
             last = not any(l.strip() for l in lines[i + 2:])
-            if (len(lines[i].strip()) >= full and not is_item_start(nxt, letters)
+            if ((_LATIN_TAIL.search(cur) or _LATIN_LINE.fullmatch(nxt.strip()))
+                    and (split := _split_word_join(cur, lines, i))):
+                cur, i, moved = split      # 끝까지 찬 줄이라도 영문 장식을 떼어 내고 붙인다
+                noise.extend(moved)
+            elif (len(lines[i].strip()) >= full and not is_item_start(nxt, letters)
                     and not (last and _PAGE_FOOTER_LINE.match(nxt.strip()))
                     and _should_join(cur, nxt)):
                 cur = _join_wrapped(cur, nxt)
                 i += 1
+            elif (split := _split_word_join(cur, lines, i)):
+                cur, i, moved = split
+                noise.extend(moved)
             else:
                 break
 
         out.append(cur)
+        if noise:
+            out.append(' '.join(noise))
+            noise = []
         i += 1
 
     return '\n'.join(out)
+
+
+# 쪽 가장자리 영문 장식이 줄 끝에 붙거나('그러 Purple') 줄 사이에 끼어든다('SEEN ON') — 보라빛소가온다
+_LATIN_TAIL = re.compile(r'(?<=[가-힣])((?:\s+[A-Za-z]{2,12}){1,2})\s*$')
+_LATIN_LINE = re.compile(r"[A-Za-z][A-Za-z .'-]{0,19}")
+_LATIN_SKIP_MAX = 2
+
+
+def _split_word_join(cur: str, lines: list[str], i: int) -> tuple[str, int, list[str]] | None:
+    """짧게 꺾인 줄이 낱말 한가운데서 끊겼으면 (이은 줄, 마지막으로 쓴 줄 번호, 옮길 영문 장식).
+    '끝까지 찬 줄' 조건을 못 넘는 줄 — 그림을 피해 짧게 꺾인 줄('…물건을 샀|다.')·영문 장식이 붙은 줄 — 용.
+    판정은 Kiwi: 앞 어절 + 다음 줄 첫 두 어절을 붙인 꼴이 확실히 나을 때만('혈|안이 됐다.' +9.9,
+    '그는 큰|집에 살았다.' 0) — 제목 줄('제3장 꿈')은 잇지 않는다."""
+    from core import spacing
+    text, moved = cur.rstrip(), []
+    m = _LATIN_TAIL.search(text)
+    if m:
+        text, moved = text[:m.start()], m.group(1).split()
+    j = i + 1
+    while (j < len(lines) and j - i <= _LATIN_SKIP_MAX
+           and _LATIN_LINE.fullmatch(lines[j].strip())):
+        moved.append(lines[j].strip())
+        j += 1
+    # 물리적 줄(lines[i])이 짧으면 제목 — 앞 줄에 붙어 온 '…취했다.10 중심점'|'과점상태에서…'(경쟁전략)
+    if j >= len(lines) or len(lines[i].strip()) < 10 or _SENT_END.search(text):
+        return None
+    # 영문 장식이 없으면 앞에서 문장이 끝난 본문 줄만 — 제목 줄('한국어판 저자 서문'|'순두부찌개에…',
+    # '사례 연구: 세 계 최 고의 빵 집'|'리오넬…')이 다음 문단에 붙었다(보라빛소가온다 실측)
+    if not moved and not re.search(r'[.?!][”’"\')]*\s', text):
+        return None
+    nxt = lines[j].strip()
+    if not (re.search(r'[가-힣]$', text) and re.match(r'[가-힣]', nxt)):
+        return None
+    if not spacing.is_split_word(text.split()[-1], ' '.join(nxt.split()[:2])):
+        return None
+    return text + nxt, j, moved
 
 
 # ── 내부 함수 ──────────────────────────────────────────────────────────────────

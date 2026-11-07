@@ -75,3 +75,29 @@ def test_word_split_at_pagebreak_is_joined(before, after, joined):
 def test_real_word_boundary_at_pagebreak_keeps_space(before, after):
     out = text_cleaner.post_process_pagebreaks(f"그 결과 {before}\n{text_cleaner.PAGEBREAK}\n{after}")
     assert f"{before} {after.split()[0]}" in out
+
+
+# 그림을 피해 짧게 꺾인 줄·쪽 가장자리 영문 장식(Purple Cow, SEEN ON)이 낱말을 가른 경우
+# (보라빛소가온다 53·55쪽, 2026-11-07) — 짧은 줄이라 '끝까지 찬 줄' 조건에 걸려 잇지 못했다
+def test_short_wrap_lines_split_inside_word_are_joined():
+    src = (f"{_FILL}.\n" * 4 +      # 쪽의 보통 줄은 길다 — 아래 줄들은 그보다 짧게 꺾였다
+           "소비자들은 무언가를 사려고 안달이나 있었다. 그들은 상점에 가서 물건을 샀\nSEEN ON\n"
+           "다. 무엇에 쫓기는 사람들처럼 집안\n과 냉장고와 창고를 채우기 위해 혈\n안이 됐다.")
+    out = pp.join_broken_lines(src).splitlines()[4:]
+    assert out[0].endswith("물건을 샀다. 무엇에 쫓기는 사람들처럼 집안과 냉장고와 창고를 채우기 위해 혈안이 됐다.")
+    assert out[1] == "SEEN ON"      # 영문 장식은 지우지 않고 문단 뒤 줄로 옮긴다
+
+
+def test_margin_latin_tail_moved_out_of_split_word():
+    src = ("기민한 사업주는 여기서 모든 이윤을 광고에 재투자했다. 그러 Purple\n"
+           "면 늘어난 광고 덕분에 유통망은 더욱 확대됐고 공장도 더 필 Cow\n"
+           "요하게 됐다. 이렇게 해서 순환 구조가 구축됐다.")
+    out = pp.join_broken_lines(src).splitlines()
+    assert out == ["기민한 사업주는 여기서 모든 이윤을 광고에 재투자했다. 그러면 늘어난 광고 덕분에 "
+                   "유통망은 더욱 확대됐고 공장도 더 필요하게 됐다. 이렇게 해서 순환 구조가 구축됐다.",
+                   "Purple Cow"]
+
+
+@pytest.mark.parametrize("src", ["제3장 꿈\n사람들은 말한다.", "그는 큰\n집에 살았다."])
+def test_short_line_real_word_boundary_not_joined(src):
+    assert pp.join_broken_lines(src) == src
