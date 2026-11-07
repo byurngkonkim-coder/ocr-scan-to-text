@@ -50,6 +50,13 @@ def test_whole_title_without_label_repeated_below_dropped():
     assert n == 1 and out == "# 2부 내부 조직 간 전략 정렬\n\n## 3장 재무와 고객 전략의 정렬"
 
 
+def test_decoration_glyph_line_under_heading_dropped():
+    # 장 표지 장식 '•○•' 이 'o'·'o°' 로 읽힌 줄(HalfTimeShock 7곳) — 글자 없는 한두 자만
+    text = "## 2. 갇히는 것도 좋다\n\no\n\n본문.\n\n## 13. 시작, 혹은 끝\n\no°\n\n본문 2."
+    out, n = tc.drop_heading_echo(text)
+    assert n == 2 and "\n\no" not in out
+
+
 def test_label_line_with_other_number_kept():
     text = "2부\n\n# 1부 정렬의 중요성 이해"
     assert tc.drop_heading_echo(text) == (text, 0)

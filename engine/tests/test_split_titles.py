@@ -60,6 +60,15 @@ def test_toc_remnant_in_front_dropped():
     assert out.split("\n\n")[:3] == ["서문", "서문 본문이다. 이 책은 그라시안의 잠언을 해설한다.", "본문 문단 0이다."]
 
 
+def test_chapter_opener_with_repeated_title_not_toc_remnant():
+    # 장 여는 쪽: 장 제목이 두 번(앞 쪽 끝·장 표지) + 첫 절 제목 — 제목 문단 3개지만 서로 다른 제목은 2개(Helping 2장)
+    e = [{"level": 1, "title": t, "page": None} for t in ("1장 헬핑", "2장 도움의 작동원리", "기본 원칙 두 가지")]
+    body = ["앞 장 끝 문단이다.", "도움의 작동 원리", "도움의 작동원리", "기본 원칙 두 가지"] \
+        + [f"본문 문단 {i}이다." for i in range(60)]
+    text = "\n\n".join(body)
+    assert tc.drop_toc_remnant(text, e) == (text, 0)
+
+
 # ── 1001가지기독교명언 (2026-11-07) ─────────────────────────────────────────────
 
 def _topics(*titles):
@@ -216,6 +225,14 @@ def test_early_entry_found_only_in_end_notes_does_not_drag_others():
     got = out.split("\n\n")
     assert got[:5] == ["### 감사의 말", "고마운 분들.", "### 재무와 고객 전략의 정렬", "본문 1.", "### 지원 기능의 정렬"]
     assert got[6:10] == ["### 주석", "서문", "1 캐플란 교수와 노튼 박사 저.", "재무와 고객 전략의 정렬"]
+
+
+def test_title_with_latin_tail_counted_found():
+    # 영어 원제를 제목 아래로 내린 줄도 찾은 제목으로 센다(Helping 7장 '…팀워크Teamwork' — 문서 정보가 '못 찾음' 이라 적었다)
+    e = _m("팀워크")
+    stats = {}
+    out = tc.rematch_headings("앞 글.\n\n팀워크Teamwork\n\n본문.", e, stats, respace=False, keep_titles=True)
+    assert "### 팀워크\n\nTeamwork" in out and stats["missing"] == []
 
 
 def test_small_title_after_underscore_matches_body_line():

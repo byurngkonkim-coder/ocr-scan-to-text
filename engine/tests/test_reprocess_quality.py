@@ -79,3 +79,17 @@ def test_status_finds_unfinished_and_next(tmp_path, monkeypatch):
     st = rb.status(log)
     assert st == {"done": 1, "last": "20260101_a", "unfinished": ["20260102_b"], "next": "20260103_c",
                   "remaining": 2}
+
+
+def test_status_reads_stem_with_space(tmp_path, monkeypatch):
+    # 파일 이름에 빈칸이 든 책('1Q84_MurakamiHaruki_기울기 보정')을 기록해도 '하던 책' 으로 남지 않는다
+    res, out = tmp_path / "02_결과", tmp_path / "02_결과" / "_재처리"
+    out.mkdir(parents=True)
+    (res / "20260101_a b.md").write_text("x", encoding="utf-8")
+    (out / "20260101_a b.md").write_text("x", encoding="utf-8")
+    log = tmp_path / "기록.md"
+    log.write_text("### 1회 — 20260101_a b (2026-11-07)\n", encoding="utf-8")
+    monkeypatch.setattr(rb, "RESULTS", res)
+    monkeypatch.setattr(rb, "OUT_DIR", out)
+    st = rb.status(log)
+    assert st["last"] == "20260101_a b" and st["unfinished"] == []

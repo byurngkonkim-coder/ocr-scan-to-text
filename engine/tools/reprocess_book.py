@@ -125,7 +125,7 @@ def next_target() -> str | None:
 
 
 LOG = ENGINE.parent / "docs" / "순차개선_기록.md"
-_ROUND_RE = re.compile(r'^### \d+회 — (\S+)', re.M)
+_ROUND_RE = re.compile(r'^### \d+회 — (.+?) \(\d{4}-\d{2}-\d{2}\)', re.M)
 
 
 def status(log: Path = LOG) -> dict:

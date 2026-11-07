@@ -591,7 +591,8 @@ def rematch_headings(text: str, entries: list[dict], stats: dict, respace: bool,
             lines[k] = toc_headings._heading(e) + (f"\n\n{latin}" if latin else "")
             at[ei] = k
     text = "\n".join(lines)
-    heads = {l for l in lines if _MD_HEADING_RE.match(l)}
+    # 줄 단위로 다시 나눠 센다 — 영어 원제를 아래로 내린 줄은 '제목\n\n원제' 한 덩어리다(Helping 7장 'Teamwork')
+    heads = {l for l in text.split("\n") if _MD_HEADING_RE.match(l)}
     missing = [e["title"] for e in entries if toc_headings._heading(e) not in heads]
     inferred = stats.get("inferred", 0)
     stats.update(found=len(entries) - len(missing) - inferred, inferred=inferred, missing=missing)
@@ -833,18 +834,20 @@ def drop_toc_remnant(text: str, entries: list[dict]) -> tuple[str, int]:
         return text, 0
     paras = text.split("\n\n")
 
-    def kind(p: str) -> int:        # 2 = 차례 제목 문단, 1 = 쪽번호뿐, 0 = 본문
+    def kind(p: str) -> int | set:  # 맞은 차례 제목 번호 집합 = 차례 제목 문단, 1 = 쪽번호뿐, 0 = 본문
         if re.fullmatch(r'[\d\s.…·]+', p):
             return 1
         if _MD_HEADING_RE.match(p):
             return 0
         pieces = [re.sub(r'[\s.…·]*\d{1,4}$', '', s.strip()) for s in _TOC_PIECE_RE.split(p) if s.strip()]
+        hit = set()
         for s in pieces:
             n = toc_headings._norm_hangul(s)
-            if not n or max(SequenceMatcher(None, n, t, autojunk=False).ratio() for t in titles) \
-                    < toc_headings._MATCH_MIN:
+            ratios = [SequenceMatcher(None, n, t, autojunk=False).ratio() for t in titles] if n else [0]
+            if max(ratios) < toc_headings._MATCH_MIN:
                 return 0
-        return 2
+            hit.add(ratios.index(max(ratios)))
+        return hit
 
     limit = max(1, int(len(paras) * _TOC_REMNANT_FRONT))
     kinds = [kind(p) for p in paras[:limit]]
@@ -856,7 +859,8 @@ def drop_toc_remnant(text: str, entries: list[dict]) -> tuple[str, int]:
         j = i
         while j < len(kinds) and kinds[j]:
             j += 1
-        if sum(k == 2 for k in kinds[i:j]) >= _TOC_REMNANT_MIN:
+        # 서로 다른 제목으로 센다 — 장 여는 쪽의 '장 제목 두 번 + 첫 절 제목' 은 차례가 아니다(Helping 2장)
+        if len(set().union(*(k for k in kinds[i:j] if isinstance(k, set)))) >= _TOC_REMNANT_MIN:
             a, b = i, j      # 앞뒤 '제1편 자 아 편'·'부록1. … 차례' 같은 차례 머리·꼬리 한 문단씩
             if a and len(paras[a - 1]) <= 60 and _TOC_REMNANT_EDGE_RE.search(paras[a - 1]):
                 a -= 1
@@ -1159,6 +1163,7 @@ def drop_cover_ad(text: str) -> tuple[str, int]:
 
 _ECHO_LINE_MAX = 60
 _PAGE_MARK_PARA_RE = re.compile(r'\[p\.\d+\]')
+_DECOR_PARA_RE = re.compile(r'[oO0°•○◦∘·*]{1,3}')
 # 'CHAP' 이 그림에 가려 남은 'TER3', 글자 사이가 띄워진 'C H A P T E R 4'(FastSecond)
 _LONE_LABEL_RE = re.compile(r'^(?:제\s*)?(\d{1,2})\s*[부장편강]$'
                             r'|^(?:(?:C\s?H\s?A\s?P\s?)?T\s?E\s?R|P\s?A\s?R\s?T|Chapter|Part)\s*(\d{1,2})$')
@@ -1184,6 +1189,10 @@ def drop_heading_echo(text: str) -> tuple[str, int]:
             j += 1
         nxt = (paras[j] or "").strip()
         if not m or not nxt or _MD_HEADING_RE.match(nxt):
+            continue
+        if _DECOR_PARA_RE.fullmatch(nxt):     # 장 표지 장식 '•○•' 이 'o'·'o°' 로 읽힌 줄(HalfTimeShock)
+            paras[j] = None
+            fixed += 1
             continue
         whole = _strip_label(paras[i].lstrip("#").strip())
         if len(whole) >= 4 and toc_headings._norm_hangul(nxt) == toc_headings._norm_hangul(whole):
