@@ -1205,7 +1205,8 @@ def drop_heading_echo(text: str) -> tuple[str, int]:
             fixed += 1
             continue
         words = paras[i].lstrip("#").split()
-        for k in (3, 2, 1):
+        # 같은 줄이면 몇 낱말이든 — 두 줄 제목의 둘째 줄('나이키가 고객을 뛰게 했다', Management by Map). 앞부분 떼기는 1~2낱말만
+        for k in range(len(words) - 1, 0, -1):
             if len(words) <= k:
                 continue
             tail = " ".join(words[-k:])

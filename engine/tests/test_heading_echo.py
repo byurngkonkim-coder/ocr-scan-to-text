@@ -50,6 +50,13 @@ def test_whole_title_without_label_repeated_below_dropped():
     assert n == 1 and out == "# 2부 내부 조직 간 전략 정렬\n\n## 3장 재무와 고객 전략의 정렬"
 
 
+def test_second_line_of_two_line_title_dropped():
+    # 두 줄 제목의 둘째 줄이 제목 아래 남음 — 네 낱말이라 끝말 1~3낱말 비교로는 못 잡았다(Management by Map 4곳)
+    for h, echo in [("# 운동화에 지도를 달았다, 나이키가 고객을 뛰게 했다", "나이키가 고객을 뛰게 했다"),
+                    ("# 전략은 새의 눈, 전술은 꿀벌의 눈으로…", "전술은 꿀벌의 눈으로…")]:
+        assert tc.drop_heading_echo(f"{h}\n\n{echo}\n\n본문.") == (f"{h}\n\n본문.", 1)
+
+
 def test_english_paragraph_under_english_heading_kept():
     # 한글만 남기고 견주면 영어 제목·영어 문단이 둘 다 '' 라 같다고 보고 문단을 지웠다(JesusCEO 각 꼭지 첫 문단 96곳)
     for body in ("[p.24]\nach of us must answer to someone.", "[p.24]\n\nach of us must answer to someone.",
