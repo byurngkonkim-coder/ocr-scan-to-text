@@ -97,14 +97,49 @@ def fix_spacing(text: str) -> tuple[str, int]:
     """붙은 한글 덩어리가 있는 줄만 Kiwi 로 띄운다. (본문, 넣은 띄어쓰기 수)"""
     if not text or not is_available():
         return text, 0
+    text, n = _split_short_josa_glue(text)
     lines = text.split("\n")
     idx = [i for i, l in enumerate(lines) if _glued_spans(l)]
     if not idx:
-        return text, 0
+        return "\n".join(lines), n
     with _lock:
         spaced = list(_get().space([lines[i] for i in idx]))
-    n = 0
     for i, s in zip(idx, spaced):
         lines[i], c = _merge(lines[i], s)
         n += c
     return "\n".join(lines), n
+
+
+# 4~5자 덩어리는 위(5자↑) 띄어쓰기가 보지 않는다 — '이 책을읽기 시작하는'(2천년의강의). 덩어리 안 조사 자리에서
+# 띄운 꼴의 Kiwi 점수가 붙인 꼴보다 낮지 않을 때만 띄운다. 실측: 갈라 써야 할 '책을읽기'·'밥을먹고'·'눈을감고' 0.0,
+# 한 낱말인 '사이좋게' -1.3·'이를테면' -2.1·'마을에서' -5.0·'사람이다' -3.3
+_SHORT_GLUE_RE = re.compile(r'(?<![가-힣])[가-힣]{4,5}(?![가-힣])')
+_INNER_JOSA = set("을를은는이가에의")
+_SHORT_GLUE_MARGIN = -0.05
+_VERB_HEAD = set("했였하해되됐돼라로이오입다려며면")   # '들어가려는' — 뒷말이 어미면 한 낱말
+
+
+def _split_short_josa_glue(text: str) -> tuple[str, int]:
+    cands = {}
+    for m in _SHORT_GLUE_RE.finditer(text):
+        w = m.group()
+        if w in cands:
+            continue
+        cands[w] = None
+        for i in range(2, len(w) - 1):          # 앞뒤 모두 2자 이상
+            # 뒷말이 어미·서술격으로 시작하면 앞말은 '가·의·이'로 끝나는 명사다('평가했다'·'정의로운'·'심장이라면')
+            if w[i - 1] in _INNER_JOSA and w[i] not in _VERB_HEAD:
+                with _lock:
+                    k = _get()
+                    toks, joined = k.analyze(w)[0]
+                    spaced = k.analyze(w[:i] + " " + w[i:])[0][1]
+                # 그 자리가 붙인 꼴 분석에서도 조사가 끝나는 형태소 경계여야 — '최은경은'(최은경/NNP)은 아니다
+                josa_end = any(t.start + t.len == i and t.tag.startswith("J") for t in toks)
+                if josa_end and spaced - joined >= _SHORT_GLUE_MARGIN:
+                    cands[w] = w[:i] + " " + w[i:]
+                break
+    fix = {w: s for w, s in cands.items() if s}
+    if not fix:
+        return text, 0
+    out, n = _SHORT_GLUE_RE.subn(lambda m: fix.get(m.group(), m.group()), text)
+    return out, sum(1 for m in _SHORT_GLUE_RE.finditer(text) if m.group() in fix)

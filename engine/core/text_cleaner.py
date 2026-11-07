@@ -335,6 +335,9 @@ def iter_clean(pages: list[str], drop_front_matter: bool = False, on_chunk=None,
     if config.get_enable_margin_filter():
         text = post_process_pagebreaks(text)
     text, _ = rejoin_split_sentences(text)
+    text, _ = repair_open_brackets(text)      # 짝 없는 '[' — 낫표 오인식(2천년의강의)
+    text, _ = join_josa_paragraphs(text)
+    text, _ = space_glued_marks(text)
     text, n_spaced = strip_spaced_running_header(text)
     if n_spaced:
         report["warnings"].append(f"한 글자씩 띄운 쪽 머리글 {n_spaced}곳 제거 (정제 전 원문 사본에서 확인 가능)")
@@ -617,6 +620,15 @@ def _bounds(paras: list[str], entries: list[dict], ei: int) -> tuple[int, int, b
     return lo, hi, at[ei] is not None
 
 
+_EXTRA_LABEL_RE = re.compile(r'^\s*(?:제\s*)?\d+\s*[장부편강권]\s*')
+
+
+def _strip_label(title: str) -> str:
+    """차례 제목의 번호표를 뗀다 — toc_headings._LABEL_RE(MyOCR 와 같은 파일이라 손대지 않음)가 모르는
+    '제1강'(2천년의강의)·'6장'(2x2Matrix) 꼴까지."""
+    return _EXTRA_LABEL_RE.sub("", toc_headings._LABEL_RE.sub("", title))
+
+
 def place_split_titles(text: str, entries: list[dict], tail: bool = False) -> tuple[str, int]:
     """본문에 아직 없는 번호 붙은 차례 제목('03. …')을, 번호 표지 둘레에 흩어진 제목 글자 자리에 세운다.
     (본문, 세운 수). 제목 줄 글자는 차례 제목 그대로 — 흩어진 OCR 글자 대신."""
@@ -677,7 +689,7 @@ def _place_latin_led_titles(paras: list[str], entries: list[dict]) -> int:
         if found:
             continue
         # 번호표를 뗀 제목도('제2강 비교력' → '비교력 "지금 폐하께서는…"'), 뒤엔 영어 원제나 인용문
-        bare = toc_headings._LABEL_RE.sub("", title).strip()
+        bare = _strip_label(title).strip()
         leads = [re.compile(r'\s?'.join(map(re.escape, re.sub(r'\s+', '', t))) + r'\s?(?=[A-Za-z"“\'‘「『])')
                  for t in dict.fromkeys([title, bare]) if len(re.sub(r'\s+', '', t)) >= 3]
         for p in range(lo, hi):
@@ -816,7 +828,7 @@ def drop_toc_tables(text: str, entries: list[dict]) -> tuple[str, int]:
     if not entries:
         return text, 0
     norm = toc_headings._norm_hangul
-    titles = [(e, norm(toc_headings._LABEL_RE.sub("", e["title"])) or norm(e["title"])) for e in entries]
+    titles = [(e, norm(_strip_label(e["title"])) or norm(e["title"])) for e in entries]
     paras = text.split("\n\n")
     out, n, i = [], 0, 0
     while i < len(paras):
@@ -842,6 +854,181 @@ def drop_toc_tables(text: str, entries: list[dict]) -> tuple[str, int]:
     return "\n\n".join(out), n
 
 
+# ── 짝 없는 '[' — 낫표 「」『』 오인식 (2천년의강의·21세기지식경영 실측, 2026-11-07) ──────────────────
+# 여는 낫표가 '[' 로 읽히고 닫는 낫표는 ','·띄어쓰기로 읽히거나 사라졌다: '[사기, 에'·'[사기열전 에서'·'[사기는'·
+# '[이사열전'(줄 끝). 원본이 「」인지 『』인지 구별할 수 없어 「」 로 통일한다. 닫는 자리 찾는 차례:
+# 쉼표+조사 → 줄 끝(짧을 때) → 다음 낱말이 조사뿐 → '열전'·'편' 낱말 뒤 → 조사 붙은 첫 낱말의 조사 앞.
+# '과·와'는 제목 안('폭력과 성스러움'·'죄와 벌')에 흔해 조사로 보지 않는다(다음 '[' 바로 앞 끝만 예외).
+_JOSA_TAIL = ("이라는", "에서는", "에서", "으로", "에게", "처럼", "까지", "부터", "에는", "에도", "라는",
+              "은", "는", "을", "를", "에", "의", "이", "가", "로", "도", "만")
+_JOSA_ONLY = set(_JOSA_TAIL) | {"과", "와"}
+_TITLE_TAIL_RE = re.compile(r'^(.*?(?:열전|편))((?:' + "|".join(_JOSA_TAIL) + r')?)$')
+_BRACKET_LINE_MAX = 20
+
+
+def _close_title(seg: str, stopped_by_open: bool) -> str | None:
+    """'[' 뒤 글(seg) 에 닫는 낫표를 넣은 결과 — 「 는 호출부가 붙인다. 못 정하면 None."""
+    # 강조한 용어 뒤 원어 괄호 — '[변화 주도자(change leader)뿐이다' → 「변화 주도자」(change leader)(21세기지식경영)
+    g = re.match(r'([가-힣][^()\[\],.]{0,14}?)\s?(\((?:[A-Za-z]|[一-鿿]).*)$', seg, re.S)
+    if g:
+        return f"{g.group(1)}」{g.group(2)}"
+    # 쉼표는 짧은 제목 바로 뒤일 때만 닫는 낫표('[사기, 에'·'[서경, 제자백가') — 긴 구절의 쉼표는 진짜 쉼표다
+    m = re.match(r'([^,]{1,12}), ?(.*)$', seg, re.S)
+    if m and re.search(r'[가-힣]', m.group(1)) and len(m.group(1).split()) <= 3:
+        rest = m.group(2)
+        j = next((x for x in sorted(_JOSA_ONLY, key=len, reverse=True) if rest.startswith(x)), None)
+        return f"{m.group(1)}」{rest}" if j and (len(rest) == len(j) or not re.match(r'[가-힣]', rest[len(j)])) \
+            else f"{m.group(1)}」, {rest}"
+    words = seg.split(" ")
+    fixed = _close_by_words(words)
+    if fixed is not None:
+        return fixed
+    # 낱말로 못 정하면 짧은 조각 끝 — 줄 끝 '[한 장 유 열 전도' · 다음 '[' 앞 '[적과 혹[죄와 벌'
+    if len(seg.strip()) <= _BRACKET_LINE_MAX and len(words) <= (3 if stopped_by_open else 6) \
+            and (stopped_by_open or "\n" not in seg):
+        body = seg.rstrip()
+        k = next((x for x in ("과", "와") + _JOSA_TAIL if body.endswith(x) and len(body) > len(x) + 1), "")
+        return f"{body[:len(body) - len(k)]}」{k}{seg[len(body):]}"
+    return None
+
+
+def _close_by_words(words: list[str]) -> str | None:
+    for i, w in enumerate(words[:4]):
+        if i + 1 < len(words) and words[i + 1] in _JOSA_ONLY:     # '[사기열전 에서' — 띄어쓰기가 닫는 낫표 자리
+            return " ".join(words[:i + 1]) + "」" + " ".join(words[i + 1:])
+        t = _TITLE_TAIL_RE.match(w)
+        if t:                                                       # '[장의 열전 첫머리' · '[사기 열전의'
+            return " ".join(words[:i] + [t.group(1)]) + "」" + t.group(2) + (" " if i + 1 < len(words) else "") \
+                + " ".join(words[i + 1:])
+        if w in ("등", "등의", "등을", "같은"):                         # '[죄와 벌 등의'
+            return " ".join(words[:i]) + "」 " + " ".join(words[i:]) if i else None
+        k = next((x for x in _JOSA_TAIL if w.endswith(x) and len(w) - len(x) >= 2), "") \
+            or next((x for x in ("과", "와") if w.endswith(x) and len(w) - 1 >= 4), "")   # '[태사공자서와 짝을'
+        if k:                                                       # '[사기는' · '[허사 대사전을'
+            return " ".join(words[:i] + [w[:-len(k)]]) + "」" + k + (" " if i + 1 < len(words) else "") \
+                + " ".join(words[i + 1:])
+    return None
+
+
+def repair_open_brackets(text: str) -> tuple[str, int]:
+    """줄 안에 닫는 ']' 가 없는 '[' 를 「…」 로 고친다. 낱말 첫머리가 아닌 '[' ('균열[을'·'모래언덕[ 되에'·
+    '['에'')는 잡음으로 지운다. (본문, 고친 곳 수)"""
+    out, n = [], 0
+    for line in text.split("\n"):
+        if line.startswith(("[p.", "|", "#")):
+            out.append(line)
+            continue
+        # 겹따옴표 '""사기열전, 에' — 바깥 큰따옴표 + 『 를 '"' 로 읽은 것. 안쪽 인용은 작은따옴표로('"'사기열전'에')
+        line = _DOUBLE_OPEN_RE.sub('"\x01', line)
+        if "[" not in line and "\x01" not in line:
+            out.append(line)
+            continue
+        parts = re.split(r'([\[\x01])', line)
+        res = parts[0]
+        for k in range(1, len(parts), 2):
+            mark, seg = parts[k], parts[k + 1]
+            opener, closer = ("「", "」") if mark == "[" else ("'", "'")
+            if mark == "[" and seg.find("]") >= 0:      # 짝이 있으면 그대로
+                res += "[" + seg
+                continue
+            if mark == "[" and (not seg[:1] or not re.match(r'[가-힣一-鿿]', seg) or seg.split(" ")[0] in _JOSA_ONLY
+                                or re.match(r'(?:' + "|".join(_JOSA_TAIL) + r')(?:\s|$)', seg)):
+                res += seg                       # 잡음 '[' — 지운다
+                n += 1
+                continue
+            fixed = _close_title(seg, stopped_by_open=k + 2 < len(parts) and not seg.endswith(" "))
+            if fixed is None:
+                res += ("[" if mark == "[" else "") + seg
+                continue
+            res += opener + fixed.replace("」", closer, 1)
+            n += 1
+        out.append(res)
+    return "\n".join(out), n
+
+
+_DOUBLE_OPEN_RE = re.compile(r'""(?=[가-힣])')
+
+
+# ── 조사로 시작하는 문단·조사 뒤 숫자·둥근 따옴표 앞 (2천년의강의 실측, 2026-11-07) ────────────────
+# '…진정한‘큰생각'' ⏎⏎ '을 만나게 될 것이다' — 쪽·줄 경계에서 낱말 꼬리 조사가 다음 문단으로 갈렸다.
+# 문단 첫머리에 올 수 없는 조사만('이·가·도·만·로' 는 '이 책'·'가지'·'도시' 처럼 낱말 머리일 수 있어 뺀다).
+_LEAD_JOSA_RE = re.compile(r'^(?:에서|으로|에게|을|를|은|는|의|에|과|와)(?=[\s,.])')
+_GLUED_DIGIT_RE = re.compile(r'(?<=[가-힣])(?<=(?:은|는|을|를|에|의|와|과|도|이|가))(?=\d)')
+_GLUED_QUOTE_RE = re.compile(r'(?<=[가-힣])(?=[‘“])')
+# 보조용언 '…기도 하다' — 용언 줄기+'기도' 뒤 '했다·한다…'(2천년의강의 '고백하기도했다'). 명사 '기도했다'(기도를
+# 했다)는 앞에 줄기가 없어 걸리지 않는다
+_AUX_GIDO_RE = re.compile(r'((?:하|되|있|없|받|주|보|많|크|작|좋|싫|하였|되었)기도)(했|한다|하다|하고|하며|해서|하는|할)')
+
+
+def join_josa_paragraphs(text: str) -> tuple[str, int]:
+    """조사로 시작하는 문단을 앞 문단 끝에 공백 없이 잇는다 — 앞 문단이 한글·따옴표로 끝날 때만. (본문, 이은 수)"""
+    out: list[str] = []
+    n = 0
+    for p in text.split("\n\n"):
+        prev = out[-1] if out else ""
+        if (prev and _LEAD_JOSA_RE.match(p) and not prev.startswith(("#", "|", "[p.", ">"))
+                and re.search(r"[가-힣]['’”\"]?$", prev)):
+            out[-1] = prev + p
+            n += 1
+        else:
+            out.append(p)
+    return "\n\n".join(out), n
+
+
+_QUOTE_OPEN = {"‘": "s", "“": "d"}
+_QUOTE_CLOSE = {"’": "s", "”": "d"}
+_QUOTE_BOTH = {"'": "s", '"': "d"}
+
+
+def _space_open_quotes(line: str) -> tuple[str, int]:
+    """한 줄 안 따옴표를 여닫는 차례로 읽어, 한글 바로 뒤에 붙은 여는 따옴표 앞을 띄운다
+    ('‘권력'과'조직'' → '‘권력'과 '조직'', 2천년의강의). 곧은따옴표는 짝으로만 여닫이를 알 수 있어 종류별
+    개수가 홀수인 줄은 건드리지 않는다. 여는 따옴표 뒤가 한글·숫자일 때만(영어 아포스트로피 제외)."""
+    counts = {"s": 0, "d": 0}
+    for ch in line:
+        kind = _QUOTE_OPEN.get(ch) or _QUOTE_CLOSE.get(ch) or _QUOTE_BOTH.get(ch)
+        if kind:
+            counts[kind] += 1
+    is_open = {"s": False, "d": False}
+    out, n = [], 0
+    for i, ch in enumerate(line):
+        kind = _QUOTE_OPEN.get(ch) or _QUOTE_CLOSE.get(ch) or _QUOTE_BOTH.get(ch)
+        if kind:
+            opening = ch in _QUOTE_OPEN or (ch in _QUOTE_BOTH and not is_open[kind])
+            if (opening and counts[kind] % 2 == 0 and i and re.match(r'[가-힣]', line[i - 1])
+                    and i + 1 < len(line) and re.match(r'[가-힣0-9]', line[i + 1])):
+                out.append(" ")
+                n += 1
+            is_open[kind] = opening if ch not in _QUOTE_CLOSE else False
+        out.append(ch)
+    return "".join(out), n
+
+
+def space_glued_marks(text: str) -> tuple[str, int]:
+    """조사 뒤에 붙은 숫자('당신은2000년')와 한글 뒤에 붙은 여는 따옴표('진정한‘큰생각''·''권력'과'조직'')를
+    띄운다. (본문, 넣은 띄어쓰기 수)"""
+    text, a = _GLUED_DIGIT_RE.subn(" ", text)
+    text, a2 = _AUX_GIDO_RE.subn(r"\1 \2", text)   # '고백하기도했다' → '고백하기도 했다'
+    a += a2
+    b = 0
+    lines = text.split("\n")
+    for k, line in enumerate(lines):
+        if not line.startswith(("#", "|")) and any(q in line for q in "‘“'\""):
+            lines[k], c = _space_open_quotes(line)
+            # 짝 수와 상관없이 확실한 여는 따옴표 — 둥근 여는 따옴표, 닫는 따옴표+조사 바로 뒤 따옴표('권력'과'조직')
+            lines[k], c2 = _SURE_OPEN_RE.subn(" ", lines[k])
+            b += c + c2
+    return "\n".join(lines), a + b
+
+
+# 닫는 따옴표와 다음 따옴표 사이가 조사뿐일 때만 — ''조직'에' 의 '조직' 은 조사가 아니다
+_J1 = "[과와를을은는이가의에도로만]"
+_J2 = "(?:에서|으로|이나|에게|까지|부터|처럼|보다|이라|라는)"
+_SURE_OPEN_RE = re.compile(r'(?<=[가-힣])(?=[‘“][가-힣0-9])|(?<=[가-힣])(?=["“][\'‘][가-힣])'
+                           rf'|(?<=[\'’]{_J1})(?=[\'‘][가-힣])|(?<=[\'’]{_J2})(?=[\'‘][가-힣])'
+                           rf'|(?<=["”]{_J1})(?=["“][가-힣])|(?<=["”]{_J2})(?=["“][가-힣])')
+
+
 _TOC_DENSE_MIN = 3        # 차례 제목이 이만큼 들고
 _TOC_DENSE_COVER = 0.7    # 문단 글자의 이만큼을 차례 제목이 채우면 장 여는 쪽의 작은 차례
 
@@ -854,7 +1041,7 @@ def drop_toc_dense(text: str, entries: list[dict]) -> tuple[str, int]:
     (본문, 지운 문단 수)"""
     norm = toc_headings._norm_hangul
     # 같은 글자는 한 번만 — '제5장에 들어가면서'·'제6장에 들어가면서' 는 번호를 떼면 같다(21세기지식경영)
-    titles = sorted({t for t in (norm(toc_headings._LABEL_RE.sub("", e["title"])) for e in entries) if len(t) >= 4})
+    titles = sorted({t for t in (norm(_strip_label(e["title"])) for e in entries) if len(t) >= 4})
     if not titles:
         return text, 0
     paras = text.split("\n\n")
@@ -1003,10 +1190,10 @@ def _title_line(lines: list[str], lo: int, hi: int, title: str, exact: bool = Fa
     norm = toc_headings._norm_hangul if han else toc_headings._norm
     # '주제 _ 부제' 차례 제목은 본문 제목 줄에 주제만 있기도 하다('2장 2×2의 변증법 _ 문제 상황을…' → '2×2의 변증법')
     main = title.split(" _ ")[0] if " _ " in title else ""
-    targets = [t for t in dict.fromkeys([norm(title), norm(toc_headings._LABEL_RE.sub("", title)),
-                                         norm(toc_headings._LABEL_RE.sub("", main))]) if len(t) >= 4]
+    targets = [t for t in dict.fromkeys([norm(title), norm(_strip_label(title)),
+                                         norm(_strip_label(main))]) if len(t) >= 4]
     # 짧은 주제('추천사 _ …')·번호표를 뗀 짧은 제목('제1강 관찰력' → '관찰력', 2천년의강의)
-    short_main = norm(toc_headings._LABEL_RE.sub("", main)) if main else norm(toc_headings._LABEL_RE.sub("", title))
+    short_main = norm(_strip_label(main)) if main else norm(_strip_label(title))
     for i in range(lo, hi):
         l = lines[i].strip()
         # 한글 제목은 줄 끝 영어 원제를 빼고 길이를 잰다('시나리오 경영Scenarios', 2x2Matrix)

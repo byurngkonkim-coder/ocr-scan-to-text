@@ -128,6 +128,11 @@ def rebuild(text: str, toc: list[dict] | None = None) -> tuple[list[dict], str, 
                 else "차례를 찾지 못해 장·절 정비 없이 정제")
     body, _ = text_cleaner.attach_item_numbers(body)   # 제목을 다 세운 뒤 — 문단 끝 제목 찾기가 번호 문단을 본다
     body, _ = text_cleaner.drop_cover_ad(body)
+    body, _ = text_cleaner.repair_open_brackets(body)
+    body, _ = text_cleaner.join_josa_paragraphs(body)      # '…‘큰생각'' ⏎⏎ '을 만나게' (2천년의강의)
+    body, _ = text_cleaner.space_glued_marks(body)          # '당신은2000년'·'진정한‘큰생각''
+    # 붙어 쓴 한글 띄어쓰기(R-17) — 옛 결과는 이 단계 전에 만들어졌다('책을읽기'). 제목 줄은 차례 글자 그대로
+    body = text_cleaner.keep_headings(lambda t: text_cleaner.spacing.fix_spacing(t)[0], body)
     body = (toc_headings.space_headings(body) if entries else body.strip()) + "\n"
     return entries, body, note
 
