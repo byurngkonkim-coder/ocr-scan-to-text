@@ -545,7 +545,9 @@ def _back_matter_fences(lines: list[str], entries: list[dict]) -> list[int]:
     return fences
 
 
-_TITLE_PAGE_WINDOW = 0.35   # 차례 쪽 비율 둘레 이만큼(문서 줄 비율) 안에서만 제목을 찾는다 — reprocess 점검과 같은 값
+# 차례 쪽 비율 둘레 이만큼(문서 줄 비율) 안에서만 제목을 찾는다. 점검(0.35)보다 넉넉히 — 짧은 줄이 많은 찾아보기가
+# 뒤에 길면 줄 비율이 쪽 비율보다 처진다(ProfitFromTheCore 5장: 쪽 0.90, 줄 0.56). 요약 쪽 오인은 0.75 차이
+_TITLE_PAGE_WINDOW = 0.5
 _TITLE_PAGE_MIN_LINES = 200  # 책 한 권쯤 되는 글에서만 — 짧은 글은 줄 비율이 쪽 비율을 따르지 않는다
 
 
