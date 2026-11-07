@@ -1218,6 +1218,60 @@ def drop_heading_echo(text: str) -> tuple[str, int]:
     return "\n\n".join(p for p in paras if p is not None), fixed
 
 
+_SUB_HEAD_RE = re.compile(r'^#+ .+? _ ([가-힣][^A-Za-z]*?)\s*([A-Za-z].*)?$')
+# 부제 첫 글자가 영문자로 읽힌 것('H매한 표현')까지
+_SUB_ECHO_RE = re.compile(r'^[—−–-]?\s*([A-Za-z]?[가-힣]+(?:\s[가-힣]+)*)\s*([A-Za-z][A-Za-z\' ,.:-]*[A-Za-z])\s*')
+_SUB_ECHO_MIN = 0.7      # 부제 글자 닮음(OCR 오자 '통한입' 정도)
+_SUB_LATIN_MIN = 0.5     # 깨진 영어 원제 줄 닮음('The gencti falacy'·'ludkd wcrcks' 0.55) — 줄 글자 중 원제와 맞는 몫도
+_SUB_LATIN_LETTERS = 5   # 이보다 짧은 영어 줄('Yes')은 견주지 않는다 — 'Acent'(Accent) 는 본다
+_SUB_LATIN_LINE_MAX = 40 # 원제 줄 길이 — 긴 영어 문장은 본문
+_SUB_ECHO_LINES = 3      # 제목 아래 이만큼의 줄(쪽 표지 빼고)만 본다 — 잡음 줄('글 꼴 둠 없는') 하나 뒤까지
+
+
+def _latin_echo(line: str, lat: str) -> bool:
+    """한글 없는 줄이 제목의 영어 원제를 다시(깨져) 읽은 것인가 — 전체 닮음이나, 줄 글자가 원제에 든 몫('ad Lpidem')."""
+    s = re.sub(r'[^a-z]', '', line.lower())
+    if not lat or re.search(r'[가-힣]', line) or len(s) < _SUB_LATIN_LETTERS or len(line) > _SUB_LATIN_LINE_MAX:
+        return False
+    m = SequenceMatcher(None, s, lat, autojunk=False)
+    return max(m.ratio(), sum(b.size for b in m.get_matching_blocks()) / len(s)) >= _SUB_LATIN_MIN
+
+
+def drop_subtitle_echo(text: str) -> tuple[str, int]:
+    """'제목 _ 부제 English' 꼴 제목(책정보 차례) 바로 아래, 장 표지의 부제·원제를 OCR 이 다시 읽은 것을 지운다
+    (HowToWinEveryArgument 81곳): 원제를 깨진 글자로 읽은 영어만의 줄('The gencti falacy'), 본문 첫머리에 붙은
+    '—부제 원제'('−발생학적 오류 The genetic fallacy 발생학적 오류는 …' → '발생학적 오류는 …'). 부제와 다른 글로
+    시작하는 줄은 본문이라 둔다. (본문, 고친 수)"""
+    paras = text.split("\n\n")
+    fixed = 0
+    for i, p in enumerate(paras):
+        m = p is not None and _SUB_HEAD_RE.match(p)
+        if not m:
+            continue
+        sub, lat = toc_headings._norm_hangul(m.group(1)), re.sub(r'[^a-z]', '', (m.group(2) or "").lower())
+        seen, j = 0, i + 1
+        while seen < _SUB_ECHO_LINES and j < len(paras) and paras[j] is not None \
+                and not _MD_HEADING_RE.match(paras[j]):
+            lines = paras[j].split("\n")
+            for k, s in enumerate(lines):
+                if _PAGE_MARK_PARA_RE.fullmatch(s.strip()) or seen >= _SUB_ECHO_LINES:
+                    continue
+                seen += 1
+                e = _SUB_ECHO_RE.match(s)
+                if _latin_echo(s, lat):
+                    lines[k] = None
+                elif e and SequenceMatcher(None, toc_headings._norm_hangul(e.group(1)), sub,
+                                           autojunk=False).ratio() >= _SUB_ECHO_MIN:
+                    lines[k] = s[e.end():] or None
+                else:
+                    continue
+                fixed += 1
+            kept = [s for s in lines if s is not None]
+            paras[j] = "\n".join(kept) if kept else None
+            j += 1
+    return "\n\n".join(p for p in paras if p is not None), fixed
+
+
 _LIST_LINE_RE = re.compile(r'^(?:\d{1,2}\s?[.,)]?\s?\S|\d\)|[-•·])')
 _LIST_LINE_MAX = 160
 

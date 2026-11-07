@@ -57,6 +57,47 @@ def test_decoration_glyph_line_under_heading_dropped():
     assert n == 2 and "\n\no" not in out
 
 
+def test_subtitle_echo_under_underscore_heading_dropped():
+    # HowToWinEveryArgument: 제목 아래 영어 원제를 깨진 글자로 다시 읽은 줄, 부제+원제가 본문 첫머리에 붙은 것
+    h = "# 그 말은 독재적이라고 딱지 붙여라 _ 발생학적 오류 The genetic fallacy"
+    text = f"{h}\n\n[p.35]\nThe gencti falacy\n\n−발생학적 오류 The genetic fallacy 발생학적 오류는 다윈과 상관없다."
+    out, n = tc.drop_subtitle_echo(text)
+    assert n == 2 and out == f"{h}\n\n[p.35]\n\n발생학적 오류는 다윈과 상관없다."
+
+
+def test_subtitle_echo_only_line_and_garbled_hangul_dropped():
+    h = "# 오래된 것이 좋은 것이라고 우겨라 _ 전통의 강조 Argumentum ad antiquitam"
+    out, n = tc.drop_subtitle_echo(f"{h}\n\n[p.198]\nArgumenum ad antiquicmn\n\n—전통의 강조 antiquitam\n\n본문.")
+    assert n == 2 and out == f"{h}\n\n[p.198]\n\n본문."
+    h2 = "# 그것은 예외일 뿐이라고 받아쳐라 _ 예외를 통한 입증 The exception that proves the rule"
+    out, n = tc.drop_subtitle_echo(f"{h2}\n\n—예외를 통한입The exception that proves the rule 예외는 당연히 혼란스럽다.")
+    assert n == 1 and out == f"{h2}\n\n예외는 당연히 혼란스럽다."
+
+
+def test_partial_and_garbled_subtitle_echo_dropped():
+    # 원제 일부만('ad Lpidem'), 심하게 깨진 원제('ludkd wcrcks'), 부제 첫 글자 오인식('H매한'), 잡음 줄 뒤 셋째 줄
+    cases = [("# 대꾸할 가치가 없다고 하라 _ 돌을 걷어차는 논증 Argumentum ad lapidem", "ad Lpidem"),
+             ("# 편견이 담긴 말을 적절히 선택하라 _ 감정이 실린 말 Loaded words", "ludkd wcrcks"),
+             ("# 말을 중의적으로 표현하라 _ 애매한 표현 Amphiboly", "— H매한 표현 Amphiboly"),
+             ("# 상대방이 의도하지 않은 것을 짚어내라 _ 강조 Accent", "Acent"),
+             ("# 상대방을 볼품없는 존재로 만들어라 _ 허수아비 The straw man", "[p.149]\n글 꼴 둠 없는\n\n허수아비 The straw man")]
+    for h, echo in cases[:4]:
+        assert tc.drop_subtitle_echo(f"{h}\n\n{echo}\n\n본문.") == (f"{h}\n\n본문.", 1)
+    h, echo = cases[4]
+    assert tc.drop_subtitle_echo(f"{h}\n\n{echo}\n\n본문.") == (f"{h}\n\n[p.149]\n글 꼴 둠 없는\n\n본문.", 1)
+
+
+def test_body_after_underscore_heading_kept():
+    # 부제와 다른 글로 시작하는 본문, 원제와 다른 영어 문장은 그대로
+    h = "# 끝에 가서 딴소리를 하라 _ 전제들을 부정하는 결론 Conclusion which denies premises"
+    text = f"{h}\n\n결론이 그 전제들을 부정하는 것은 이런 형태다.\n\nAll cats are animals."
+    assert tc.drop_subtitle_echo(text) == (text, 0)
+    text = "# 두 줄 _ 부제\n\nThe gencti falacy"        # 제목에 원제가 없으면 영어 줄을 견줄 수 없다
+    assert tc.drop_subtitle_echo(text) == (text, 0)
+    text = "# 늘 중간을 선택하라 _ 중도를 이용한 논증 Argumentum ad temperantiam\n\nYes.\n\nTo be or not to be, that is it."
+    assert tc.drop_subtitle_echo(text) == (text, 0)   # 짧은 영어 낱말·다른 영어 문장
+
+
 def test_label_line_with_other_number_kept():
     text = "2부\n\n# 1부 정렬의 중요성 이해"
     assert tc.drop_heading_echo(text) == (text, 0)

@@ -130,6 +130,7 @@ def rebuild(text: str, toc: list[dict] | None = None) -> tuple[list[dict], str, 
     body, _ = text_cleaner.space_list_numbers(body)         # '1오늘부터' → '1 오늘부터'(CreatYourOwnFuture)
     body, _ = text_cleaner.drop_cover_ad(body)
     body, _ = text_cleaner.drop_heading_echo(body)          # 장 표지 큰 글자 '서막'(4차산업혁명시대)
+    body, _ = text_cleaner.drop_subtitle_echo(body)         # '제목 _ 부제 원제' 아래 다시 읽은 부제·원제(HowToWin…)
     body, _ = text_cleaner.repair_open_brackets(body)
     body, _ = text_cleaner.join_josa_paragraphs(body)      # '…‘큰생각'' ⏎⏎ '을 만나게' (2천년의강의)
     body, _ = text_cleaner.space_glued_marks(body)          # '당신은2000년'·'진정한‘큰생각''
