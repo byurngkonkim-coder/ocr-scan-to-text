@@ -545,18 +545,29 @@ def _back_matter_fences(lines: list[str], entries: list[dict]) -> list[int]:
     return fences
 
 
+_TITLE_PAGE_WINDOW = 0.35   # 차례 쪽 비율 둘레 이만큼(문서 줄 비율) 안에서만 제목을 찾는다 — reprocess 점검과 같은 값
+_TITLE_PAGE_MIN_LINES = 200  # 책 한 권쯤 되는 글에서만 — 짧은 글은 줄 비율이 쪽 비율을 따르지 않는다
+
+
 def _best_title_lines(lines: list[str], entries: list[dict], at: list[int | None], exact: bool) -> dict[int, int]:
     """못 찾은 차례 항목을 차례 순서대로 앞뒤로 이미 선 제목 줄 사이에서 찾는다 — 뒷부분 항목 줄 너머는 보지
     않는다(_back_matter_fences). {항목 번호: 줄 번호}
     가장 많이 세우는 짝을 고르는 방식은 장 여는 쪽의 절 이름 목록 줄을 골라 진짜 절 자리를 버렸다(2x2Matrix 64→61)."""
     at = list(at)
     fences = _back_matter_fences(lines, entries)
+    last_page = max((e["page"] for e in entries if e.get("page")), default=0)
     out: dict[int, int] = {}
     for ei, e in enumerate(entries):
         if at[ei] is not None:
             continue
         lo = max((k for k in at[:ei] if k is not None), default=-1) + 1
         hi = min(min((k for k in at[ei + 1:] if k is not None), default=len(lines)), fences[ei])
+        if e.get("page") and last_page and len(lines) >= _TITLE_PAGE_MIN_LINES:
+            # 차례 쪽번호 둘레만 — 책 끝 요약이 장 제목을 오자 없이 되풀이해 그쪽을 먼저 잡고, 뒤 장들이 모두 따라갔다
+            # (SalesSuperStar). 범위는 점검의 '쪽과 먼 제목' 과 같은 비율
+            mid = e["page"] / last_page * len(lines)
+            lo = max(lo, int(mid - _TITLE_PAGE_WINDOW * len(lines)))
+            hi = min(hi, int(mid + _TITLE_PAGE_WINDOW * len(lines)) + 1)
         k = _title_line(lines, lo, hi, e["title"], exact)
         if k is not None:
             out[ei] = at[ei] = k
@@ -1297,6 +1308,7 @@ def relocate_list_headings(text: str, entries: list[dict]) -> tuple[str, int]:
     norm = toc_headings._norm_hangul
     paras = text.split("\n\n")
     moved = 0
+    last_page = max((e["page"] for e in entries if e.get("page")), default=0)
 
     def listy(k: int) -> bool:
         if not 0 <= k < len(paras):
@@ -1322,6 +1334,13 @@ def relocate_list_headings(text: str, entries: list[dict]) -> tuple[str, int]:
                  None)
         if k is None:
             continue
+        # 차례 쪽번호가 있으면 옮길 자리가 지금 자리보다 그 쪽에 가까울 때만 — 책 끝 '요약 및 정리' 가 장 제목을
+        # 늘어놓은 곳으로 21장이 모두 옮겨 갔다(SalesSuperStar, 쪽과 먼 제목 12)
+        # (이 단계엔 쪽 표지가 아직 없어 문서 속 자리 비율과 차례 쪽 비율로 견준다 — 점검의 '쪽과 먼 제목' 과 같은 셈)
+        if e.get("page") and last_page:
+            want = e["page"] / last_page
+            if abs(k / len(paras) - want) > abs(p / len(paras) - want):
+                continue
         paras[p], paras[k] = e["title"], head
         moved += 1
     return "\n\n".join(paras), moved

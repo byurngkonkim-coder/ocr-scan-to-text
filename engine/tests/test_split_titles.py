@@ -347,3 +347,25 @@ def test_part_section_chapter_opener_not_toc_remnant():
         + [f"본문 문단 {i}이다." for i in range(60)]
     text = "\n\n".join(body)
     assert tc.drop_toc_remnant(text, e) == (text, 0)
+
+
+def test_heading_not_relocated_into_end_summary_list():
+    # SalesSuperStar 실측(2026-11-08) — 책 끝 '요약 및 정리' 가 장 제목 21개를 그대로 늘어놓았다. 장 제목 바로 아래가
+    # 짧은 줄이라 '목록 속 제목' 으로 보고 같은 글자의 요약 줄로 옮겨, 21장이 모두 요약 쪽에 섰다(쪽과 먼 제목 12)
+    # 이 단계엔 쪽 표지가 없다 — 차례 쪽(27/150)과 문서 속 자리 비율로 견준다
+    e = [{"level": 1, "title": "1. 확신의 힘", "page": 27}, {"level": 1, "title": "나오며 요약 및 정리", "page": 150}]
+    body = [f"본문 문단 {i}이다. 길게 이어지는 설명이 여기 있다." for i in range(30)]
+    paras = body[:5] + ["# 1. 확신의 힘", "짧은 인용"] + body[5:] + ["1. 확신의 힘", "설명 문단이다."]
+    out, n = tc.relocate_list_headings("\n\n".join(paras), e)
+    assert n == 0 and out.split("\n\n")[5] == "# 1. 확신의 힘"
+
+
+def test_title_search_stays_near_toc_page():
+    # SalesSuperStar 실측(2026-11-08) — 2장 본문 제목은 OCR 오자('지배하느나')라 앞 패스가 책 끝 요약의 깨끗한
+    # 같은 줄을 잡았고, 3~21장이 모두 그 뒤를 따라 요약 쪽에 섰다. 차례 쪽(32/160) 둘레만 찾는다
+    e = [{"level": 1, "title": "2. 두려움의 심리 - 지배하느냐, 지배받느냐", "page": 32},
+         {"level": 1, "title": "나오며 요약 및 정리", "page": 160}]
+    body = [f"본문 줄 {i}이다." for i in range(300)]
+    lines = body[:60] + ["2.두려움의 심리 -지배하느나,지배 받느냐"] + body[60:] + ["2. 두려움의 심리-지배하느냐, 지배받느냐"]
+    out = tc.rematch_headings("\n".join(lines), e, {}, respace=False, keep_titles=True, exact=True)
+    assert out.split("\n")[60] != "## " and out.split("\n")[-1].startswith("2.")   # 끝 요약 줄은 그대로
