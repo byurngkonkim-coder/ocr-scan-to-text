@@ -1158,6 +1158,7 @@ def drop_cover_ad(text: str) -> tuple[str, int]:
 
 
 _ECHO_LINE_MAX = 60
+_PAGE_MARK_PARA_RE = re.compile(r'\[p\.\d+\]')
 # 'CHAP' 이 그림에 가려 남은 'TER3', 글자 사이가 띄워진 'C H A P T E R 4'(FastSecond)
 _LONE_LABEL_RE = re.compile(r'^(?:제\s*)?(\d{1,2})\s*[부장편강]$'
                             r'|^(?:(?:C\s?H\s?A\s?P\s?)?T\s?E\s?R|P\s?A\s?R\s?T|Chapter|Part)\s*(\d{1,2})$')
@@ -1178,21 +1179,29 @@ def drop_heading_echo(text: str) -> tuple[str, int]:
             fixed += 1
     for i in range(len(paras) - 1):
         m = paras[i] is not None and _MD_HEADING_RE.match(paras[i])
-        nxt = (paras[i + 1] or "").strip()
+        j = i + 1      # 쪽 표지 '[p.240]' 은 건너뛰고 본다(First,BreakAllTheRules 6장)
+        while j < len(paras) - 1 and paras[j] and _PAGE_MARK_PARA_RE.fullmatch(paras[j].strip()):
+            j += 1
+        nxt = (paras[j] or "").strip()
         if not m or not nxt or _MD_HEADING_RE.match(nxt):
             continue
+        whole = _strip_label(paras[i].lstrip("#").strip())
+        if len(whole) >= 4 and toc_headings._norm_hangul(nxt) == toc_headings._norm_hangul(whole):
+            paras[j] = None      # 번호표를 뗀 제목 전체가 다음 줄에 다시('2부' 줄에 선 제목 아래 '내부 조직 간 …')
+            fixed += 1
+            continue
         words = paras[i].lstrip("#").split()
-        for k in (2, 1):
+        for k in (3, 2, 1):
             if len(words) <= k:
                 continue
             tail = " ".join(words[-k:])
             if len(tail) < 2:
                 continue
             if nxt == tail:
-                paras[i + 1] = None
-            elif nxt.startswith(tail + " ") and len(nxt) <= _ECHO_LINE_MAX and "다." not in nxt \
+                paras[j] = None
+            elif k < 3 and nxt.startswith(tail + " ") and len(nxt) <= _ECHO_LINE_MAX and "다." not in nxt \
                     and not nxt.endswith(("다", ".", "?", "!")):
-                paras[i + 1] = nxt[len(tail):].strip()
+                paras[j] = nxt[len(tail):].strip()
             else:
                 continue
             fixed += 1
@@ -1325,6 +1334,15 @@ def _title_line(lines: list[str], lo: int, hi: int, title: str, exact: bool = Fa
                 or (2 <= len(short_main) < 4 and norm(l) == short_main):    # '추천사 _ 제임스 길모어…' → '추천사'
             return i
         n = norm(l)
+        # 장 표지 제목이 짧은 두 줄로 갈림('세번째 열쇠:' / '장점을 개발하라', First,BreakAllTheRules) — 이은 글자가
+        # 차례 제목과 같을 때만. 남은 둘째 줄은 drop_heading_echo 가 제목 끝말 반복으로 지운다
+        # 두 줄 모두 한글 2자 이상(한글 제목) — '#' 잡음 줄(DrivingSalesmanPowerSkill)·'2x2 Matrix'(2x2Matrix)는 아님
+        enough = (lambda s: len(re.findall(r'[가-힣]', s)) >= 2) if han else (lambda s: len(norm(s)) >= 2)
+        if enough(l) and len(l) <= _SPLIT_LINE_MAX:
+            j = next((k for k in range(i + 1, min(i + 3, hi)) if lines[k].strip()), None)
+            if j is not None and len(lines[j].strip()) <= _SPLIT_LINE_MAX and not _MD_HEADING_RE.match(lines[j]) \
+                    and enough(lines[j]) and n + norm(lines[j]) in targets and n not in targets:
+                return i
         if exact:   # 띄어쓰기·영어 원제만 다른 같은 글자 줄만 — 비슷한 줄(색인 줄)이 진짜 제목보다 먼저 잡혔다(2x2Matrix)
             if n in targets:
                 return i
@@ -1338,6 +1356,7 @@ def _title_line(lines: list[str], lo: int, hi: int, title: str, exact: bool = Fa
 
 _FRONT_MIN = 6
 _FRONT_RATIO = 0.4
+_SPLIT_LINE_MAX = 30     # 두 줄로 갈린 제목의 한 줄 최대 길이
 _CHAPTER_LINE_MAX = 40
 _CHAPTER_MIN = 3
 _BOOK_PART_RE = re.compile(r'^book\s*\d', re.I)

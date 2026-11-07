@@ -36,6 +36,20 @@ def test_split_chapter_label_fragment_dropped():
     assert n == 2 and "TER3" not in out and "C H A P" not in out
 
 
+def test_echo_after_page_marker_dropped():
+    # 쪽 표지 '[p.240]' 이 제목과 반복 줄 사이에 낌(First,BreakAllTheRules 6장) — 표지는 둔다
+    text = "# Chapter 6 네번째 열쇠: 적합한 역할을 찾아라\n\n[p.240]\n\n적합한 역할을 찾아라\n\n본문."
+    out, n = tc.drop_heading_echo(text)
+    assert n == 1 and out == "# Chapter 6 네번째 열쇠: 적합한 역할을 찾아라\n\n[p.240]\n\n본문."
+
+
+def test_whole_title_without_label_repeated_below_dropped():
+    # 두 줄 제목 규칙이 '2부' 줄에 제목을 세우면 다음 줄 '내부 조직 간 전략 정렬' 이 그대로 남는다(Alianment정렬)
+    text = "# 2부 내부 조직 간 전략 정렬\n\n내부 조직 간 전략 정렬\n\n## 3장 재무와 고객 전략의 정렬"
+    out, n = tc.drop_heading_echo(text)
+    assert n == 1 and out == "# 2부 내부 조직 간 전략 정렬\n\n## 3장 재무와 고객 전략의 정렬"
+
+
 def test_label_line_with_other_number_kept():
     text = "2부\n\n# 1부 정렬의 중요성 이해"
     assert tc.drop_heading_echo(text) == (text, 0)

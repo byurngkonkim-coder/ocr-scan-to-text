@@ -253,3 +253,35 @@ def test_number_with_unit_or_alone_kept():
     text = "\n\n".join(["2년 만에, 나는 수입이 배로 늘었다.", "24시간 현금 지급기가 인기다.", "10대와 20대들은 다르다.",
                        "본문.", "7어떤 경우에나 긍정적이자.", "1쇄인쇄 2005년", "3쇄발행 2006년", "10백만원/월"])
     assert tc.space_list_numbers(text) == (text, 0)
+
+
+def test_title_split_over_two_short_lines():
+    # First,BreakAllTheRules 실측(2026-11-07) — 장 표지 '세번째 열쇠:' / '장점을 개발하라' 두 줄로 갈림
+    e = [{"level": 1, "title": "Chapter 4 두번째 열쇠: 합리적 목표를 설정하라", "page": None},
+         {"level": 1, "title": "Chapter 5 세번째 열쇠: 장점을 개발하라", "page": None}]
+    lines = ["# Chapter 4 두번째 열쇠: 합리적 목표를 설정하라", "본문.", "세번째 열쇠:", "", "장점을 개발하라", "", "본문 2."]
+    out = tc.rematch_headings("\n".join(lines), e, {}, respace=False, keep_titles=True, exact=True)
+    got = out.split("\n")
+    assert got[2] == "# Chapter 5 세번째 열쇠: 장점을 개발하라"
+    # 남은 둘째 줄은 제목 끝말 반복이라 drop_heading_echo 가 지운다
+    assert "장점을 개발하라" not in tc.drop_heading_echo(out.replace("\n\n", "\n").replace("\n", "\n\n"))[0].split("\n\n")[3:]
+
+
+def test_noise_line_not_joined_with_title_line():
+    # DrivingSalesmanPowerSkill 회귀 — 글자 없는 '#' 잡음 줄 + 진짜 제목 줄이 '두 줄 제목' 으로 잡혀 제목이 잡음 줄에 섰다
+    e = [{"level": 2, "title": "03 이제 세일즈를 해볼까", "page": None}]
+    lines = ["#", "", "03 이제 세일즈를 해 볼까", "", "본문."]
+    out = tc.rematch_headings("\n".join(lines), e, {}, respace=False, keep_titles=True, exact=True)
+    assert out.split("\n")[2] == "## 03 이제 세일즈를 해볼까"
+    # 한글 없는 줄('2x2 Matrix')도 두 줄 제목의 앞줄이 아니다(2x2Matrix 회귀)
+    e = [{"level": 2, "title": "4장 2×2 매트릭스를 만드는 8단계", "page": None}]
+    lines = ["2x2 Matrix", "", "매트릭스를 만드는 8단계", "", "본문."]
+    out = tc.rematch_headings("\n".join(lines), e, {}, respace=False, keep_titles=True, exact=True)
+    assert out.split("\n")[0] == "2x2 Matrix"
+
+
+def test_two_unrelated_short_lines_not_joined():
+    e = [{"level": 1, "title": "Chapter 5 세번째 열쇠: 장점을 개발하라", "page": None}]
+    lines = ["세번째 열쇠:", "", "다른 이야기를 하자", "", "본문."]
+    out = tc.rematch_headings("\n".join(lines), e, {}, respace=False, keep_titles=True, exact=True)
+    assert out.split("\n")[0] == "세번째 열쇠:"
