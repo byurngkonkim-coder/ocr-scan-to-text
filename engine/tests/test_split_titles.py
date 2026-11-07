@@ -58,3 +58,41 @@ def test_toc_remnant_in_front_dropped():
     out, n = tc.drop_toc_remnant("\n\n".join(body), e)
     assert n == 8
     assert out.split("\n\n")[:3] == ["서문", "서문 본문이다. 이 책은 그라시안의 잠언을 해설한다.", "본문 문단 0이다."]
+
+
+# ── 1001가지기독교명언 (2026-11-07) ─────────────────────────────────────────────
+
+def _topics(*titles):
+    return [{"level": 1, "title": t, "page": None} for t in titles]
+
+
+def test_short_topic_glued_to_end_of_previous_item_becomes_heading():
+    e = _topics("부정직함", "부족함", "열매 맺음", "유혹")
+    text = "\n\n".join(["# 부정직함", "328", "거짓말은 사탄의 무기다.", "-J.C.라일", "진리가 그 속에 없다 부족함",
+                       "329", "하나님의 백성들은 자신을 혐오했다", "고 가르치셨다 열매맺음", "553 나무는 열매로 안다.",
+                       "듯하게 하라 유혹", "655 어떤 경우에도"])
+    out, n = tc.place_split_titles(text, e, tail=True)
+    assert n == 3
+    paras = out.split("\n\n")
+    assert paras[4:7] == ["진리가 그 속에 없다", "# 부족함", "329"]
+    assert "# 열매 맺음" in paras and "고 가르치셨다" in paras and "# 유혹" in paras
+
+
+def test_tail_title_needs_item_number_after():
+    e = _topics("부정직함", "부족함")
+    text = "\n\n".join(["# 부정직함", "자신의 부족함", "다음 문단도 본문이다."])
+    assert tc.place_split_titles(text, e, tail=True) == (text, 0)
+
+
+def test_item_numbers_attach_to_following_item():
+    paras = ["# 거룩함", "첫 명언(번호를 못 읽음)"]
+    for k in range(10, 40):
+        paras += [str(k), f"명언 {k} 본문", "-저자"]
+    out, n = tc.attach_item_numbers("\n\n".join(paras))
+    assert n == 30
+    assert "10 명언 10 본문" in out.split("\n\n") and "39 명언 39 본문" in out.split("\n\n")
+
+
+def test_scattered_numbers_are_not_item_chain():
+    text = "\n\n".join(["2019", "본문", "15", "본문", "300", "본문"])
+    assert tc.attach_item_numbers(text) == (text, 0)

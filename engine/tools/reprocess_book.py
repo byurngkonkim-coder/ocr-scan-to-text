@@ -7,6 +7,7 @@
     책: …
     저자: …
     출처: …(어디서 확인했는지)
+    바꾸기: 정규식 => 바꿀 글      ← 이 책에만 맞는 고침(여러 줄 가능, \n = 줄바꿈)
 
     차례: (아무 설명)
     제1편 자아편
@@ -41,6 +42,9 @@ def read_book_info(path: Path) -> dict:
         key, val = key.strip(), val.strip()
         if val and key in ("책", "저자", "출처"):
             info[{"책": "book", "저자": "author", "출처": "basis"}[key]] = val
+        elif val and key == "바꾸기" and " => " in val:   # 이 책에만 맞는 고침(정규식 => 바꿀 글, \n 줄바꿈)
+            # 바꿀 글 끝의 띄어쓰기는 살린다('성경의 진리 ' — 뒤 글과 붙지 않게)
+            info.setdefault("subs", []).append(tuple(line.partition(":")[2].lstrip().split(" => ", 1)))
     entries = []
     for line in toc.splitlines()[1:]:
         if not line.strip():
@@ -67,8 +71,14 @@ def reprocess(stem: str) -> tuple[Path, dict]:
     from core import remake_md
     from core.types import OutputFormat
     src = RESULTS / f"{stem}.md"
+    from core import user_typos
     info = read_book_info(INFO_DIR / f"{stem}.txt")
-    entries, body, note = remake_md.rebuild(src.read_text(encoding="utf-8"), info.get("toc"))
+    text = user_typos.apply(src.read_text(encoding="utf-8"))[0]   # 결과를 만든 뒤 사전에 늘어난 항목까지
+    subs = 0
+    for pat, rep in info.get("subs", []):
+        text, k = re.subn(pat, rep, text)
+        subs += k
+    entries, body, note = remake_md.rebuild(text, info.get("toc"))
     raw = remake_md._raw_copy(src)
     pages, name, total = remake_md.read_raw_pages(raw) if raw else (None, "", None)
     head = {"name": name or remake_md._STAMP_RE.sub("", stem), "pages": total, "front": body[:5000],
@@ -79,7 +89,7 @@ def reprocess(stem: str) -> tuple[Path, dict]:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     out = OUT_DIR / f"{stem}.md"
     out.write_text(md, encoding="utf-8")
-    return out, {"note": note, "logs": logs, "book_info": bool(info)}
+    return out, {"note": note, "logs": logs, "book_info": bool(info), "subs": subs}
 
 
 if __name__ == "__main__":
@@ -89,7 +99,7 @@ if __name__ == "__main__":
         sys.exit(0)
     path, rep = reprocess(Path(target).stem)
     print(path)
-    print("책정보 파일:", "있음" if rep["book_info"] else "없음")
+    print("책정보 파일:", "있음" if rep["book_info"] else "없음", f"· 이 책 고침 {rep['subs']}곳")
     print(rep["note"])
     for line in rep["logs"]:
         print(line)

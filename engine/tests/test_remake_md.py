@@ -123,3 +123,12 @@ def test_list_targets_skips_partial_and_unrefined(tmp_path, monkeypatch):
     assert set(rows) == {"20261024_000000_가.md", "20261024_000001_나.txt", "20261024_000002_라.md"}
     assert rows["20261024_000000_가.md"]["raw"] and not rows["20261024_000001_나.txt"]["raw"]
     assert rows["20261024_000002_라.md"]["skip"] and not rows["20261024_000000_가.md"]["skip"]
+
+
+def test_rebuild_with_checked_toc_retitles_old_ocr_headings():
+    # 옛 결과의 제목 줄은 OCR 차례 글자 — 확인된 차례(책정보 파일)로 다시 맞춘다(1001가지기독교명언)
+    old = "# 차례\n\n- 감사의삶\n- 죄\n\n# 감사의삶\n\n감사하는 삶은 더 좋다.\n\n죄\n\n죄는 무섭다.\n"
+    toc = [{"level": 1, "title": "감사의 삶", "page": 16}, {"level": 1, "title": "죄", "page": 243}]
+    entries, body, note = remake_md.rebuild(old, toc)
+    assert "# 감사의 삶" in body.split("\n") and "# 죄" in body.split("\n")
+    assert "# 감사의삶" not in body

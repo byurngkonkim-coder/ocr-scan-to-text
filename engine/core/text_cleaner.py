@@ -592,7 +592,7 @@ def _split_title_span(words: list[tuple[int, str]], t: int, target: str) -> tupl
     return span if best >= _SPLIT_TITLE_MIN else None
 
 
-def place_split_titles(text: str, entries: list[dict]) -> tuple[str, int]:
+def place_split_titles(text: str, entries: list[dict], tail: bool = False) -> tuple[str, int]:
     """본문에 아직 없는 번호 붙은 차례 제목('03. …')을, 번호 표지 둘레에 흩어진 제목 글자 자리에 세운다.
     (본문, 세운 수). 제목 줄 글자는 차례 제목 그대로 — 흩어진 OCR 글자 대신."""
     paras = text.split("\n\n")
@@ -629,7 +629,64 @@ def place_split_titles(text: str, entries: list[dict]) -> tuple[str, int]:
             placed += 1
             break
     placed += _place_unnumbered_titles(paras, entries)
+    if tail:   # 앞뒤 제목이 다 선 뒤에만(좁은 범위) — 넓은 범위에서는 '죄' 같은 짧은 제목이 엉뚱한 문단 끝에 걸린다
+        placed += _place_tail_titles(paras, entries)
     return "\n\n".join(paras), placed
+
+
+_ITEM_NO_RE = re.compile(r'\d{1,4}')
+
+
+def _place_tail_titles(paras: list[str], entries: list[dict]) -> int:
+    """앞 항목 문단 끝에 붙은 짧은 주제 제목 — '…진리가 그 속에 없다 부족함' / '329' / 다음 명언
+    (1001가지기독교명언 22곳). 문단 끝 낱말들이 제목과 같은 글자이고 바로 다음 문단이 항목 번호뿐일 때만,
+    앞뒤 차례 제목 줄 사이에서."""
+    placed = 0
+    for ei, e in enumerate(entries):
+        head = toc_headings._heading(e)
+        if head in paras:
+            continue
+        want = re.sub(r'\s+', '', e["title"])
+        # 띄어 쓴 제목 글자 사이엔 빈칸이 있어도 되고, 앞 문장 끝('…해가된다 교회출석'·'…저항해야 한다시련')에 붙어도 된다
+        tail_re = re.compile(r'(?:(?<=\s)|(?<=[다.!?"”’)\]]))' + r'\s?'.join(map(re.escape, want)) + r'\s*$')
+        prev = [paras.index(toc_headings._heading(p)) for p in entries[:ei] if toc_headings._heading(p) in paras]
+        nxt = [paras.index(toc_headings._heading(p)) for p in entries[ei + 1:] if toc_headings._heading(p) in paras]
+        lo, hi = (max(prev) + 1 if prev else 0), (min(nxt) if nxt else len(paras))
+        for p in range(lo, min(hi, len(paras) - 1)):
+            m = tail_re.search(paras[p])
+            if m and m.start() > 0 and re.match(r'\d{1,4}(?:\s|$)', paras[p + 1].strip()):
+                paras[p:p + 1] = [paras[p][:m.start()].rstrip(), head]
+                placed += 1
+                break
+    return placed
+
+
+_ITEM_CHAIN_MIN = 20     # 이만큼 이어지는 번호 문단이 있어야 번호 항목 책(명언집)으로 본다
+_ITEM_CHAIN_GAP = 5      # 번호를 OCR 이 몇 개 못 읽어도 이어진 것으로
+_ITEM_CHAIN_START = 20
+
+
+def attach_item_numbers(text: str) -> tuple[str, int]:
+    """번호 항목 책에서 따로 선 항목 번호 문단('77')을 다음 항목 앞에 붙인다 — '77 고립된 그리스도인은…'.
+    번호가 1, 2, 3 … 늘어나는 사슬(빈 번호 _ITEM_CHAIN_GAP 까지)에 든 것만 — 쪽번호·연도는 사슬을 이루지 않는다.
+    (본문, 붙인 수)"""
+    paras = text.split("\n\n")
+    chain, last = [], 0
+    for i, p in enumerate(paras):
+        s = p.strip()
+        # 첫 번호는 _ITEM_CHAIN_START 까지 — OCR 이 한 자리 번호(1~9)를 못 읽어 10 부터 시작했다(기독교명언)
+        if _ITEM_NO_RE.fullmatch(s) and 0 < int(s) - last <= (_ITEM_CHAIN_START if not last else _ITEM_CHAIN_GAP):
+            chain.append(i)
+            last = int(s)
+    if len(chain) < _ITEM_CHAIN_MIN:
+        return text, 0
+    n = 0
+    for i in reversed(chain):
+        if i + 1 < len(paras) and not _MD_HEADING_RE.match(paras[i + 1]) \
+                and not _ITEM_NO_RE.fullmatch(paras[i + 1].strip()):
+            paras[i:i + 2] = [paras[i].strip() + " " + paras[i + 1]]
+            n += 1
+    return "\n\n".join(paras), n
 
 
 _TOC_PIECE_RE = re.compile(r'(?<![\d.])(?=\d{1,2}\.\s)')
@@ -742,7 +799,8 @@ def _title_line(lines: list[str], lo: int, hi: int, title: str) -> int | None:
             continue
         if _FIGURE_CAPTION_RE.match(l):     # 그림 설명('그림6.37 영향력-불확실성 매트릭스', 2x2Matrix)은 제목 아님
             continue
-        if 2 <= len(norm(title)) < 4 and norm(l) == norm(title):   # '서문' 같은 짧은 제목 — 같은 글자 줄만(삶의지혜)
+        # '서문'·'죄' 같은 짧은 제목 — 같은 글자 줄만(삶의지혜·1001가지기독교명언)
+        if (len(norm(title)) == 1 and l == title.strip()) or (2 <= len(norm(title)) < 4 and norm(l) == norm(title)):
             return i
         n = norm(l)
         if any(SequenceMatcher(None, n, t).ratio() >= toc_headings._MATCH_MIN

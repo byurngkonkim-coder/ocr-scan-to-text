@@ -93,13 +93,22 @@ def rebuild(text: str, toc: list[dict] | None = None) -> tuple[list[dict], str, 
     body, _ = text_cleaner.strip_spaced_running_header(body)
     if toc is not None:
         entries = toc
+        # 옛 결과의 제목 줄은 OCR 차례 글자('# 감사의삶')라 확인된 차례와 다르다 — 보통 줄로 되돌려 다시 맞춘다
+        # (rematch 는 이미 제목인 줄을 건너뛴다. 1001가지기독교명언 40곳)
+        body = re.sub(r'(?m)^#{1,6} ', '', body)
     stats: dict = {"inferred": 0}
     if entries:
         # 흩어진 제목부터 — rematch 가 제목 앞부분만 같은 줄('…변하듯 04')을 먼저 잡아 차례 제목을 그 줄로 바꿨다
         body, _ = text_cleaner.drop_toc_remnant(body, entries)
         body, _ = text_cleaner.place_split_titles(body, entries)
-        body = text_cleaner.rematch_headings(body, entries, stats, respace=toc is None,   # found·missing 도
+        body = text_cleaner.rematch_headings(body, entries, stats, respace=toc is None,
                                              keep_titles=toc is not None)
+        # 한 번 더 — rematch 가 세운 제목들이 앞뒤 경계가 되어 문단 끝에 붙은 짧은 제목을 좁은 범위에서 찾는다
+        body, more = text_cleaner.place_split_titles(body, entries, tail=True)
+        if more:
+            heads = set(body.split("\n"))
+            stats["missing"] = [e["title"] for e in entries if toc_headings._heading(e) not in heads]
+            stats["found"] = len(entries) - len(stats["missing"]) - stats["inferred"]
         note = toc_headings.report(entries, stats)
     else:
         body, entries = text_cleaner.infer_chapters(body)
@@ -107,6 +116,7 @@ def rebuild(text: str, toc: list[dict] | None = None) -> tuple[list[dict], str, 
             body = text_cleaner.rematch_headings(body, entries, stats, respace=True)
         note = (f"차례를 찾지 못해 본문에서 장 제목 {len(entries)}개를 추정(제N장·CHAPTER N 꼴 줄)" if entries
                 else "차례를 찾지 못해 장·절 정비 없이 정제")
+    body, _ = text_cleaner.attach_item_numbers(body)   # 제목을 다 세운 뒤 — 문단 끝 제목 찾기가 번호 문단을 본다
     body = (toc_headings.space_headings(body) if entries else body.strip()) + "\n"
     return entries, body, note
 
