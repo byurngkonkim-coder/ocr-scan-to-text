@@ -192,7 +192,9 @@ if __name__ == "__main__":
     if not target:
         print("다시 만들 결과가 없습니다")
         sys.exit(0)
-    path, rep = reprocess(Path(target).stem)
+    # '.md' 만 뗀다 — Path.stem 은 'TomasJ.Peters' 의 '.Peters' 를 확장자로 보고 잘랐다(InSearchOfExcelence)
+    target = Path(target).name.removesuffix(".md")
+    path, rep = reprocess(target)
     print(path)
     print("책정보 파일:", "있음" if rep["book_info"] else "없음", f"· 이 책 고침 {rep['subs']}곳")
     print(rep["note"])
@@ -203,7 +205,7 @@ if __name__ == "__main__":
     q = rep["quality"]
     print(f"점검: 제목 {q['found']}/{q['total']} · 순서 어긋남 {q['order_breaks']} · 쪽과 먼 제목 {q['misplaced']} · "
           f"본문 {q['script']} {q['hangul_before']:,} → {q['hangul_after']:,} ({-q['loss']:+.1%})")
-    regress = ratchet(Path(target).stem, q)
+    regress = ratchet(target, q)
     if not q["ok"] or regress:
         print("⚠ 불합격 —", regress or "제목 순서가 차례와 다르거나, 제목이 차례 쪽과 먼 자리에 섰거나, 본문 한글이 3% 넘게 줄었다",
               "· 방금 바꾼 규칙부터 의심할 것")
