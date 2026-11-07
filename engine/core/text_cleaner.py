@@ -873,6 +873,8 @@ def drop_toc_remnant(text: str, entries: list[dict]) -> tuple[str, int]:
 
 
 _TOC_TABLE_MIN = 3      # 차례 제목이 이만큼 든 표는 부(PART) 여는 쪽의 작은 차례
+# 표 글자 중 차례 제목 몫 — 작은 차례는 0.88~1.08(12년차기획맨·DrivingSalesman), 책 내용 개념도는 0.10(IDEAHACKS49)
+_TOC_TABLE_SHARE = 0.5
 
 
 def _contains_title(hay: str, title: str) -> bool:
@@ -907,8 +909,9 @@ def drop_toc_tables(text: str, entries: list[dict]) -> tuple[str, int]:
             i += 1
             continue
         hay = norm(" ".join(paras[i:j]))
-        hits = [e for e, t in titles if _contains_title(hay, t)]
-        if len(hits) >= _TOC_TABLE_MIN:
+        found = [(e, t) for e, t in titles if _contains_title(hay, t)]
+        hits = [e for e, _ in found]
+        if len(hits) >= _TOC_TABLE_MIN and sum(len(t) for _, t in found) >= len(hay) * _TOC_TABLE_SHARE:
             top = min(hits, key=lambda e: e["level"])
             head = toc_headings._heading(top)
             if head not in paras:

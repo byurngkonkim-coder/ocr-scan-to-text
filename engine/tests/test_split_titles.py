@@ -132,6 +132,17 @@ def test_ordinary_table_kept():
     assert tc.drop_toc_tables(text, _E3) == (text, 0)
 
 
+def test_concept_map_table_with_some_titles_kept():
+    # 책 내용 개념도 표 — 차례 제목이 3개 넘게 들었지만 표 글의 대부분은 차례에 없는 글(IDEAHACKS49 15쪽, 제목 몫 0.10)
+    text = ("| | (1) 환경조성 | (2) 정보정리 |\n| --- | --- | --- |\n"
+            "| (A) Hack의 기술 | 기획서의 제안과 승인 다음 단계로 고기를 먹지 않는다 걷는 속도는 1초에 두 걸음 |"
+            " 기획서의 실천 아이디어 메모는 한시 바삐 버려라 노트의 시간축 관리 블로그로 아이디어를 발표한다 |\n"
+            "| (B) Hack의 도구 | 현실적으로는 기민한 대응 전술이 필요하다 모닝 샤워는 아이디어 샤워 비밀의 화원을 찾아라"
+            " 사무실에서 다과회를 열자 만년필로 선을 긋는다 나만의 테마송을 틀어둔다 | 수첩에 나의 사전을 만든다"
+            " 명함 클립으로 인맥 정리 책장을 지식의 데이터베이스로 바꾼다 하드디스크는 보물로 가득 차 있다 |")
+    assert tc.drop_toc_tables(text, _E3) == (text, 0)
+
+
 def test_heading_in_chapter_opener_list_moves_to_real_section():
     e = [{"level": 2, "title": "환경 분석, 어떻게 할 것인가", "page": 15},
          {"level": 3, "title": "1. 외부 환경 분석", "page": 16},

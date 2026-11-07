@@ -56,6 +56,17 @@ def test_book_info_title_ending_in_number_kept_with_dash(tmp_path):
     assert toc[1] == {"level": 2, "title": "01 첫 장", "page": 12}
 
 
+def test_book_info_backref_followed_by_digit_rejected(tmp_path):
+    # '\142.' 가 묶음 1 + '42.' 가 아니라 8진수 'b' 로 바뀌었다(IDEAHACKS49) — 읽을 때 막는다
+    import pytest
+    p = tmp_path / "책.txt"
+    p.write_text("책: 시리즈\n바꾸기: (a)(b) => \\142. 제목\\n\\n\\2\n\n차례:\n머리말 1\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="g<1>"):
+        rb.read_book_info(p)
+    p.write_text("책: 시리즈\n바꾸기: (a)(b) => \\g<1>42. 제목\\n\\n\\2\n\n차례:\n머리말 1\n", encoding="utf-8")
+    assert rb.read_book_info(p)["subs"] == [("(a)(b)", "\\g<1>42. 제목\\n\\n\\2")]
+
+
 def test_ratchet_fails_when_found_titles_drop(tmp_path):
     # 21세기지식경영 실제 회귀 48 → 44 를 사람이 표를 대조해서야 찾았다
     base = tmp_path / "base.json"

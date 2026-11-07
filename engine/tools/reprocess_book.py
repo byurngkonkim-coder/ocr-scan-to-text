@@ -46,7 +46,11 @@ def read_book_info(path: Path) -> dict:
             info[{"책": "book", "저자": "author", "출처": "basis"}[key]] = val
         elif val and key == "바꾸기" and " => " in val:   # 이 책에만 맞는 고침(정규식 => 바꿀 글, \n 줄바꿈)
             # 바꿀 글 끝의 띄어쓰기는 살린다('성경의 진리 ' — 뒤 글과 붙지 않게)
-            info.setdefault("subs", []).append(tuple(line.partition(":")[2].lstrip().split(" => ", 1)))
+            pat, rep = line.partition(":")[2].lstrip().split(" => ", 1)
+            # '\142.' 는 묶음 1 + '42.' 가 아니라 8진수 글자 'b' 가 된다(IDEAHACKS49) — 숫자가 이어지면 \g<1> 로
+            if re.search(r'\\\d\d', rep):
+                raise ValueError(f"{path.name} 바꾸기 '{rep}': 묶음 번호 뒤에 숫자가 오면 \\g<1> 꼴로 쓰세요")
+            info.setdefault("subs", []).append((pat, rep))
     entries = []
     for line in toc.splitlines()[1:]:
         if not line.strip():
