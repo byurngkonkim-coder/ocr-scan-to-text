@@ -58,6 +58,52 @@ def read_book_info(path: Path) -> dict:
     return info
 
 
+_LOSS_MAX = 0.03     # 본문 한글 글자가 이만큼 넘게 줄면 실패 — 지우는 규칙이 본문까지 지운 것
+
+
+def quality(entries: list[dict], src: str, out: str) -> dict:
+    """재처리 결과 점검 — 차례 항목이 본문 제목 줄로 섰는지(같은 제목은 차례 순서로 짝지음), 제목 순서가
+    차례와 같은지, 본문 한글 글자가 얼마나 줄었는지. ok=False 면 규칙이 무언가를 망가뜨린 것이다.
+    반복 사고: 차례 조각 규칙이 진짜 제목 4개를 지움(21세기지식경영), 같은 제목 두 개를 한 줄로 봐 순서가
+    뒤엉킴(12년차기획맨), 표 교체가 일반 표 글자를 줄임(2x2Matrix) — 2026-11-07."""
+    from core import remake_md, toc_headings
+    lines = out.split("\n")
+    heads = [(i, l) for i, l in enumerate(lines) if l.startswith("#") and l != "# 차례"]
+    used, at = set(), []
+    for e in entries:
+        k = next((i for i, l in heads if l == toc_headings._heading(e) and i not in used), None)
+        at.append(k)
+        if k is not None:
+            used.add(k)
+    ks = [k for k in at if k is not None]
+    breaks = sum(1 for a, b in zip(ks, ks[1:]) if b < a)
+    hangul = lambda t: len(re.findall("[가-힣]", remake_md.parse_result(t)[1]))
+    before, after = hangul(src), hangul(out)
+    loss = (before - after) / before if before else 0.0
+    return {"found": len(ks), "total": len(entries), "order_breaks": breaks,
+            "missing": [e["title"] for e, k in zip(entries, at) if k is None],
+            "hangul_before": before, "hangul_after": after, "loss": round(loss, 4),
+            "ok": breaks == 0 and loss <= _LOSS_MAX}
+
+
+BASELINE = OUT_DIR / "_점검기준.json"
+
+
+def ratchet(stem: str, q: dict, path: Path = BASELINE) -> str:
+    """책마다 지금까지 가장 많이 세운 제목 수를 기준으로 — 줄면 회귀(규칙을 바꾼 뒤 앞 책들을 다시 돌려 확인).
+    반복 사고: 21세기지식경영 48→44, 12년차기획맨 40→39 를 사람이 표를 대조해서야 찾았다(2026-11-07).
+    늘면 기준을 올린다. 회귀면 사유 문자열, 아니면 ''."""
+    import json
+    base = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    best = base.get(stem, {}).get("found", 0)
+    if q["found"] < best:
+        return f"제목 {best} → {q['found']} 회귀"
+    if q["found"] > best or stem not in base:
+        base[stem] = {"found": q["found"], "total": q["total"]}
+        path.write_text(json.dumps(base, ensure_ascii=False, indent=1), encoding="utf-8")
+    return ""
+
+
 def next_target() -> str | None:
     done = {p.stem for p in OUT_DIR.glob("*.md")}
     for p in sorted(RESULTS.glob("*.md")):      # 이름 앞 처리 시각 순 = 오래된 것부터
@@ -89,7 +135,18 @@ def reprocess(stem: str) -> tuple[Path, dict]:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     out = OUT_DIR / f"{stem}.md"
     out.write_text(md, encoding="utf-8")
-    return out, {"note": note, "logs": logs, "book_info": bool(info), "subs": subs}
+    tables = None
+    if (OUT_DIR / "_표" / f"{stem}.json").exists():   # 지금 엔진으로 다시 뽑은 표가 있으면 바꿔 넣는다(refresh_tables)
+        import refresh_tables
+        tables = refresh_tables.splice(stem)
+        # 새로 넣은 표 칸에도 오타 사전·이 책 고침을 — 칸 글자 OCR 오인식('경행사'·'따고드는', 2x2Matrix)
+        md2 = user_typos.apply(out.read_text(encoding="utf-8"))[0]
+        for pat, rep in info.get("subs", []):
+            md2, k = re.subn(pat, rep, md2)
+            subs += k
+        out.write_text(md2, encoding="utf-8")
+    q = quality(entries, src.read_text(encoding="utf-8"), out.read_text(encoding="utf-8"))
+    return out, {"note": note, "logs": logs, "book_info": bool(info), "subs": subs, "tables": tables, "quality": q}
 
 
 if __name__ == "__main__":
@@ -101,5 +158,15 @@ if __name__ == "__main__":
     print(path)
     print("책정보 파일:", "있음" if rep["book_info"] else "없음", f"· 이 책 고침 {rep['subs']}곳")
     print(rep["note"])
+    if rep["tables"]:
+        print("표 다시 넣기:", rep["tables"])
     for line in rep["logs"]:
         print(line)
+    q = rep["quality"]
+    print(f"점검: 제목 {q['found']}/{q['total']} · 순서 어긋남 {q['order_breaks']} · "
+          f"본문 한글 {q['hangul_before']:,} → {q['hangul_after']:,} ({-q['loss']:+.1%})")
+    regress = ratchet(Path(target).stem, q)
+    if not q["ok"] or regress:
+        print("⚠ 불합격 —", regress or "제목 순서가 차례와 다르거나 본문 한글이 3% 넘게 줄었다",
+              "· 방금 바꾼 규칙부터 의심할 것")
+        sys.exit(2)
