@@ -60,6 +60,39 @@ def test_toc_remnant_in_front_dropped():
     assert out.split("\n\n")[:3] == ["서문", "서문 본문이다. 이 책은 그라시안의 잠언을 해설한다.", "본문 문단 0이다."]
 
 
+def test_part_and_chapter_titles_right_after_toc_remnant_kept():
+    # 차례 조각('… 터보코칭 과정·247 / 옮긴이의 말·250') 바로 뒤의 부 표지·장 여는 쪽 제목 — 차례 순서가 맨 앞으로
+    # 되돌아간 쪽번호 없는 제목은 본문이 시작된 것(TurboStrategy: 1부·1장 제목이 함께 지워졌다)
+    e = [{"level": 1, "title": t, "page": None} for t in
+         ("한국어판 서문", "원점에서 재검토하라", "1. 지금 있는 곳에서 시작하라", "21. 결과에 집중하라",
+          "터보전략 과정", "터보코칭 과정", "옮긴이의 말")]
+    body = ["한국어판 서문", "서문 본문이다.", "21. 결과에 집중하라·223", "터보전략 과정·243", "터보코칭 과정·247",
+            "옮긴이의 말·250", "원점에서 재검토하라", "지금 있는 곳에서 시작하라",
+            "Start Where You Are"] + [f"본문 문단 {i}이다." for i in range(60)]
+    out, n = tc.drop_toc_remnant("\n\n".join(body), e)
+    assert n == 4
+    assert out.split("\n\n")[:5] == ["한국어판 서문", "서문 본문이다.", "원점에서 재검토하라", "지금 있는 곳에서 시작하라",
+                                     "Start Where You Are"]
+
+
+def test_inline_chapter_running_header_dropped():
+    # 쪽 머리글 '제N장 장이름:부제 쪽번호' 가 쪽 경계에서 문장 한가운데 끼었다(Victory 46곳) — 차례 장 제목과 맞는 것만
+    e = [{"level": 1, "title": t, "page": None} for t in ("2장 공세 – 대담하게 행동하라", "5장 정보 – 확실하게 선별하라")]
+    text = "\n\n".join(["긴 활의 사용 제2장공세:대담하게 행동하라67 을 금지하는 칙령까지 나왔다.",
+                       "제2장 공세:대담하게 행동하라81",
+                       "뢰벤브로이가 진출했을 때의 제5장정보:확실하게 선별하라141 일이다.",
+                       "# 2장 공세 – 대담하게 행동하라",
+                       "- 차례\n  - 들여쓴  항목",
+                       "제3장 실습:직접 해 보라12 같은 말은 차례에 없는 장이라 그대로 둔다."])
+    out, n = tc.drop_inline_chapter_headers(text, e)
+    assert n == 3
+    assert out.split("\n\n") == ["긴 활의 사용 을 금지하는 칙령까지 나왔다.",
+                                 "뢰벤브로이가 진출했을 때의 일이다.",
+                                 "# 2장 공세 – 대담하게 행동하라",
+                                 "- 차례\n  - 들여쓴  항목",
+                                 "제3장 실습:직접 해 보라12 같은 말은 차례에 없는 장이라 그대로 둔다."]
+
+
 def test_chapter_opener_with_repeated_title_not_toc_remnant():
     # 장 여는 쪽: 장 제목이 두 번(앞 쪽 끝·장 표지) + 첫 절 제목 — 제목 문단 3개지만 서로 다른 제목은 2개(Helping 2장)
     e = [{"level": 1, "title": t, "page": None} for t in ("1장 헬핑", "2장 도움의 작동원리", "기본 원칙 두 가지")]

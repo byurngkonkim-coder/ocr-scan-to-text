@@ -57,6 +57,22 @@ def test_second_line_of_two_line_title_dropped():
         assert tc.drop_heading_echo(f"{h}\n\n{echo}\n\n본문.") == (f"{h}\n\n본문.", 1)
 
 
+def test_title_tail_with_other_spacing_or_marks_dropped():
+    # 두 줄 제목의 둘째 줄이 띄어쓰기·괄호·쌍점만 달라 낱말 비교로는 못 잡았다(완료 책 11권 25곳, VitaminsForTheSoul)
+    for h, echo in [("# 당신의 영혼을 믿어보세요", "믿어 보세요"),
+                    ("## 4. 여러 가지 선택 가능한 방법에 대해 안다(금요일 저녁)", "(금요일 저녁)"),
+                    ("# 6장 마스터 파워 _ 슈퍼의식을 찾아라", ":슈퍼 의식을 찾아라"),
+                    ("## 07 고객의 경험을 창조하고 관리하는 CEM", "창조하고 관리하는 CEM")]:
+        assert tc.drop_heading_echo(f"{h}\n\n[p.12]\n\n{echo}\n\n본문.") == (f"{h}\n\n[p.12]\n\n본문.", 1), echo
+
+
+def test_sentence_ending_with_title_tail_kept():
+    # 제목 끝말로 끝나도 제목보다 길거나 문장(…다.)이면 본문
+    for body in ("우리는 늘 핵심에 집중하라", "집중한다.", "라"):
+        text = f"## 핵심에 집중하라\n\n{body}\n\n둘째 문단."
+        assert tc.drop_heading_echo(text) == (text, 0), body
+
+
 def test_english_paragraph_under_english_heading_kept():
     # 한글만 남기고 견주면 영어 제목·영어 문단이 둘 다 '' 라 같다고 보고 문단을 지웠다(JesusCEO 각 꼭지 첫 문단 96곳)
     for body in ("[p.24]\nach of us must answer to someone.", "[p.24]\n\nach of us must answer to someone.",

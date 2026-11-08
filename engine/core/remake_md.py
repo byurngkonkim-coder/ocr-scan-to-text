@@ -99,6 +99,7 @@ def rebuild(text: str, toc: list[dict] | None = None) -> tuple[list[dict], str, 
     stats: dict = {"inferred": 0}
     if entries:
         # 흩어진 제목부터 — rematch 가 제목 앞부분만 같은 줄('…변하듯 04')을 먼저 잡아 차례 제목을 그 줄로 바꿨다
+        body, _ = text_cleaner.drop_inline_chapter_headers(body, entries)
         body, _ = text_cleaner.drop_toc_remnant(body, entries)
         body, _ = text_cleaner.drop_toc_tables(body, entries)
         body, _ = text_cleaner.drop_toc_dense(body, entries)

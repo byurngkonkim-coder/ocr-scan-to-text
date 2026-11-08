@@ -838,6 +838,39 @@ _TOC_REMNANT_FRONT = 0.15     # 책 앞쪽(문단 수 기준)에서만
 _TOC_REMNANT_EDGE_RE = re.compile(r'^제\s*\d+\s*[편부장]|차\s?례')
 
 
+# 쪽 머리글 '제2장공세:대담하게 행동하라67' — 장 번호·장 이름·부제·쪽번호 (Victory)
+_INLINE_CH_HEADER_RE = re.compile(r'[ \t]*제\s?(\d{1,2})\s?장\s?([^\n:]{1,15}?)\s?:\s?([^\n:]{2,30}?)\s?\d{1,3}(?=[ \t]|$)',
+                                  re.M)
+
+
+def drop_inline_chapter_headers(text: str, entries: list[dict]) -> tuple[str, int]:
+    """문장 한가운데나 홀로 남은 쪽 머리글('제N장 장이름:부제 쪽번호')을 지운다 — 쪽 맨 위·아래 줄만 보는
+    strip_running_headers 는 쪽 경계에서 문장 속으로 들어간 머리글을 못 지웠다(Victory 46곳). 'N장 장이름 부제' 가
+    차례 장 제목과 맞을 때만(_MATCH_MIN 이상) 지운다. 문장 속이면 앞뒤를 띄어 한 칸으로 잇는다. (본문, 지운 곳 수)"""
+    norm = toc_headings._norm_hangul
+    titles = [norm(e["title"]) for e in entries if re.match(r'\s*제?\s*\d{1,2}\s*장', e["title"])]
+    if not titles:
+        return text, 0
+    n = 0
+
+    def repl(m: re.Match) -> str:
+        nonlocal n
+        key = norm(f"{m.group(1)}장{m.group(2)}{m.group(3)}")
+        if max(SequenceMatcher(None, key, t, autojunk=False).ratio() for t in titles) < toc_headings._MATCH_MIN:
+            return m.group(0)
+        n += 1
+        return " "
+
+    paras = []
+    for p in text.split("\n\n"):
+        q = _INLINE_CH_HEADER_RE.sub(repl, p)
+        if q != p:       # 머리글을 뗀 문단만 띄어쓰기를 고른다(차례 목록 들여쓰기는 그대로)
+            q = re.sub(r' {2,}', ' ', q).strip()
+        if q:
+            paras.append(q)
+    return ("\n\n".join(paras), n) if n else (text, 0)
+
+
 def drop_toc_remnant(text: str, entries: list[dict]) -> tuple[str, int]:
     """본문 앞쪽에 남은 OCR 차례 덩어리('11. 성숙함은 … 111' / '210' / '역자후기' …)를 지운다 — 맨 앞 '# 차례'
     목록과 같은 글이라 무손실(삶의지혜_자아편: 차례 쪽 일부만 읽혀 본문 서문 뒤에 남았다). 문단마다 번호 항목으로
@@ -874,6 +907,15 @@ def drop_toc_remnant(text: str, entries: list[dict]) -> tuple[str, int]:
         j = i
         while j < len(kinds) and kinds[j]:
             j += 1
+        # 차례 조각은 차례 순서로 나아간다 — 쪽번호 없는 제목이 앞서 맞은 제목보다 앞 항목으로 되돌아가면 거기서 본문
+        # (조각 바로 뒤의 부 표지·장 여는 쪽 제목, TurboStrategy '옮긴이의 말·250' → '원점에서 재검토하라')
+        top = -1
+        for x in range(i, j):
+            if isinstance(kinds[x], set):
+                if top > max(kinds[x]) and not re.search(r'\d\s*$', paras[x]):
+                    j = x
+                    break
+                top = max(top, max(kinds[x]))
         # 서로 다른 제목으로 센다 — 장 여는 쪽의 '장 제목 두 번 + 첫 절 제목' 은 차례가 아니다(Helping 2장).
         # 쪽번호(끝 숫자·숫자뿐 문단)가 없으면 제목이 아주 많을 때만 — '제1부'/'제1편 …'/'제1장 …' 여는 쪽(전쟁론)
         distinct = len(set().union(*(k for k in kinds[i:j] if isinstance(k, set))))
@@ -1222,6 +1264,14 @@ def drop_heading_echo(text: str) -> tuple[str, int]:
         norm_whole = toc_headings._norm_hangul(whole)
         if len(norm_whole) >= 4 and toc_headings._norm_hangul(nxt) == norm_whole:
             paras[j] = None      # 번호표를 뗀 제목 전체가 다음 줄에 다시('2부' 줄에 선 제목 아래 '내부 조직 간 …')
+            fixed += 1
+            continue
+        # 두 줄 제목의 둘째 줄이 띄어쓰기·괄호·쌍점만 달리 남음('믿어 보세요'·'(금요일 저녁)'·':슈퍼 의식을 찾아라')
+        # — 글자만 남겨 제목 끝과 같으면. 문장(…다.)·긴 줄은 본문(완료 책 16권 32곳, VitaminsForTheSoul)
+        tail_n, whole_n = toc_headings._norm(nxt), toc_headings._norm(whole)
+        if 2 <= len(tail_n) < len(whole_n) and whole_n.endswith(tail_n) and len(nxt) <= _ECHO_LINE_MAX \
+                and not nxt.endswith(("다.", "다")):
+            paras[j] = None
             fixed += 1
             continue
         words = paras[i].lstrip("#").split()
