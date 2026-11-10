@@ -13,6 +13,7 @@ import threading
 import unicodedata
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+from dataclasses import replace
 from pathlib import Path
 
 try:
@@ -492,21 +493,29 @@ def _save_page_file(stem: str, pages: list[PageResult], meta: dict, logs: list[s
 
 
 def _refine(pages: list[PageResult], front_matter: bool, out_fmt: OutputFormat, logs: list[str],
-            info: dict, on_chunk=None):
+            info: dict, on_chunk=None, source: str = "scan", local: bool = True):
     """문서 전체 정제(후처리) — 쪽 교정본 → (주 결과 글, .md 짝 글, 정제 보고, 강등 안내).
     제너레이터: 구간이 끝날 때마다 (끝난 구간, 전체 구간)을 내고, 끝나면 위 네 값을 돌려준다(StopIteration.value).
-    전체 처리(_run_ocr)와 재처리 도구(쪽 원문 파일에서 다시 만들기)가 같은 순서를 쓴다:
-    차례 미리 찾기 → 내장 규칙 정제(유료 API 0) → 분량 가드 → 표 넣기 → 차례 목록·쪽 표지·문서 정보.
-    info: {name: 원본 파일명, pages: PDF 쪽 수}. 정제본이 없으면(오류·분량 급감) 글 두 칸은 None."""
+    전체 처리(스캔·디지털 PDF·txt)·검토 필요 쪽 다시 읽기·재처리 도구(쪽 원문 파일에서 다시 만들기)가 같은 순서를 쓴다:
+    차례 미리 찾기 → 정제 → 분량 가드 → 표 넣기 → 차례 목록·쪽 표지·문서 정보.
+    info: {name: 원본 파일명, pages: PDF 쪽 수}. 정제본이 없으면(오류·분량 급감) 글 두 칸은 None.
+    source 로 갈리는 것 — 'scan'(OCR 로 읽은 쪽) · 'digital'(PDF 내장 글자: 한글 교정기를 여기서 1번, 장절 책을 위해
+    원문 줄도 넘김) · 'txt'(이미 읽은 본문: 쪽 표지 없음). local=True 는 내장 규칙(유료 API 0)."""
     content_pages = [p for p in pages if not p.is_blank]
     crep: dict = {}     # 이 실행의 정제 보고서(여러 파일 동시 처리 시 전역 보고서는 섞인다)
     pages_in, toc = _toc_prepass(content_pages)   # 차례 기준 장·절 제목('#') — 쪽 줄 잇기 전 원문에서
+    if source == "digital" and local:   # txt 는 이미 교정된 본문 — 두 번 돌리지 않는다
+        # 내장 글자는 OCR 경로(_finalize)의 한글 교정기를 거치지 않았다 → 여기서 1번만
+        from core.korean_corrector import refine_korean_text
+        pages_in = [user_typos.apply(refine_korean_text(t))[0] for t in pages_in]
     clean_gen = text_cleaner.iter_clean(
         pages_in,
         drop_front_matter=front_matter,
         on_chunk=on_chunk,
         report_out=crep,
-        local=True,                 # 내장 규칙(유료 API 0)
+        local=local,
+        # 장절 책(성경)은 줄 잇기 전 원문 줄로 장·절을 세운다(R-15) — 디지털 PDF 만
+        raw_pages=[p.raw_text for p in content_pages] if source == "digital" else None,
         toc=toc,
     )
     try:
@@ -519,19 +528,23 @@ def _refine(pages: list[PageResult], front_matter: bool, out_fmt: OutputFormat, 
         logs.append(f"  ⚠️ 문장 정제 미적용 — 정제 오류로 원문 그대로 저장 ({type(e).__name__}: {e})")
     finally:
         clean_gen.close()    # 중단되면 아직 안 보낸 구간을 취소한다
-    cleaned_text = _shrink_guard([p.corrected_text for p in content_pages], cleaned_text, logs, front_matter)
+    scan = source == "scan"
+    cleaned_text = _shrink_guard([p.corrected_text for p in content_pages] if scan else pages_in, cleaned_text,
+                                 logs, front_matter)
     if cleaned_text:   # 표 자리 표지 → Markdown 표 (정제 경로가 표를 통째로 버리던 결함)
         cleaned_text = writer.place_tables(cleaned_text, pages)
     if cleaned_text:
-        logs.append(f"  📝 문장 정제 완료 ({len(cleaned_text):,}자, 마커 없는 클린 텍스트)")
+        logs.append(f"  📝 문장 정제 완료 ({len(cleaned_text):,}자" + (", 마커 없는 클린 텍스트)" if scan else ")"))
     _crep = crep or None
     clean_note = _clean_degrade_note(_crep)
     if clean_note:
         logs.append(f"  ⚠️ {clean_note}")
     if _crep:   # 부속물 제거·지어낸 문장 등 확인할 경고 — 강등 건은 위 개수 줄로 대신한다
         logs.extend(f"  ⚠ {w}" for w in _crep["warnings"] if "강등" not in w)
-    cleaned_text, cleaned_md = _structured_texts(cleaned_text, _crep, out_fmt, logs,
-                                                 [(p.page_num, p.corrected_text) for p in content_pages], info)
+    cleaned_text, cleaned_md = _structured_texts(
+        cleaned_text, _crep, out_fmt, logs,
+        # txt 입력의 '쪽'은 문단 묶음일 뿐이라 쪽 표지를 넣지 않는다
+        None if source == "txt" else [(p.page_num, p.corrected_text) for p in content_pages], info)
     return cleaned_text, cleaned_md, crep, clean_note
 
 
@@ -1323,25 +1336,13 @@ def _run_digital_pdf(file_path: Path, pages_text: list[str], out_fmt: OutputForm
     content_pages = [p for p in result.pages if not p.is_blank]
     if cleanup and content_pages and text_cleaner.is_available(local=local_clean):
         ckpt = _CleanCheckpoint(file_path.stem, out_fmt)
-        crep: dict = {}     # 이 실행의 정제 보고서(여러 파일 동시 처리 시 전역 보고서는 섞인다)
-        pages_in, toc = _toc_prepass(content_pages)   # 차례 기준 장·절 제목('#') — 쪽 줄 잇기 전 원문에서
-        if local_clean and page_fn is _finalize_digital:   # txt 는 이미 교정된 본문 — 두 번 돌리지 않는다
-            # 내장 글자는 OCR 경로(_finalize)의 한글 교정기를 거치지 않았다 → 여기서 1번만
-            from core.korean_corrector import refine_korean_text
-            pages_in = [user_typos.apply(refine_korean_text(t))[0] for t in pages_in]
-        clean_gen = text_cleaner.iter_clean(
-            pages_in,
-            drop_front_matter=front_matter,
-            on_chunk=ckpt.append,
-            report_out=crep,
-            local=local_clean,
-            # 장절 책(성경)은 줄 잇기 전 원문 줄로 장·절을 세운다(R-15) — 디지털 PDF 만
-            raw_pages=[p.raw_text for p in content_pages] if page_fn is _finalize_digital else None,
-            toc=toc,
-        )
+        txt = page_fn is _finalize_text
+        refine = _refine(result.pages, front_matter, out_fmt, step_logs,
+                         {"name": file_path.name, "pages": None if txt else result.total_pages},
+                         on_chunk=ckpt.append, source="txt" if txt else "digital", local=local_clean)
         try:
             while True:
-                done_c, total_c = next(clean_gen)
+                done_c, total_c = next(refine)
                 yield (
                     # 진행률은 '구간' 기준 — 페이지 기준(=이미 100%)으로 그리면
                     # 정제가 남았는데도 화면이 완료처럼 보인다.
@@ -1354,26 +1355,7 @@ def _run_digital_pdf(file_path: Path, pages_text: list[str], out_fmt: OutputForm
                     "", None, gr.update(visible=False), None,
                 )
         except StopIteration as stop:
-            cleaned_text = stop.value or ""
-        except Exception as e:   # 정제 오류 하나로 OCR 결과까지 잃지 않게 — 정제 없이 저장한다
-            cleaned_text = None
-            step_logs.append(f"  ⚠️ 문장 정제 미적용 — 정제 오류로 원문 그대로 저장 ({type(e).__name__}: {e})")
-        cleaned_text = _shrink_guard(pages_in, cleaned_text, step_logs, front_matter)
-        if cleaned_text:   # 표 자리 표지 → Markdown 표 (정제 경로가 표를 통째로 버리던 결함)
-            cleaned_text = writer.place_tables(cleaned_text, result.pages)
-        if cleaned_text:
-            step_logs.append(f"  📝 문장 정제 완료 ({len(cleaned_text):,}자)")
-        _crep = crep or None
-        clean_note = _clean_degrade_note(_crep)
-        if clean_note:
-            step_logs.append(f"  ⚠️ {clean_note}")
-        if _crep:   # 부속물 제거·지어낸 문장 등 확인할 경고 — 강등 건은 위 개수 줄로 대신한다
-            step_logs.extend(f"  ⚠ {w}" for w in _crep["warnings"] if "강등" not in w)
-        cleaned_text, cleaned_md = _structured_texts(
-            cleaned_text, _crep, out_fmt, step_logs,
-            # txt 입력의 '쪽'은 문단 묶음일 뿐이라 쪽 표지를 넣지 않는다
-            None if page_fn is _finalize_text else [(p.page_num, p.corrected_text) for p in content_pages],
-            {"name": file_path.name, "pages": None if page_fn is _finalize_text else result.total_pages})
+            cleaned_text, cleaned_md, crep, clean_note = stop.value
 
     # ── 저장 ───────────────────────────────────────────────────────────────────
     yield (
@@ -2114,7 +2096,7 @@ def _run_ocr(
         if review_count:
             _LAST_REVIEW.update(file=str(file_path), result=result, cleanup=cleanup,
                                 front_matter=front_matter, out_fmt=out_fmt, md_pair=md_pair,
-                                lang=lang, total=total)
+                                lang=lang, total=total, page_meta=page_meta)
 
     head = (f"⚠ 부분 저장  |  전체 {total}p 중 {start_page - 1 + processed}p까지만 처리 — 다시 처리해 주세요"
             if render_err is not None else "✅ 완료")
@@ -2194,17 +2176,28 @@ def reread_review_pages(file_obj):
 
     content = [p for p in result.pages if not p.is_blank]
     tmp_dir = Path(tempfile.mkdtemp(prefix="ocr_review_"))
-    if st["cleanup"]:
-        text = text_cleaner.clean_pages([p.corrected_text for p in content],
-                                        drop_front_matter=st["front_matter"], local=True)
-        text = writer.place_tables(text, result.pages)
-        out_path = writer.write_plain(file_path, text, tmp_dir, st["out_fmt"])
-    else:
-        text = None
-        out_path = writer.write(result, tmp_dir, st["out_fmt"])
+    text = md = None
+    if st["cleanup"] and content:   # 전체 처리와 같은 정제(_refine) — 예전엔 이 경로만 차례 처리·문서 정보가 빠졌다
+        refine = _refine(result.pages, st["front_matter"], st["out_fmt"], logs,
+                         {"name": file_path.name, "pages": result.total_pages})
+        try:
+            while True:
+                next(refine)
+        except StopIteration as stop:
+            text, md = stop.value[:2]
+    out_path = (writer.write_plain(file_path, text, tmp_dir, st["out_fmt"]) if text
+                else writer.write(result, tmp_dir, st["out_fmt"]))     # 정제본이 없으면 쪽 단위 서식으로
     results_path = _publish_to_results(out_path, file_path.stem)
     if st.get("md_pair"):
-        _place_md_pair(results_path, _md_pair_source(file_path, result, tmp_dir, text), logs)
+        _place_md_pair(results_path, _md_pair_source(file_path, result, tmp_dir, md if text else None), logs)
+    if st.get("page_meta") is not None:
+        # 다시 읽은 쪽(유료)을 담은 쪽 원문 파일을 새 결과 이름으로 — 후처리를 다시 돌려도 그 글자가 남게.
+        # 교정본은 다시 만들 수 없는 쪽(유료 교정을 켠 실행·옛 복구본 쪽)만 남긴다
+        keep = st["page_meta"].get("options", {}).get("llm_correct")
+        _save_page_file(file_path.stem,
+                        [p if keep or p.engine == OCREngine.RESTORED else replace(p, corrected_text="")
+                         for p in result.pages],
+                        st["page_meta"], logs, storage_manager.page_file_path(results_path))
 
     vision_count = sum(1 for p in result.pages
                        if p.engine in (OCREngine.GEMINI, OCREngine.CLAUDE_VISION, OCREngine.OLLAMA))

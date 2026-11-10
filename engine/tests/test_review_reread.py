@@ -70,6 +70,36 @@ def test_state_cleared_mid_reread_does_not_lose_paid_result(env, monkeypatch):
     assert "1쪽 교체" in status and "비전으로 다시 읽은" in Path(path).read_text(encoding="utf-8")
 
 
+def test_reread_with_cleanup_is_refined_like_a_full_run(env, monkeypatch):
+    """다시 읽은 뒤의 정제도 전체 처리와 같은 함수(_refine)로 — 예전엔 이 경로만 차례 처리·문서 정보가 빠졌다
+    (intent 2026-11-10 정제-후처리-통합)."""
+    ocr_gradio._LAST_REVIEW.update(cleanup=True, out_fmt=OutputFormat.MD)
+    seen = []
+    real = ocr_gradio._refine
+
+    def spy(pages, *a, **k):
+        seen.append([p.page_num for p in pages])
+        return real(pages, *a, **k)
+    monkeypatch.setattr(ocr_gradio, "_refine", spy)
+    _status, _preview, path, _btn = ocr_gradio.reread_review_pages(SimpleNamespace(name=str(PNG)))
+    out = Path(path).read_text(encoding="utf-8")
+    assert seen == [[1, 2]]
+    assert out.startswith("> **문서 정보**") and "비전으로 다시 읽은" in out and "로컬로 잘 읽은 첫 쪽" in out
+
+
+def test_reread_writes_page_file_for_the_new_result(env):
+    """다시 읽은 쪽(유료)이 쪽 원문 파일에도 들어가야, 나중에 후처리를 다시 돌려도 그 글자가 남는다."""
+    from core import page_store
+    ocr_gradio._LAST_REVIEW.update(page_meta={"source": PNG.name, "total_pages": 2,
+                                              "options": {"cleanup": False, "llm_correct": False}})
+    _status, _preview, path, _btn = ocr_gradio.reread_review_pages(SimpleNamespace(name=str(PNG)))
+    pages, meta = page_store.load(storage_manager.page_file_path(path))
+    assert [p.raw_text for p in pages] == ["로컬로 잘 읽은 첫 쪽입니다.", "비전으로 다시 읽은 본문입니다."]
+    assert pages[1].engine == OCREngine.GEMINI and not pages[1].needs_review
+    assert all(p.corrected_text == "" for p in pages)            # 교정본은 후처리가 판독 원문에서 다시 만든다
+    assert meta["source"] == PNG.name
+
+
 def test_batch_job_does_not_touch_tab1_review_state(env):
     import threading
     before = dict(ocr_gradio._LAST_REVIEW)
