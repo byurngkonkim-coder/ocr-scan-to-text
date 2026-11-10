@@ -65,6 +65,12 @@ def raw_copy_path(result_path: Path | str) -> Path:
     return _UPLOADS / f"{p.stem}_원문{p.suffix}"
 
 
+def page_file_path(result_path: Path | str) -> Path:
+    """결과 파일의 쪽 원문 파일 경로(storage/uploads/결과이름_쪽원문.json) — 원문 사본과 같은 자리.
+    1차가 읽은 쪽(판독 원문·표·검토 표시)을 담아, 후처리를 OCR 없이 다시 돌릴 때 읽는다(core.page_store)."""
+    return _UPLOADS / f"{Path(result_path).stem}_쪽원문.json"
+
+
 def save_raw_copy(raw_path: Path | str, stored_result: Path | str) -> Path:
     """정제 전 원문을 storage/uploads/ 에 '결과이름_원문' 으로 복사."""
     init()
@@ -242,12 +248,12 @@ def get_history_table() -> list[list]:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _delete_entry_files(entry: dict) -> None:
-    """이력 1건에 딸린 저장 파일 삭제 — 결과·정제 전 원문 사본·업로드 원본·02_결과 확정본."""
+    """이력 1건에 딸린 저장 파일 삭제 — 결과·정제 전 원문 사본·쪽 원문 파일·업로드 원본·02_결과 확정본."""
     result, upload, output = (entry.get(k, "").strip()
                               for k in ("result_path", "upload_path", "output_path"))
     paths = [Path(p) for p in (result, upload, output) if p]   # 빈 문자열 → 건너뜀 (Path("") == "." 방지)
     if result:
-        paths.append(raw_copy_path(result))
+        paths += [raw_copy_path(result), page_file_path(result)]
     for p in paths:
         if p.is_file():      # is_file()로 디렉터리·현재경로 오삭제 방지
             try:
