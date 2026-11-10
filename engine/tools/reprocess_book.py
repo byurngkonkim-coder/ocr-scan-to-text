@@ -1,6 +1,9 @@
 """결과 한 권 순차 개선 — 02_결과 의 결과를 지금 규칙으로 다시 만들어 02_결과/_재처리/ 에 쓴다(원본 결과는 그대로).
 
-입력은 결과 MD 본문(remake_md.rebuild 와 같은 경로 — 원문 사본은 쪽 표지 대조에만 쓴다).
+입력은 두 가지다(intent 2026-11-10 정제-후처리-통합):
+- 쪽 원문 파일(storage/uploads/결과이름_쪽원문.json)이 있는 책 — 1차가 남긴 판독 원문에서 쪽 교정·문장 정제부터
+  다시 하고 이어서 재처리한다(후처리 한 단계). OCR 은 다시 하지 않는다.
+- 없는 책(2026-11-10 전에 처리한 책) — 결과 MD 본문(remake_md.rebuild 와 같은 경로 — 원문 사본은 쪽 표지 대조에만 쓴다).
 책정보 파일 02_결과/_재처리/_책정보/{결과 이름}.txt 가 있으면 그 책·저자·차례를 쓴다 — 원본 스캔 PDF 앞쪽과
 인터넷 검색으로 사람이 확인해 적은 정보. 형식:
 
@@ -150,14 +153,46 @@ def status(log: Path = LOG) -> dict:
             "remaining": sum(1 for p in RESULTS.glob("*.md") if p.stem not in done)}
 
 
+def refine_from_pages(page_file: Path) -> tuple[str, list, dict]:
+    """쪽 원문 파일(1차가 남긴 판독 원문) → (정제본 MD, 쪽들, 파일 머리) — 전체 처리가 1차 직후에 하는 후처리와
+    같은 순서: 쪽 교정 → 문장 정제(ocr_gradio._refine) → 조사 자동 교정(일괄 처리와 같은 함수).
+    OCR·유료 API 를 부르지 않는다. 정제본이 안 나오면(정제 오류·분량 급감) 사유를 담아 ValueError."""
+    import ocr_gradio
+    from core import ocr_typos, page_store, typo_suspects
+    from core.types import OutputFormat
+    pages, meta = page_store.load(page_file)
+    logs: list[str] = []
+    ocr_gradio._correct_pages(pages, logs=logs)
+    gen = ocr_gradio._refine(pages, bool(meta.get("options", {}).get("front_matter")), OutputFormat.MD, logs,
+                             {"name": meta.get("source") or page_file.name, "pages": len(pages)})
+    try:
+        while True:
+            next(gen)
+    except StopIteration as stop:
+        md = stop.value[1]
+    if not md:
+        raise ValueError(f"{page_file.name}: 정제본을 만들지 못했습니다 — " + " / ".join(l.strip() for l in logs[-3:]))
+    with typo_suspects._lock:
+        fixed, n = ocr_typos.auto_fix(md)
+    return (fixed if n and len(fixed) == len(md) else md), pages, meta
+
+
 def reprocess(stem: str) -> tuple[Path, dict]:
     import ocr_gradio
-    from core import remake_md
+    from core import remake_md, storage_manager, writer
     from core.types import OutputFormat
     src = RESULTS / f"{stem}.md"
     from core import user_typos
     info = read_book_info(INFO_DIR / f"{stem}.txt")
-    text = user_typos.apply(src.read_text(encoding="utf-8"))[0]   # 결과를 만든 뒤 사전에 늘어난 항목까지
+    # 쪽 원문 파일이 있는 책(2026-11-10 이후 새 공정)은 판독 원문에서 정제부터 다시 한다 — 정제 규칙·사전을 고친 것이
+    # 다시 OCR 하지 않아도 반영된다. 없는 책(그 전에 처리한 책)은 지금처럼 02_결과 의 정제본에서 시작한다
+    page_file = storage_manager.page_file_path(src)
+    page_pages = page_meta = None
+    if page_file.exists():
+        first, page_pages, page_meta = refine_from_pages(page_file)
+    else:
+        first = src.read_text(encoding="utf-8")
+    text = user_typos.apply(first)[0]   # 결과를 만든 뒤 사전에 늘어난 항목까지
     subs = 0
     for pat, rep in info.get("subs", []):
         text, k = re.subn(pat, rep, text)
@@ -165,6 +200,9 @@ def reprocess(stem: str) -> tuple[Path, dict]:
     entries, body, note = remake_md.rebuild(text, info.get("toc"))
     raw = remake_md._raw_copy(src)
     pages, name, total = remake_md.read_raw_pages(raw) if raw else (None, "", None)
+    if raw is None and page_pages is not None:   # 원문 사본이 없는 책(정제를 끄고 읽은 책) — 쪽 원문 파일에서
+        pages = [(p.page_num, writer.place_tables(p.corrected_text, [p])) for p in page_pages if not p.is_blank]
+        name, total = page_meta.get("source", ""), page_meta.get("total_pages")
     head = {"name": name or remake_md._STAMP_RE.sub("", stem), "pages": total, "front": body[:5000],
             **{k: info[k] for k in ("book", "author", "basis") if k in info}}
     logs: list[str] = []
@@ -183,8 +221,9 @@ def reprocess(stem: str) -> tuple[Path, dict]:
             md2, k = re.subn(pat, rep, md2)
             subs += k
         out.write_text(md2, encoding="utf-8")
-    q = quality(entries, src.read_text(encoding="utf-8"), out.read_text(encoding="utf-8"))
-    return out, {"note": note, "logs": logs, "book_info": bool(info), "subs": subs, "tables": tables, "quality": q}
+    q = quality(entries, first, out.read_text(encoding="utf-8"))
+    return out, {"note": note, "logs": logs, "book_info": bool(info), "subs": subs, "tables": tables, "quality": q,
+                 "from_pages": page_pages is not None}
 
 
 if __name__ == "__main__":
@@ -202,6 +241,7 @@ if __name__ == "__main__":
     target = Path(target).name.removesuffix(".md")
     path, rep = reprocess(target)
     print(path)
+    print("입력:", "쪽 원문 파일(판독 원문에서 정제부터 다시)" if rep["from_pages"] else "02_결과 의 정제본")
     print("책정보 파일:", "있음" if rep["book_info"] else "없음", f"· 이 책 고침 {rep['subs']}곳")
     print(rep["note"])
     if rep["tables"]:
