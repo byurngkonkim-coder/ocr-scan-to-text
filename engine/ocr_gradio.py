@@ -463,20 +463,36 @@ def _toc_prepass(content_pages: list[PageResult]) -> tuple[list[str], dict | Non
     return texts, {"entries": entries, "stats": stats}
 
 
-def _recorrect(text: str, page: PageResult) -> str:
-    """쪽 원문 조각을 처음 읽을 때와 같은 교정 체인으로(_finalize·_finalize_digital — LLM 교정은 빼고).
+def _recorrect(text: str, page: PageResult, llm_correct: bool = False, llm_budget: int = 0) -> str:
+    """쪽 원문 조각을 처음 읽을 때와 같은 교정 체인으로(_finalize·_finalize_digital). 유료 LLM 교정은 켠 때만.
     표 자리 표지(⟨TABLE:쪽-번호⟩)는 교정·줄 잇기에 넣지 않는다."""
     if page.engine == OCREngine.PDF_TEXT:
         return postprocessor.process_full(text, engine=OCREngine.PDF_TEXT.value)
     parts = figure_detector.TABLE_TOKEN_RE.split(text)
     out = []
     for k in range(0, len(parts), 3):
-        chunk = _correct_text(parts[k], page.engine.value, False, 0)
+        chunk = _correct_text(parts[k], page.engine.value, llm_correct, llm_budget)
         if chunk.strip():
             out.append(chunk)
         if k + 2 < len(parts):
             out.append(figure_detector.table_token(int(parts[k + 1]), int(parts[k + 2])))
     return "\n\n".join(out)
+
+
+def _correct_pages(pages: list[PageResult], llm_correct: bool = False, llm_budget: int = 0,
+                   logs: list[str] | None = None) -> None:
+    """쪽 교정(후처리의 첫 단계) — 1차가 판독 원문만 남긴 쪽에 교정본을 채운다(intent 2026-11-10).
+    이미 교정본이 있는 쪽(유료 교정본이 저장된 쪽·옛 복구본에서 되살린 쪽)과 빈 쪽은 그대로 둔다 —
+    두 번 교정하면 띄어쓰기를 다시 붙이기도 한다. 교정 오류는 그 쪽만 판독 원문 그대로 두고 알린다."""
+    for p in pages:
+        if p.is_blank or p.corrected_text or not p.raw_text:
+            continue
+        try:
+            p.corrected_text = _recorrect(p.raw_text, p, llm_correct, llm_budget)
+        except Exception as e:   # 교정 오류 하나로 읽은 쪽을 잃지 않게
+            p.corrected_text = p.raw_text
+            if logs is not None:
+                logs.append(f"  ⚠ p.{p.page_num}: 쪽 교정 오류 — 판독 원문 그대로 둠 ({type(e).__name__}: {e})")
 
 
 _NAME_STAMP_RE = re.compile(r'^\d{8}_\d{6}_')                     # 02_결과 시각 접두
@@ -803,11 +819,21 @@ def _page_plan(file_path: Path, start_page: int = 1, max_pages: int | None = Non
 _CKPT_FIG = "⟦그림·표⟧ "
 
 
+# 쪽 교정을 미룬 쪽(1차는 판독 원문만 남긴다 — intent 2026-11-10)의 표지 줄(JSON): 판독 원문 그대로·엔진·신뢰도·
+# 검토 표시. 이 줄이 없는 쪽은 옛 복구본 — 본문이 이미 교정된 글이라 다시 교정하지 않는다
+_CKPT_RAW = "⟦판독 원문⟧ "
+
+
 def _ckpt_chunk(p: PageResult) -> str:
-    """OCR 복구본에 적는 쪽 하나 — '[페이지 N]' + 본문 (+ 그림·표 자리표시 줄)."""
-    chunk = f"[페이지 {p.page_num}]\n{p.corrected_text}"
+    """OCR 복구본에 적는 쪽 하나 — '[페이지 N]' + 본문 (+ 그림·표 자리표시 줄) (+ 판독 원문 표지 줄)."""
+    raw = bool(p.raw_text) and not p.corrected_text
+    chunk = f"[페이지 {p.page_num}]\n{p.raw_text if raw else p.corrected_text}"
     if p.figures:
         chunk += "\n" + _CKPT_FIG + json.dumps(p.figures, ensure_ascii=False)
+    if raw:
+        chunk += "\n" + _CKPT_RAW + json.dumps(
+            {"raw_text": p.raw_text, "engine": p.engine.value, "confidence": p.confidence,
+             "needs_review": p.needs_review, "review_reason": p.review_reason}, ensure_ascii=False)
     return chunk
 
 
@@ -832,10 +858,17 @@ def _resume_pages(stem: str) -> tuple[list[PageResult], Path | None]:
     for n, body in best[:-1]:
         lines = body.split("\n")
         figs = [json.loads(ln[len(_CKPT_FIG):]) for ln in lines if ln.startswith(_CKPT_FIG)]
-        t = "\n".join(ln for ln in lines if not ln.startswith(_CKPT_FIG)).strip()
-        p = PageResult(page_num=n, raw_text=t, corrected_text=t, engine=OCREngine.RESTORED,
-                       confidence=0.0, figures=figs[0] if figs else [],
-                       is_blank=not t, blank_reason="복원(빈 쪽)" if not t else "")
+        raw = [json.loads(ln[len(_CKPT_RAW):]) for ln in lines if ln.startswith(_CKPT_RAW)]
+        t = "\n".join(ln for ln in lines if not ln.startswith((_CKPT_FIG, _CKPT_RAW))).strip()
+        if raw:     # 교정을 미룬 쪽 — 판독 원문 그대로 되살린다(쪽 교정은 다 읽은 뒤 _correct_pages 가 한다)
+            t = raw[0]["raw_text"]
+            p = PageResult(page_num=n, raw_text=t, corrected_text="", engine=OCREngine(raw[0]["engine"]),
+                           confidence=raw[0]["confidence"], figures=figs[0] if figs else [],
+                           needs_review=raw[0]["needs_review"], review_reason=raw[0]["review_reason"])
+        else:
+            p = PageResult(page_num=n, raw_text=t, corrected_text=t, engine=OCREngine.RESTORED,
+                           confidence=0.0, figures=figs[0] if figs else [],
+                           is_blank=not t, blank_reason="복원(빈 쪽)" if not t else "")
         if not set(figure_detector.TABLE_TOKEN_RE.findall(t)) <= {
                 figure_detector.TABLE_TOKEN_RE.match(k).groups() for k in writer._page_tables(p)}:
             break
@@ -864,8 +897,12 @@ def _process_page(image, page_num: int, lang: str,
                   llm_correct: bool, llm_budget: int,
                   quick: bool = False,
                   vision_first: bool = False,
-                  vision_budget: _VisionBudget | None = None) -> tuple[PageResult, list[str]]:
+                  vision_budget: _VisionBudget | None = None,
+                  correct: bool = True) -> tuple[PageResult, list[str]]:
     """
+    correct=False : 쪽 교정을 미룬다 — 판독 원문만 담아 돌려주고, 교정은 다 읽은 뒤 _correct_pages 가 한다
+      (전체 처리 _run_ocr. intent 2026-11-10 정제-후처리-통합)
+
     vision_first=True : Vision 우선 모드 (API 키 있을 때)
       1순위: Vision 엔진     — 레이아웃 이해, 마진 무시, 한국어 고정확도
       2순위: RapidOCR 한글 v5 — Vision 실패/미설정 시 자동 전환
@@ -909,7 +946,7 @@ def _process_page(image, page_num: int, lang: str,
             _t = time.time()
             ocr_result = claude_vision.run(image, lang_hint=lang)
             logs.append(f"  p.{page_num}: ✅ Vision 완료 ({time.time() - _t:.1f}s)")
-            return _finalize(ocr_result, page_num, placeholders, llm_correct, llm_budget), logs
+            return _finalize(ocr_result, page_num, placeholders, llm_correct, llm_budget, correct=correct), logs
         except Exception as e:
             logs.append(f"  p.{page_num}: Vision 오류 {time.time() - _t:.1f}s → {LOCAL_OCR_NAME} 폴백 ({e})")
             # Vision 실패 시 RapidOCR 로 전환 — 그 쪽은 검토 필요로 남긴다(아래)
@@ -975,7 +1012,7 @@ def _process_page(image, page_num: int, lang: str,
                 vision_err = str(e)
                 logs.append(f"  p.{page_num}: 폴백 실패 → 로컬 OCR 결과 유지 ({e})")
             else:
-                return _finalize(vision_result, page_num, placeholders, llm_correct, llm_budget), logs
+                return _finalize(vision_result, page_num, placeholders, llm_correct, llm_budget, correct=correct), logs
         reason = ("자모 분리 감지" if ocr_result.has_jamo_split
                   else f"신뢰도 낮음 ({ocr_result.confidence:.1f}%)")
         if vision_err:
@@ -986,20 +1023,20 @@ def _process_page(image, page_num: int, lang: str,
             reason += " · Vision 오류"
         logs.append(f"  p.{page_num}: ⚠ {reason} — 검토 필요")
         return _finalize(ocr_result, page_num, placeholders, llm_correct, llm_budget,
-                         needs_review=True, review_reason=reason), logs
+                         needs_review=True, review_reason=reason, correct=correct), logs
     if vision_first_err:
         reason = f"Vision 오류 → {LOCAL_OCR_NAME} 결과 ({vision_first_err[:80]})"
         logs.append(f"  p.{page_num}: ⚠ {reason} — 검토 필요")
         return _finalize(ocr_result, page_num, placeholders, llm_correct, llm_budget,
-                         needs_review=True, review_reason=reason), logs
+                         needs_review=True, review_reason=reason, correct=correct), logs
 
     logs.append(f"  p.{page_num}: {LOCAL_OCR_NAME} 신뢰도 {ocr_result.confidence:.1f}%")
-    return _finalize(ocr_result, page_num, placeholders, llm_correct, llm_budget), logs
+    return _finalize(ocr_result, page_num, placeholders, llm_correct, llm_budget, correct=correct), logs
 
 
 def _finalize(ocr_result, page_num: int, placeholders: list[str],
               llm_correct: bool, llm_budget: int,
-              needs_review: bool = False, review_reason: str = "") -> PageResult:
+              needs_review: bool = False, review_reason: str = "", correct: bool = True) -> PageResult:
     """
     OCR 결과 → 최종 텍스트 변환 (엔진별 전체 처리 체인 적용).
 
@@ -1010,23 +1047,18 @@ def _finalize(ocr_result, page_num: int, placeholders: list[str],
               RapidOCR: 쪽번호·마진노이즈제거 → 단락복원 → 공백정규화
               Vision:   단락복원 → 공백정규화
       4. L3  — llm_corrector    (Claude Haiku 문맥 교정, 활성화 시)
-    """
-    # 표 자리 표지(⟨TABLE:쪽-번호⟩)는 교정·줄 잇기에 넣지 않는다 — 표지 사이 본문 조각만 교정하고 다시 잇는다
-    parts = figure_detector.TABLE_TOKEN_RE.split(ocr_result.text)
-    out: list[str] = []
-    for k in range(0, len(parts), 3):
-        chunk = _correct_text(parts[k], ocr_result.engine.value, llm_correct, llm_budget)
-        if chunk.strip():
-            out.append(chunk)
-        if k + 2 < len(parts):
-            out.append(figure_detector.table_token(int(parts[k + 1]), int(parts[k + 2])))
-    text = "\n\n".join(out)
 
-    return PageResult(
-        page_num=page_num, raw_text=ocr_result.text, corrected_text=text,
+    correct=False 면 판독 원문만 담는다(교정본은 빈 글) — 교정은 다 읽은 뒤 _correct_pages 가 같은 체인으로 한다.
+    """
+    page = PageResult(
+        page_num=page_num, raw_text=ocr_result.text, corrected_text="",
         engine=ocr_result.engine, confidence=ocr_result.confidence,
         figures=placeholders, needs_review=needs_review, review_reason=review_reason,
     )
+    if correct:
+        # 표 자리 표지(⟨TABLE:쪽-번호⟩)는 교정·줄 잇기에 넣지 않는다 — 표지 사이 본문 조각만 교정하고 다시 잇는다
+        page.corrected_text = _recorrect(ocr_result.text, page, llm_correct, llm_budget)
+    return page
 
 
 def _correct_text(text: str, engine_str: str, llm_correct: bool, llm_budget: int) -> str:
@@ -1801,6 +1833,7 @@ def _run_ocr(
                 image, page_num, lang, no_preprocess, no_fallback, no_figure,
                 llm_correct, llm_budget, vision_first=vision_first,
                 vision_budget=vision_budget,
+                correct=False,          # 1차는 판독 원문만 — 쪽 교정은 다 읽은 뒤(후처리의 첫 단계)
             )
         except Exception as page_err:   # 한 쪽의 예외가 파일 전체를 죽이지 않게 — 검토 필요로 남김
             return _failed_page(page_num, f"처리 오류: {page_err}")
@@ -1870,6 +1903,8 @@ def _run_ocr(
         # 중단(제너레이터 close) 시 아직 안 보낸 쪽은 취소 — 이미 보낸 쪽만 마저 끝난다
         executor.shutdown(wait=False, cancel_futures=True)
         ocr_ckpt.close()   # 쪽 기록 끝 — 중단돼도 '쓰는 중'에서 빼야 다음 실행이 이어받는다
+    # ── 후처리 시작: 쪽 교정 — 읽을 때 미룬 것을 여기서 한 번에(글자만으로 되는 일) ──────────
+    _correct_pages(result.pages, llm_correct, llm_budget, step_logs)
     if render_err is not None:
         step_logs.append(f"  ⚠ {start_page + processed}쪽 이후를 읽지 못해 중단 — "
                          f"처리한 {processed}쪽만 저장합니다 ({render_err})")
