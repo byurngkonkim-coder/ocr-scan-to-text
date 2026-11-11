@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
-from core import rapidocr_engine, table_structure
+from core import rapidocr_engine, spacing, table_structure
 
 
 @dataclass
@@ -78,9 +78,22 @@ def detect(image: Image.Image, lang: str = "kor+eng") -> DetectionResult:
     regions: list[Region] = []
     fig_idx = tab_idx = form_idx = 1
 
+    # ── 0. 설명 상자 (테두리 + 아래 색 띠 설명문) ────────────────────────────────
+    # 표 감지보다 먼저 — 안 그러면 상자 테두리·견본 서류의 선이 표가 된다. 찾은 상자는 지우고 표를 찾는다
+    table_gray = img_cv.copy()
+    for (x, y, bw, bh), band_y in _detect_caption_boxes(image, img_cv):
+        block = _caption_box_block(image, (x, y, bw, bh), band_y, lang)
+        if not block:
+            continue
+        # kind="table": 본문 그 자리에 끼워 넣는 블록이라는 뜻으로 쓴다(표 자리 표지 → writer.place_tables)
+        regions.append(Region(kind="table", index=tab_idx, x=x, y=y, w=bw, h=bh,
+                              crop=image.crop((x, y, x + bw, y + bh)), table_md=block))
+        tab_idx += 1
+        cv2.rectangle(table_gray, (x, y), (x + bw, y + bh), 255, -1)
+
     # ── 1. 표 감지 ──────────────────────────────────────────────────────────────
-    found = _detect_tables(img_cv)
-    table_boxes = [_expand_to_border(img_cv, b, [o for o in found if o != b]) for b in found]
+    found = [b for b in _detect_tables(table_gray) if not _is_edge_strip(b, w, h)]
+    table_boxes = [_expand_to_border(table_gray, b, [o for o in found if o != b]) for b in found]
     for raw, (x, y, bw, bh) in zip(found, table_boxes):
         # 매트릭스 테두리는 굵어 넓힐 필요가 없다 — 넓히면 바깥 화살표 선을 테두리로 잡았다(그림6.16)
         matrix = _matrix_markdown(image, img_cv, raw, lang)
@@ -216,6 +229,165 @@ def _detect_tables(gray: np.ndarray) -> list[tuple[int, int, int, int]]:
     return _merge_overlapping(boxes)
 
 
+def _is_edge_strip(box: tuple[int, int, int, int], width: int, height: int) -> bool:
+    """쪽 가장자리에 붙은 좁은 띠 — 책등 그림자·손가락이 선으로 잡힌 것이다. 표로 읽으면 그 띠에 걸친
+    본문 줄 끝이 표 칸으로 빨려 들어갔다(현직자를위한무역실무 278쪽: x879 y0 w306 h1364)."""
+    x, y, w, h = box
+    touches = x <= 2 or y <= 2 or x + w >= width - 2 or y + h >= height - 2
+    return touches and (w < width * 0.3 or h < height * 0.3)
+
+
+# ── 설명 상자 (현직자를위한무역실무, 2026-11-11) ──────────────────────────────
+# 얇은 테두리 상자 안에 그림(서류 견본·화면 캡처·도식·작은 표)이 있고 맨 아래에 옅은 색 띠로 설명문이 붙는다.
+# 예전엔 테두리·견본 서류의 선이 표로 잡혀 빈 칸투성이 표가 되고(326쪽의 표 59개 가운데 25개가 빈 칸 45% 이상),
+# 깨알 글자가 잡음으로 읽혔다. 상자를 한 단위로 잡아 설명문은 살리고, 안쪽은 깨끗한 표일 때만 표로 쓴다.
+_CAPTION_SAT = 8             # 띠 채도가 종이 바탕보다 높아야 하는 폭(0~255) — 6쪽 실측: 종이 중앙값 0·90% 값 0~7, 띠 중앙값 13~34
+_CAPTION_MIN_W = 0.25        # 띠 너비 하한(쪽 너비 대비) — 본문 옆에 띄운 작은 상자가 0.38
+_CAPTION_MIN_CONTENT = 0.03  # 띠 위 그림 높이 하한(쪽 높이 대비) — 이보다 낮으면 색 바탕 글상자(본문)다
+_CAPTION_MIN_HANGUL = 6      # 띠 글자가 문장이어야 설명문이다(표의 색칠한 합계 행 「합계 12 34」 제외)
+_BOX_PAD = 6                 # 테두리 선까지 덮을 여유
+_BOX_TABLE_EMPTY = 0.35      # 상자 안 표: 빈 칸 비율 상한 — 실측 진짜 표 0~0.33, 견본 서류 0.47~0.88
+_BOX_TABLE_CELL = 60         # 상자 안 표: 한 칸 글자 수 상한 — 문단이 통째로 든 칸은 표가 아니다
+_BOX_TABLE_ROWS = 4          # 상자 안 표: 행 수 하한(머리행 포함) — 실측 흐름도는 3행, 진짜 표는 5행 이상
+_LABEL_MIN_SCORE = 0.8       # 그림 속 글자로 남길 판독 신뢰도
+_LABEL_MIN_HEIGHT = 0.7      # 설명문 글자 높이 대비 — 이보다 작은 깨알 글자(견본 서류)는 150dpi 에서 못 읽는다
+
+
+def _detect_caption_boxes(image: Image.Image, gray: np.ndarray) -> list[tuple[tuple[int, int, int, int], int]]:
+    """[(상자 x·y·너비·높이, 설명 띠 윗변 y)]. 색 띠를 먼저 찾고, 띠 양 끝에서 위로 이어진 세로 테두리를 따라
+    상자 윗변을 찾는다. 양쪽 테두리가 모두 띠 위로 올라가야 상자다."""
+    H, W = gray.shape
+    hsv = cv2.cvtColor(np.array(image.convert("RGB")), cv2.COLOR_RGB2HSV)
+    # 띠는 아주 밝다(실측 명도 중앙값 251~253). 색 바탕 종이에 찍힌 견본 서류 사진(67쪽, 명도 205 안팎)이
+    # 띠와 한 덩어리가 되지 않게 밝은 화소만 본다
+    sat, val = hsv[:, :, 1], hsv[:, :, 2]
+    light = val >= 230
+    if not light.any():
+        return []
+    # 띠는 위가 옅은 그러데이션이라 채도가 낮다 — 종이 바탕 채도(밝은 화소의 중앙값)보다 얼마나 높은지로 본다
+    floor = int(np.median(sat[light])) + _CAPTION_SAT
+    tinted = (sat >= floor) & light
+    # 띠 위 글자 자리를 메운다 — 가로로만. 세로로도 메우면 띠와 그 위 그림 사이 흰 틈(67쪽 20px)이 붙는다
+    fill = cv2.morphologyEx(tinted.astype(np.uint8) * 255, cv2.MORPH_CLOSE, np.ones((3, 25), np.uint8))
+    fill = cv2.morphologyEx(fill, cv2.MORPH_OPEN,
+                            cv2.getStructuringElement(cv2.MORPH_RECT, (int(W * _CAPTION_MIN_W), 15)))
+    binary = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, 25, 10)
+    vert = cv2.morphologyEx(binary, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (1, 30)))
+
+    def line_top(x: int, y_from: int) -> int:
+        """x 근처 세로선이 y_from 에서 위로 이어진 끝 y. 끊김은 12px 까지 넘는다."""
+        on = vert[:y_from, max(0, x - 12):x + 13].max(axis=1) > 0
+        top, miss, y = y_from, 0, y_from - 1
+        while y >= 0 and miss <= 12:
+            if on[y]:
+                top, miss = y, 0
+            else:
+                miss += 1
+            y -= 1
+        return top
+
+    out = []
+    for cnt in cv2.findContours(fill, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0]:
+        bx, by, bw, bh = cv2.boundingRect(cnt)
+        # 그러데이션의 옅은 윗부분까지 띠로 — 줄 평균 채도가 하한의 절반 이상인 동안 위로 올린다(띠 높이의 40% 까지)
+        for _ in range(int(bh * 0.4)):
+            if by == 0 or sat[by - 1, bx:bx + bw].mean() < floor / 2:
+                break
+            by, bh = by - 1, bh + 1
+        # 띠 윗변은 또렷하다 — 바로 위가 띠와 비슷하게 물들어 있으면 위로 갈수록 옅어지는 색 바탕 글상자다
+        # (56쪽 「용어정리」: 아래쪽 줄만 띠로 잡혀 위쪽 문단이 '그림'이 됐다). 그 상자는 본문으로 읽는다.
+        # 위가 어두우면 띠에 맞닿은 견본 서류 사진이다(67쪽) — 그건 설명 상자다
+        above = slice(by - 8, by - 4), slice(bx, bx + bw)
+        if by >= 8 and np.median(val[above]) >= 230 \
+                and np.median(sat[above]) >= 0.5 * np.median(sat[by:by + 4, bx:bx + bw]):
+            continue
+        # 띠 안에 세로선이 있으면 표의 색칠한 행이다
+        inner = vert[by:by + bh, bx + 15:bx + bw - 15]
+        if inner.size and (inner.sum(axis=0) / 255 >= bh * 0.8).any():
+            continue
+        tops = line_top(bx, by), line_top(bx + bw, by)
+        if by - max(tops) < H * _CAPTION_MIN_CONTENT:
+            continue
+        x0, y0 = max(0, bx - _BOX_PAD), max(0, min(tops) - _BOX_PAD)
+        x1, y1 = min(W, bx + bw + _BOX_PAD), min(H, by + bh + _BOX_PAD)
+        out.append(((x0, y0, x1 - x0, y1 - y0), by))
+    # 상자 속 그림의 색 바탕이 또 상자로 잡히면(25쪽 운송장 사진·209쪽 화면 캡처) 큰 바깥 상자만 남긴다
+    out.sort(key=lambda b: -b[0][2] * b[0][3])
+    kept: list = []
+    for box, band in out:
+        if not any(_rect_overlap(*box, *k) for k, _b in kept):
+            kept.append((box, band))
+    return sorted(kept, key=lambda b: b[0][1])
+
+
+def _join_lines(items, sep: str = " ") -> str:
+    """글자 상자 → 위에서 아래, 왼쪽에서 오른쪽으로 이은 글. 줄 사이는 sep."""
+    if not items:
+        return ""
+    unit = sorted(b[3] for _t, b in items)[len(items) // 2]
+    return sep.join(" ".join(t for t, _b in sorted(its, key=lambda tb: tb[1][0])) for _cy, its in _text_lines(items, unit))
+
+
+def _caption_box_block(image: Image.Image, box: tuple[int, int, int, int], band_y: int, lang: str) -> str:
+    """설명 상자 → 본문에 끼울 글. 안쪽이 깨끗한 표면 「표 + 설명문」, 아니면 「[그림] 설명문」과 읽을 만한 큰 글자.
+    띠에서 문장을 못 읽으면 빈 문자열(설명 상자가 아님)."""
+    x, y, w, h = box
+    caption_items = _read_table_boxes(image.crop((x, band_y, x + w, y + h)), lang, _TEXT_MIN_CONF)
+    caption = _correct_prose(_join_lines(caption_items))
+    if len(re.findall(r"[가-힣]", caption)) < _CAPTION_MIN_HANGUL:
+        return ""
+    p = _BOX_PAD * 2   # 테두리 선을 빼고 읽는다
+    content = image.crop((x + p, y + p, x + w - p, band_y))
+    unit = sorted(b[3] for _t, b in caption_items)[len(caption_items) // 2]
+    sure = _read_table_boxes(content, lang, _LABEL_MIN_SCORE)
+    labels = [(t, b) for t, b in sure
+              if b[3] >= unit * _LABEL_MIN_HEIGHT and len(_WORD_CHARS.findall(t)) >= 2 and not _JUNK_RE.match(t)]
+    if sure and table_structure.is_available():
+        try:
+            grid = _dense_grid(table_structure.recognize(content, lang))
+        except Exception:
+            grid = []
+        # 표가 확실히 읽힌 글자와 서로 거의 같아야 표로 쓴다 — 확실히 읽힌 글자에 없는 글자가 많으면 깨알 글자를
+        # 잘못 읽은 견본 서류다(66쪽 「PreCarispe br」). 3행 이하는 화살표로 이은 흐름도가 칸으로 읽힌 것(27·32쪽)
+        cells = "".join(c for r in grid for c in r)
+        if len(grid) >= _BOX_TABLE_ROWS and _same_letters("".join(t for t, _b in sure), cells):
+            # 표 옆 도형 글자(308쪽 「자유무역」「보호무역」)는 표에 안 들어간다 — 따로 남긴다
+            have = "".join(_WORD_CHARS.findall(cells))
+            rest = _correct_prose(_join_lines([(t, b) for t, b in labels
+                                               if "".join(_WORD_CHARS.findall(t)) not in have], " / "))
+            return f"{_grid_to_markdown(grid)}\n\n{caption}" + (f"\n(그림 속 글자: {rest})" if rest else "")
+    inside = _correct_prose(_join_lines(labels, " / "))
+    return f"[그림] {caption}" + (f"\n(그림 속 글자: {inside})" if inside else "")
+
+
+def _correct_prose(text: str) -> str:
+    """표 자리에 끼우는 글(설명문·그림 속 글자·표에서 떼어 낸 문단)은 본문 정제를 안 거친다 —
+    칸 글자 교정에 더해 본문 정제 끝의 띄어쓰기(R-17)를 여기서 건다."""
+    return spacing.fix_spacing(_correct_cell(text))[0]
+
+
+def _same_letters(a: str, b: str, share: float = 0.85) -> bool:
+    """두 글의 글자(한글·영문·숫자, 순서 무관)가 서로 share 이상 겹치는가."""
+    from collections import Counter
+    ca, cb = Counter(_WORD_CHARS.findall(a)), Counter(_WORD_CHARS.findall(b))
+    both = sum((ca & cb).values())
+    return bool(both) and both >= share * sum(ca.values()) and both >= share * sum(cb.values())
+
+
+def _dense_grid(grid: list[list[str]]) -> list[list[str]]:
+    """빈 행·빈 열을 뺀 격자. 빈 칸이 많거나 한 칸에 문단이 들었으면 빈 목록 — 서류 견본·도식을 표로 쓰지 않는다."""
+    rows = [r for r in grid if any(c.strip() for c in r)]
+    if len(rows) < 2:
+        return []
+    keep = [j for j in range(len(rows[0])) if any(r[j].strip() for r in rows)]
+    rows = [[r[j] for j in keep] for r in rows]
+    cells = [c for r in rows for c in r]
+    if len(keep) < 2 or sum(not c.strip() for c in cells) > len(cells) * _BOX_TABLE_EMPTY \
+            or max(len(c) for c in cells) > _BOX_TABLE_CELL:
+        return []
+    return rows
+
+
 def _expand_to_border(gray: np.ndarray, box: tuple[int, int, int, int],
                       others: list[tuple[int, int, int, int]] = ()) -> tuple[int, int, int, int]:
     """감지한 표 상자를 근처의 흐린 바깥 테두리까지 넓힌다.
@@ -250,7 +422,18 @@ def _expand_to_border(gray: np.ndarray, box: tuple[int, int, int, int],
     right = max([x + w] + [c + 1 for c in cols if c >= x + w])
     top = min([y] + [r for r in rows if r < y])
     bottom = max([y + h] + [r + 1 for r in rows if r >= y + h])
-    return left, top, right - left, bottom - top
+    # 양옆이 열린 표(가로 괘선 + 안쪽 세로선만)는 세로선 안쪽만 잡혀 첫 열·끝 열이 잘렸다
+    # (현직자를위한무역실무 121쪽 「대금의 지급시기」→「급시기」) — 상자를 지나는 가로 괘선의 끝까지 넓힌다
+    lim0 = max([0] + [ox + ow + 1 for ox, oy, ow, oh in others if oy < y + h and y < oy + oh and ox + ow <= x])
+    lim1 = min([W] + [ox - 1 for ox, oy, ow, oh in others if oy < y + h and y < oy + oh and ox >= x + w])
+    # 짧은 조각(40px)으로 찾아 이어 붙인다 — 스캔이 기울면 괘선이 계단 꼴이라 긴 조각으로는 끊긴다
+    rules = cv2.morphologyEx(binary[y:y + h, lim0:lim1], cv2.MORPH_OPEN,
+                             cv2.getStructuringElement(cv2.MORPH_RECT, (40, 1)))
+    for cnt in cv2.findContours(rules, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0]:
+        rx, _ry, rw, _rh = cv2.boundingRect(cnt)
+        if rw >= w * 0.5 and rx + lim0 < x + w and x < rx + lim0 + rw:
+            left, right = min(left, rx + lim0), max(right, rx + lim0 + rw)
+    return int(left), int(top), int(right - left), int(bottom - top)
 
 
 def _detect_figures(gray: np.ndarray, orig: Image.Image) -> list[tuple[int, int, int, int]]:
@@ -299,8 +482,28 @@ def _extract_table_markdown(crop: Image.Image, lang: str) -> str:
             grid = table_structure.recognize(crop, lang)
         except Exception:
             grid = []
-        return _grid_to_markdown(grid) if len(grid) >= 2 else ""
+        grid, prose = _split_prose_rows(grid)
+        if len(grid) < 2:
+            return ""
+        return "\n\n".join([_grid_to_markdown(grid)] + [_correct_prose(p) for p in prose])
     return _rows_markdown(crop, lang)
+
+
+_PROSE_ROW_CHARS = 40   # 한 칸만 찬 행의 글자가 이보다 길면 표 아래 문단이다 — 실측 표 칸은 37자 이하, 삼켜진 문단은 100자 이상
+
+
+def _split_prose_rows(grid: list[list[str]]) -> tuple[list[list[str]], list[str]]:
+    """맨 아래에서 「한 칸에만 긴 글이 든 행」을 떼어 낸다 → (표, 떼어 낸 문단들).
+    글상자 안의 표는 상자 테두리 때문에 표 아래 문단까지 표 영역으로 잡혀, 문단이 통째로 마지막 칸이 됐다
+    (현직자를위한무역실무 196쪽 보험약관 표 아래 295자)."""
+    prose: list[str] = []
+    while grid:
+        filled = [c for c in grid[-1] if c.strip()]
+        if len(filled) != 1 or len(filled[0]) < _PROSE_ROW_CHARS:
+            break
+        prose.insert(0, filled[0])
+        grid = grid[:-1]
+    return grid, prose
 
 
 # ── 2×2 매트릭스 그림 (2x2Matrix 알렉스로위, 2026-10-21) ──────────────────────

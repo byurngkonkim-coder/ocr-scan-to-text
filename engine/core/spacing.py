@@ -59,12 +59,34 @@ def _glued_spans(line: str) -> list[tuple[int, int]]:
     return spans
 
 
-def _merge(orig: str, spaced: str) -> tuple[str, int]:
-    """orig 에 spaced 가 '덩어리 안에 넣은' 띄어쓰기만 더한다. (줄, 넣은 수)"""
+_NOUN_TAGS = {"NNG", "NNP"}
+
+
+def _word_joints(line: str) -> set[int]:
+    """띄워도 되는 자리(공백 뺀 위치) — 형태소 경계 중 명사와 명사가 맞닿은 곳을 뺀 것.
+    명사+명사는 책이 붙여 쓴 복합명사다. 실측(현직자를위한무역실무 100쪽, 2026-11-11): 넣은 띄어쓰기 3,140곳 중
+    1,490곳(47.5%)이 명사+명사였고 원문은 붙여 쓴 말('개설은행'·'운송계약')이었다. 그중 '운송장'→'운송 장'·
+    '송하인'→'송 하인'·'기한부'→'기한 부' 는 낱말을 깨뜨렸다. 형태소 경계가 아닌 자리(Kiwi.space 가 낱말 분석과
+    다르게 가른 '특송'→'특 송'·'파손화물보상장'→'파손 화물 보상 장')도 띄우지 않는다."""
+    nos, k = [], 0
+    for ch in line:
+        nos.append(k)
+        if not ch.isspace():
+            k += 1
+    toks = _get().tokenize(line)
+    return {nos[b.start] for a, b in zip(toks, toks[1:])
+            if not (a.start + a.len == b.start and a.tag in _NOUN_TAGS and b.tag in _NOUN_TAGS)}
+
+
+def _merge(orig: str, spaced: str, allowed: set[int] | None = None) -> tuple[str, int]:
+    """orig 에 spaced 가 '덩어리 안에 넣은' 띄어쓰기만 더한다. allowed 가 있으면 그 자리만. (줄, 넣은 수)"""
     if re.sub(r"\s", "", orig) != re.sub(r"\s", "", spaced):
         return orig, 0
     spans = _glued_spans(orig)
-    keep = {p for p in _space_pos(spaced) - _space_pos(orig) if any(a < p < b for a, b in spans)}
+    added = _space_pos(spaced) - _space_pos(orig)
+    if allowed is not None:
+        added &= allowed
+    keep = {p for p in added if any(a < p < b for a, b in spans)}
     if not keep:
         return orig, 0
     out, k = [], 0
@@ -104,8 +126,9 @@ def fix_spacing(text: str) -> tuple[str, int]:
         return "\n".join(lines), n
     with _lock:
         spaced = list(_get().space([lines[i] for i in idx]))
-    for i, s in zip(idx, spaced):
-        lines[i], c = _merge(lines[i], s)
+        joints = [_word_joints(lines[i]) for i in idx]
+    for i, s, allowed in zip(idx, spaced, joints):
+        lines[i], c = _merge(lines[i], s, allowed)
         n += c
     return "\n".join(lines), n
 
