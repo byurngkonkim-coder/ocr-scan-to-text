@@ -38,12 +38,13 @@ def test_iter_clean_marks_toc_headings(monkeypatch):
     monkeypatch.setattr(config, "get_local_cleanup_engine", lambda: "rules")
     rep: dict = {}
     out = _clean(_book(), rep)
-    # 제목도 본문과 같은 띄어쓰기(R-17) — 차례 목록과 본문 제목이 같은 글자(2026-10-24)
-    assert [e["title"] for e in rep["toc_entries"]][:3] == ["머리말", "제1장 새로운 경영 패러다임", "1.경영은 기업 경영이다"]
+    # 제목도 본문과 같은 띄어쓰기(R-17) — 차례 목록과 본문 제목이 같은 글자(2026-10-24).
+    # 책이 붙여 쓴 복합명사 '기업경영' 은 띄우지 않는다(2026-11-11 — 명사+명사 사이는 넣지 않음)
+    assert [e["title"] for e in rep["toc_entries"]][:3] == ["머리말", "제1장 새로운 경영 패러다임", "1.경영은 기업경영이다"]
     # 본문에 '제2장 전략' 줄이 없다 — 그 장의 첫 절 앞에 넣는다(추정 1)
     assert rep["toc_note"].startswith("차례 8항목 중 7개를 본문 제목으로 정비(+못 찾은 장 제목 1개")
     lines = out.split("\n")
-    for h in ("# 머리말", "# 제1장 새로운 경영 패러다임", "## 1.경영은 기업 경영이다", "## 2.단 하나의 올바른 조직",
+    for h in ("# 머리말", "# 제1장 새로운 경영 패러다임", "## 1.경영은 기업경영이다", "## 2.단 하나의 올바른 조직",
               "# 제2장 전략", "## 1.감소하는 출산율", "# 감사의말"):
         i = lines.index(h)                                   # 제목 줄이 본문에 붙지 않았다
         assert lines[i - 1] == "" and lines[i + 1] == ""     # 앞뒤 빈 줄
