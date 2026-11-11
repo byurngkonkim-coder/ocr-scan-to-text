@@ -91,6 +91,23 @@ def test_junk_hanja_still_removed(line, want):
     assert noise_rules._clean_line(line) == want
 
 
+@pytest.mark.parametrize("line, keep", [
+    ("樊遲從遊於舞雩之下러니하노이다 번지가 공자를따라", "樊遲從遊於舞雩之下러니하노이다"),   # 4자↑ 한문 + 토
+    ("禦人以口給하여하나니 말재주를", "禦人以口給하여하나니"),
+    ("出則弟하며 謹而信하며", "出則弟하며"),              # 2~3자 한문 + 토
+    ("樊遲御러니 공자께서", "樊遲御러니"),
+    ("夕死라도 可矣니라", "夕死라도"),
+    ("哀公이이니잇고 물었다", "哀公이이니잇고"),
+    ("孔子退어시늘 揖巫馬期而進之하여", "孔子退어시늘"),
+    ("天下無道 면 則禮樂征伐 이 自諸侯出 하나니 공자께서 말씀하시기를", "天下無道 면 則禮樂征伐"),   # 줄 머리 한자 토막
+    ("공야장(公冶長)", "공야장(公冶長)"),                 # 짧은 한자 병기 줄
+    ("라 必有隣이니라", "必有隣이니라"),
+])
+def test_classical_hanja_with_to_survives_noise_rules(line, keep):
+    # 한문 원문에 한글 토가 붙은 어절('…之下러니')에서 한자만 떼이던 것 — 논어_유일석 한자 1,053자 소실(2026-11-11)
+    assert keep in noise_rules._clean_line(line)
+
+
 def test_hanja_only_line_survives_margin_noise_filter():
     text = "앞 문장이다.\n夫未戰而廟算勝者, 得算多也.\n뒤 문장이다."
     assert "夫未戰而廟算勝者" in postprocessor.process_full(text, engine="rapidocr")

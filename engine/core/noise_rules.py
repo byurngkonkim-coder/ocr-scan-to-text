@@ -68,7 +68,10 @@ def is_garbage_line(line: str) -> bool:
     # 의미 있는 토큰: 한글 2자·영문 3자, 숫자+단위('5월 9일'), 띄어 쓴 표 머리('합 계')
     if not (re.search(r"[가-힣]{2}|[A-Za-z]{3}", s) or _NUM_UNIT_RE.search(s) or _SPACED_HEADER_RE.match(s)):
         return True
-    classical = bool(re.search(r"[一-鿿]{4,}", s))     # 한문 인용 줄 — 한자를 잡음 문자로 세지 않는다
+    # 한문 인용 줄 — 한자를 잡음 문자로 세지 않는다(짧은 현토 줄 '出則弟하며 謹而信하며' 포함)
+    # 짧은 한자 병기 줄('공야장(公冶長)')도 한자가 30% 를 넘어 잡음으로 지워졌다
+    classical = (bool(re.search(r"[一-鿿]{4,}|[가-힣]\([一-鿿]{2,}\)", s))
+                 or any(_HANJA_TO_RE.match(t) or re.match(r"[一-鿿]{2,}이", t) for t in s.split()))
     bad = sum(1 for c in ns if not (re.match(r"[가-힣A-Za-z0-9]", c) or c in _ALLOWED_PUNCT
                                      or (classical and _HANJA_RE.match(c))))
     return len(ns) <= 60 and bad / len(ns) >= 0.3
@@ -132,7 +135,8 @@ def _salvage(line: str) -> str:
 def _edge_cut(seq: list[str]) -> int:
     """줄 머리에서 뗄 잡음 토큰 수. 첫 진짜 낱말 앞에 기호만 있는 토큰이 2개↑ 몰려 있으면 그 앞을 통째로
     ('휴/ ,' : < : : < 성노,…' → '성노,…'), 아니면 하나씩 잡음 판정('㎝도 안 되지만'·'<막 공부를'은 유지)."""
-    strong = lambda t: re.search(r"[가-힣]{2}|[A-Za-z]{3}", t) or _CONTENT_TOKEN_RE.search(t)
+    # 한자 2자↑ 토막도 진짜 낱말 — 줄 머리 한문('天下無道 면 則禮樂征伐 이 …')이 잡음으로 통째 잘리던 것(2026-11-11)
+    strong = lambda t: re.search(r"[가-힣]{2}|[A-Za-z]{3}|[一-鿿]{2}", t) or _CONTENT_TOKEN_RE.search(t)
     k = next((i for i, t in enumerate(seq) if strong(t)), len(seq))
     if sum(1 for t in seq[:k] if not re.search(r"[가-힣A-Za-z0-9]", t)) >= 2:
         return k
@@ -174,12 +178,17 @@ _HANJA_WORD_RE = re.compile(r"^(?:[一-鿿]{2,}|(?![一乂卜丶丨亅])[一-鿿
                             r"(?:이다|이고|이며|이라|이란|라고|라는|란|으로|에서|에게|은|는|이|가|을|를|의|에|와|과|로|도|만)")
 
 
+# 한문 원문 + 현토('樊遲從遊於舞雩之下러니'·'出則弟하며'·'可矣니라') — 조사 목록에 없는 토가 붙어 한자만 떼이던 것
+# (논어_유일석 한자 1,053자 소실, 2026-11-11). 4자↑ 는 한문 줄 기준(_clean_line)과 같고, 2~3자는 토 첫 글자일 때만
+_HANJA_TO_RE = re.compile(r"^(?:[一-鿿]{4,}|[一-鿿]{2,3}(?:하|러|니|리|며|면|요|오|라|여|호|어|아|나|야))")
+
+
 def _strip_token_edges(t: str, keep_guil: bool = False) -> str:
     """'一오스틴' → '오스틴', '臣麗因주기도문은' → '주기도문은' (한글 어절 앞뒤에 붙은 한자·기호).
     keep_guil: 줄에 짝 맞는 '«…»'가 있으면 '«»'는 떼지 않는다."""
     # '인재(人'처럼 줄 끝에서 갈린 한자 병기의 앞부분도 본문
     if (not re.search(r"[가-힣]{2}", t) or re.search(r"\([一-鿿]+(?:\)|$)", t)
-            or _HANJA_WORD_RE.match(t)):
+            or _HANJA_WORD_RE.match(t) or _HANJA_TO_RE.match(t)):
         return t
     cls = "[一-鿿㐀-䶿々^■•*~`]" if keep_guil else "[一-鿿㐀-䶿々^■•*«»~`]"
     # 한글 뒤에 괄호 없이 붙은 한자 2자↑('반야심경般若心經'·'묘산廟算')는 병기 — 뒤쪽은 떼지 않는다
@@ -215,7 +224,9 @@ def _clean_line(line: str) -> str:
     # 한글이 적은 짧은 줄: 한자가 섞였거나 한글 낱말·영단어(모음 포함 3자↑)가 없으면 잡음
     if not re.fullmatch(r"[\d\-.,:/()| ]+", line.strip()) and (
             (_HANJA_RE.search(line) and not re.search(r"[一-鿿]{4,}", line)
-             and not _CONTENT_TOKEN_RE.search(line))   # 한문 인용 줄·한자 병기·'甲이' 보호
+             and not _CONTENT_TOKEN_RE.search(line)    # 한문 인용 줄·한자 병기·'甲이' 보호
+             # 짧은 현토 한문 줄('出則弟하며 謹而信하며'·'라 必有隣이니라')
+             and not any(_HANJA_TO_RE.match(t) or re.match(r"[一-鿿]{2,}이", t) for t in line.split()))
             # 숫자+한글('5월 9일 - 10일')·띄어 쓴 표 머리('합 계', '의 견')는 본문
             or not (re.search(r"[가-힣]{2}", line) or _NUM_UNIT_RE.search(line)
                     or _SPACED_HEADER_RE.match(line.strip())
