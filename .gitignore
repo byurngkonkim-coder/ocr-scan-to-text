@@ -49,3 +49,6 @@ Desktop.ini
 # Portable runtime for USB copy (engine/make_portable.bat)
 engine/python/
 engine/poppler/
+
+# Serena (coding tool) local cache
+.serena/
