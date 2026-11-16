@@ -182,7 +182,11 @@ def _detect_boxes(image: Image.Image) -> list[Box]:
     w, h = image.size
     # 검출기만 직접 부른다. engine(img, use_rec=False) 는 그 설정을 공유 엔진에 남겨
     # 뒤이은 본 OCR 이 글자를 읽지 않게 된다(rapidocr update_params).
-    r = rapidocr_engine.get_engine().text_det(np.array(image.convert("RGB")))
+    # 검출기는 첫 판독 때에야 올라온다(rapidocr 3.10 지연 로딩) — 프로그램을 켠 뒤 첫 파일은 text_det 가 None 이라
+    # 측정이 「'NoneType' object is not callable」로 실패해 여백을 못 가렸다(2026-11-16)
+    engine = rapidocr_engine.get_engine()
+    detect = engine.text_det or engine._load_det_model()
+    r = detect(np.array(image.convert("RGB")))
     boxes = getattr(r, "boxes", None)
     if boxes is None:
         return []

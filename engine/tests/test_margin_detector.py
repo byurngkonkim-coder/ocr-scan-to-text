@@ -155,6 +155,17 @@ def test_measuring_does_not_switch_off_recognition():
     assert (eng.use_det, eng.use_cls, eng.use_rec) == before
 
 
+def test_measures_before_first_recognition(monkeypatch):
+    # 검출기는 첫 판독 때 올라온다 — 프로그램을 켠 뒤 첫 파일은 text_det 가 None 이라 측정이 실패했다(2026-11-16)
+    from types import SimpleNamespace
+    from core import rapidocr_engine
+    loaded = []
+    fresh = SimpleNamespace(text_det=None,
+                            _load_det_model=lambda: loaded.append(1) or (lambda img: SimpleNamespace(boxes=None)))
+    monkeypatch.setattr(rapidocr_engine, "get_engine", lambda *a, **k: fresh)
+    assert md._detect_boxes(_page((40, 60))) == [] and loaded == [1]
+
+
 def test_cli_masks_pages_with_measured_margins(monkeypatch, tmp_path):
     # 명령줄 도구(ocr_tool)도 웹 화면과 같은 측정·가림을 쓴다
     import ocr_tool

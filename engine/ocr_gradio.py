@@ -452,7 +452,7 @@ def _toc_prepass(content_pages: list[PageResult]) -> tuple[list[str], dict | Non
     if not entries:
         return texts, None
     stats: dict = {}
-    marked = toc_headings.mark_headings(raws, entries, toc_idx, stats)
+    marked = text_cleaner.mark_headings(raws, entries, toc_idx, stats)   # 표 자리 표지를 제목에 묶지 않게 보호
     for i, (p, before, after) in enumerate(zip(content_pages, raws, marked)):
         if after == before and i not in toc_idx:
             continue

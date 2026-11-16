@@ -51,6 +51,19 @@ def test_iter_clean_marks_toc_headings(monkeypatch):
     assert "·머리말/3" not in out                            # 차례 쪽은 본문에서 빠진다(MD 맨 앞 목록으로)
 
 
+def test_table_token_above_heading_is_not_swallowed():
+    # 제목 바로 위 표 자리 표지 줄이 제목 조각으로 묶여 지워졌다 — 그 표·그림이 결과 끝에 붙었다
+    # (현직자를위한무역실무 199쪽 '⟨TABLE:199-1⟩' / '3.수입보험도 있습니다.', 132개 중 6개, 2026-11-16)
+    entries = [{"level": 1, "title": "3.수입보험도 있습니다", "page": None}]
+    page = "앞 문단이 여기서 끝난다.\n\n⟨TABLE:199-1⟩\n3.수입보험도 있습니다.\n" + _BODY
+    out = text_cleaner.mark_headings([page], entries, [], {})[0]
+    assert "⟨TABLE:199-1⟩" in out.split("\n") and "# 3.수입보험도 있습니다" in out.split("\n"), out
+    assert "표표" not in out                                   # 보호용 덧글은 남지 않는다
+    # 그대로 둬야 하는 예: 표지가 없는 쪽은 toc_headings 결과와 같다
+    plain = ["3.수입보험도 있습니다.\n" + _BODY]
+    assert text_cleaner.mark_headings(plain, entries, [], {}) == toc_headings.mark_headings(plain, entries, [], {})
+
+
 def test_iter_clean_without_toc_unchanged(monkeypatch):
     monkeypatch.setattr(config, "get_local_cleanup_engine", lambda: "rules")
     rep: dict = {}

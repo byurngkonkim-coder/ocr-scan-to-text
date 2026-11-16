@@ -165,6 +165,20 @@ def clean_pages(pages: list[str], progress_cb=None, drop_front_matter: bool = Fa
         return stop.value or ""
 
 
+_TABLE_TOKEN_LINE_RE = re.compile(r'^(⟨TABLE:\d+-\d+⟩)[ \t]*$', re.M)
+_TOKEN_GUARD = "표" * 80     # 어떤 차례 제목과도 안 닮은 긴 덧글 — 제목 찾기가 이 줄을 제목 조각으로 못 묶는다
+_TOKEN_GUARD_RE = re.compile(r'(⟨TABLE:\d+-\d+⟩)' + _TOKEN_GUARD)
+
+
+def mark_headings(pages: list[str], entries: list[dict], toc_pages: list[int], stats: dict) -> list[str]:
+    """toc_headings.mark_headings 에 표 자리 표지 보호를 더한 것. 제목 찾기는 짧은 줄을 이어 제목과 견주는데,
+    제목 바로 위 표지 줄('⟨TABLE:199-1⟩' / '3.수입보험도 있습니다.')까지 제목으로 묶어 표지를 지웠다 —
+    그 표·그림은 제자리 대신 결과 끝에 붙었다(현직자를위한무역실무 132개 중 6개, 2026-11-16).
+    toc_headings.py 는 MyOCR 와 같은 파일이라 고치지 않고, 표지 줄에 긴 덧글을 붙였다 떼어 묶이지 않게 한다."""
+    guarded = [_TABLE_TOKEN_LINE_RE.sub(lambda m: m.group(1) + _TOKEN_GUARD, p) for p in pages]
+    return [_TOKEN_GUARD_RE.sub(r'\1', p) for p in toc_headings.mark_headings(guarded, entries, toc_pages, stats)]
+
+
 def iter_clean(pages: list[str], drop_front_matter: bool = False, on_chunk=None,
                report_out: dict | None = None, local: bool = False,
                raw_pages: list[str] | None = None, toc: dict | None = None):
@@ -251,7 +265,7 @@ def iter_clean(pages: list[str], drop_front_matter: bool = False, on_chunk=None,
     toc_stats: dict = toc["stats"] if toc else {}
     toc_pages_text: dict[str, str] = {}
     if toc_entries and not toc:
-        pages = toc_headings.mark_headings(pages, toc_entries, [], toc_stats)
+        pages = mark_headings(pages, toc_entries, [], toc_stats)
         toc_pages_text = {pages[i]: toc_headings.toc_page_leftover(pages[i], toc_entries) for i in toc_idx}
     if drop_front_matter:
         if rules_mode:   # LLM 문단 분류를 못 쓰니 표지·저자 소개·광고·저작권·차례를 규칙으로 먼저 고른다
