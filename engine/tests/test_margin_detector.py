@@ -64,6 +64,23 @@ def test_body_never_cut_on_chapter_start_page():
     assert m.top < 0.18
 
 
+def test_footer_one_line_under_full_page_is_still_footer():
+    # 무역실무 실측(2026-11-16): 꽉 찬 쪽은 바닥글이 본문 끝 줄 바로 아래(줄 간격 1.5배 안)라 본문으로 묶였다.
+    # 본문이 일찍 끝난 쪽에서 같은 자리에 따로 떨어져 있으면 그 자리는 바닥글이다
+    near = [(0.900, 0.920, 0.67, 0.83)]
+    full = [_body() + near for _ in range(4)]            # 본문 끝 줄 0.860~0.885
+    short = [_body(n=14) + near for _ in range(4)]
+    m = md.measure_from_boxes(full + short)
+    assert 0.885 < m.bottom < 0.900
+    assert m.bottom_x
+
+
+def test_short_last_line_without_isolated_footer_is_body():
+    # 바닥글 없는 책: 꽉 찬 쪽의 짧은 끝 줄이 같은 자리에 되풀이돼도 따로 떨어진 쪽이 없으면 본문
+    pages = [_body() for _ in range(8)]
+    assert md.measure_from_boxes(pages).bottom == 1.0
+
+
 def test_too_few_body_pages_gives_none():
     figure_pages = [[(0.4, 0.43, 0.4, 0.6)] for _ in range(8)]
     assert md.measure_from_boxes(figure_pages) is None

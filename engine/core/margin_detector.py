@@ -117,6 +117,32 @@ def _pct(values: list[float], q: float) -> float:
     return v[round(q * (len(v) - 1))]
 
 
+def _unchain_edge(found: list, pad: float, need: float, low: bool) -> None:
+    """본문 끝 줄에 붙어 본문으로 묶인 바닥글(low)·머리글을 본문에서 뺀다.
+
+    꽉 찬 쪽은 바닥글이 본문 끝 줄에서 줄 간격 1.5배 안이라 본문에 묶이고, 그 한 쪽 때문에
+    모든 쪽의 바닥글이 「본문 안」이 된다(무역실무 2026-11-16: 326쪽 전부 안 가림).
+    본문이 일찍 끝난 쪽들에서 같은 높이에 따로 떨어진 줄이 되풀이되면 그 높이는 바닥글 자리다 —
+    그 자리의 좁은 줄만 뺀다. 따로 떨어진 쪽이 없으면(바닥글 없는 책의 짧은 끝 줄) 건드리지 않는다.
+    """
+    spots = []
+    for lines, body, _, _ in found:
+        edge = max(lines[i][1] for i in body) if low else min(lines[i][0] for i in body)
+        out = [b[0] for i, b in enumerate(lines)
+               if i not in body and (b[0] >= edge if low else b[1] <= edge)]
+        if out:
+            spots.append(out)
+    if len(spots) < need:
+        return
+    spot = median(max(s) if low else min(s) for s in spots)
+    if sum(any(abs(y - spot) < pad for y in s) for s in spots) < need:
+        return
+    narrow = 0.6 * median(max(b[3] - b[2] for b in lines) for lines, _, _, _ in found)
+    for lines, body, _, _ in found:
+        body.difference_update({i for i in body if lines[i][3] - lines[i][2] < narrow
+                                and (lines[i][0] > spot - pad if low else lines[i][0] < spot + pad)})
+
+
 def measure_from_boxes(pages: list[list[Box]], sampled: int | None = None) -> Margins | None:
     """표본 쪽들의 줄 상자로 자름선을 정한다. 본문 쪽이 모자라면 None."""
     found = []
@@ -128,10 +154,12 @@ def measure_from_boxes(pages: list[list[Box]], sampled: int | None = None) -> Ma
     if len(found) < MIN_BODY_PAGES:
         return None
 
-    body_top = min(min(ls[i][0] for i in body) for ls, body, _, _ in found)
-    body_bottom = max(max(ls[i][1] for i in body) for ls, body, _, _ in found)
     pad = 0.5 * median(lh for _, _, lh, _ in found)
     need = max(2, BAND_SHARE * len(found))
+    _unchain_edge(found, pad, need, low=False)
+    _unchain_edge(found, pad, need, low=True)
+    body_top = min(min(ls[i][0] for i in body) for ls, body, _, _ in found)
+    body_bottom = max(max(ls[i][1] for i in body) for ls, body, _, _ in found)
 
     heads, foots, top_x, bottom_x = [], [], [], []
     for lines, body, _, _ in found:
